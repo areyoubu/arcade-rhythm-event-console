@@ -64,6 +64,44 @@
     const s = value === null || value === undefined ? '' : String(value);
     if (node && node.textContent !== s) node.textContent = s;
   }
+
+  /**
+   * 长曲名 / 曲师：先缩小字号，仍然超出容器时左右缓慢滚动。
+   * 文本没变就不重启动画，避免每次状态刷新都跳回开头。
+   */
+  function setMarquee(wrap, node, value, { artist = false } = {}) {
+    if (!wrap || !node) return;
+    const text = value === null || value === undefined ? '' : String(value);
+    if (node.dataset.text !== text) {
+      node.dataset.text = text;
+      node.textContent = text;
+      wrap.classList.remove('scrolling');
+      wrap.style.removeProperty('--shift');
+      wrap.style.removeProperty('--dur');
+    }
+    const len = [...text].length;
+    const longAt = artist ? 28 : 22;
+    const veryLongAt = artist ? 44 : 36;
+    node.classList.toggle('long', len > longAt && len <= veryLongAt);
+    node.classList.toggle('very-long', len > veryLongAt);
+    wrap.style.display = text ? '' : 'none';
+
+    const measure = () => {
+      if (node.dataset.text !== text) return;
+      const overflow = node.scrollWidth - wrap.clientWidth;
+      if (overflow > 4) {
+        wrap.classList.add('scrolling');
+        wrap.style.setProperty('--shift', `${-overflow}px`);
+        wrap.style.setProperty('--dur', `${Math.max(4, Math.min(14, overflow / 35))}s`);
+      } else {
+        wrap.classList.remove('scrolling');
+        wrap.style.removeProperty('--shift');
+        wrap.style.removeProperty('--dur');
+      }
+    };
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(measure);
+    else setTimeout(measure, 0);
+  }
   function setHidden(node, hidden) {
     if (node) node.classList.toggle('hidden', !!hidden);
   }
@@ -112,14 +150,18 @@
     const draw = span('draw-flag hidden', '平');
     const diff = span('diff');
     tags.append(no, now, draw, diff);
+    const titleWrap = div('song-line');
     const title = div('song-title');
+    titleWrap.append(title);
+    const artistWrap = div('song-line');
     const artist = div('song-artist');
+    artistWrap.append(artist);
     const cover = document.createElement('img');
     cover.className = 'song-cover hidden';
     cover.alt = '';
     cover.loading = 'lazy';
     const text = div('song-text');
-    text.append(tags, title, artist);
+    text.append(tags, titleWrap, artistWrap);
     center.append(cover, text);
 
     const right = div('side-score right');
@@ -129,7 +171,10 @@
 
     row.append(left, center, right);
     el.songs.append(row);
-    rows.push({ row, no, now, draw, diff, title, artist, cover, leftNum, rightNum, leftFlag, rightFlag });
+    rows.push({
+      row, no, now, draw, diff, title, titleWrap, artist, artistWrap, cover,
+      leftNum, rightNum, leftFlag, rightFlag,
+    });
   }
 
   function applyPlayer(side, p, colors) {
@@ -159,8 +204,8 @@
     }
     setHidden(node.row, false);
     setText(node.no, String(i + 1).padStart(2, '0'));
-    setText(node.title, data.title || '未命名曲目');
-    setText(node.artist, data.artist || '');
+    setMarquee(node.titleWrap, node.title, data.title || '未命名曲目');
+    setMarquee(node.artistWrap, node.artist, data.artist || '', { artist: true });
     setImage(node.cover, data.cover || '');
     setHidden(node.cover, !data.cover);
 

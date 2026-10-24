@@ -302,7 +302,19 @@
   .song-cover.hidden { display: none; }
   .song-text {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
-    min-width: 0;
+    min-width: 0; flex: 1 1 0; width: auto;
+  }
+  .song-line {
+    width: 100%; max-width: 100%; overflow: hidden; text-align: center;
+    position: relative;
+  }
+  .song-line.scrolling .song-title,
+  .song-line.scrolling .song-artist {
+    animation: song-marquee var(--dur, 8s) ease-in-out infinite alternate;
+  }
+  @keyframes song-marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(var(--shift, 0px)); }
   }
   .song-tags {
     display: flex; align-items: center; justify-content: center;
@@ -331,15 +343,17 @@
   }
   .diff b { font-size: 13.5px; letter-spacing: 0; }
   .song-title {
-    font-size: 30px; font-weight: 800; color: var(--ink);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    max-width: 100%; line-height: 1.15;
+    font-size: 28px; font-weight: 800; color: var(--ink);
+    white-space: nowrap; display: inline-block;
+    max-width: none; line-height: 1.15;
   }
+  .song-title.long { font-size: 24px; }
+  .song-title.very-long { font-size: 20px; }
   .song-artist {
     font-size: 15px; color: var(--ink-mute);
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-    max-width: 100%;
+    white-space: nowrap; display: inline-block; max-width: none;
   }
+  .song-artist.long { font-size: 13px; }
   .song-artist:empty { display: none; }
 
   .empty {
@@ -441,6 +455,6 @@
   </div>
 </div>
 <script src="/shared/ws.js"></script>
-<script src="/render/match.js"></script>
+<script src="/render/match.js?v=20261024"></script>
 </body>
 </html>
