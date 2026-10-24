@@ -1,0 +1,47 @@
+{
+  "name": "arcade-rhythm-event-console",
+  "version": "1.0.0",
+  "private": true,
+  "description": "街机音游赛事控制软件 · 中二节奏（CHUNITHM）赛事直播控制台，内置全套 19 套叠加模板",
+  "type": "module",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "mock": "node tools/mock-run.js",
+    "music:import": "node tools/import-music.mjs",
+    "remote": "node remote/index.mjs",
+    "edge": "node remote/edge.mjs",
+    "agent": "node remote/agent.mjs",
+    "selftest": "node tools/selftest.js",
+    "test": "node --test test/",
+    "admin:password": "node tools/set-admin-password.mjs",
+    "music:cn": "node tools/import-chunithm-json.mjs"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "multer": "^2.4.0",
+    "qrcode": "^1.5.4",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "sharp": "^0.35.5"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.3"
+  },
+  "keywords": [
+    "chunithm",
+    "arcade",
+    "rhythm-game",
+    "obs",
+    "vmix",
+    "live",
+    "overlay",
+    "tournament"
+  ],
+  "license": "MIT",
+  "author": "YEE"
+}

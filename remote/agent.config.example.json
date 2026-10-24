@@ -1,0 +1,14 @@
+{
+  "edgeUrl": "wss://event.example.com/tunnel",
+  "token": "CHANGE-ME-TO-A-LONG-RANDOM-STRING",
+  "localUpstream": "http://127.0.0.1:3000",
+  "remoteToken": "",
+  "tlsInsecure": false,
+  "timeoutMs": 12000,
+  "maxBodyBytes": 32768,
+  "maxResponseBytes": 2097152,
+  "concurrency": 16,
+  "reconnectMinMs": 1000,
+  "reconnectMaxMs": 30000,
+  "quiet": false
+}

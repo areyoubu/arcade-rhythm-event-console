@@ -1,0 +1,710 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Edge / Agent 配置台</title>
+<style>
+  :root{
+    --bg:#17181b; --panel:#202226; --panel2:#1b1d21; --line:#34373d; --line2:#2a2d32;
+    --text:#e3e5e9; --muted:#9aa0a8; --dim:#6f757d;
+    --accent:#4a9eff; --accent2:#2f7fd8;
+    --ok:#3ecf8e; --warn:#e6b450; --danger:#e15b5b;
+    --mono:"Cascadia Mono","JetBrains Mono",Consolas,"Courier New",monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--text);
+       font:14px/1.55 "Noto Sans SC","Microsoft YaHei",system-ui,-apple-system,sans-serif}
+  a{color:var(--accent)}
+  button{font:inherit;color:var(--text);background:#2a2d33;border:1px solid var(--line);
+         border-radius:4px;padding:6px 12px;cursor:pointer;transition:background .12s,border-color .12s}
+  button:hover:not(:disabled){background:#33373e;border-color:#45494f}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  button.primary{background:var(--accent2);border-color:var(--accent2)}
+  button.primary:hover:not(:disabled){background:#3a8fe0}
+  button.danger{color:#ffb4b4;border-color:#5a3535}
+  button.danger:hover:not(:disabled){background:#3a2a2a}
+  button.ghost{background:transparent}
+  input,textarea{font:inherit;color:var(--text);background:#151619;border:1px solid var(--line);
+                 border-radius:4px;padding:7px 9px;width:100%;outline:none}
+  input:focus,textarea:focus{border-color:var(--accent)}
+  input[type=checkbox]{width:16px;height:16px;accent-color:var(--accent);vertical-align:-2px}
+  textarea{min-height:74px;resize:vertical;font-family:var(--mono);font-size:12.5px}
+  code,.mono{font-family:var(--mono)}
+
+  header{display:flex;align-items:center;gap:16px;padding:14px 22px;border-bottom:1px solid var(--line);
+         background:linear-gradient(180deg,#212429,#1b1d21)}
+  .brand{display:flex;align-items:baseline;gap:10px;min-width:0}
+  .brand b{font-size:16px;letter-spacing:.02em}
+  .role{font-size:12px;color:#0e1013;background:var(--accent);border-radius:3px;padding:2px 8px;font-weight:600}
+  .role.agent{background:var(--ok)}
+  .spacer{flex:1}
+  .path{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .top-actions{display:flex;gap:8px;align-items:center}
+
+  main{display:grid;grid-template-columns:minmax(0,1fr) minmax(380px,430px);gap:16px;padding:16px 22px 28px;align-items:start}
+  @media(max-width:1040px){main{grid-template-columns:1fr}}
+  .col{display:flex;flex-direction:column;gap:16px;min-width:0}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .card>h2{margin:0;padding:11px 14px;font-size:13px;letter-spacing:.04em;color:#c7cbd2;
+           border-bottom:1px solid var(--line2);background:var(--panel2);display:flex;align-items:center;gap:8px}
+  .card>h2 .spacer{flex:1}
+  .card .body{padding:14px}
+
+  .group+.group{margin-top:18px;padding-top:16px;border-top:1px dashed var(--line2)}
+  .group-title{margin:0 0 10px;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--dim)}
+  .field{margin-bottom:14px;scroll-margin-top:20px}
+  .field:last-child{margin-bottom:0}
+  .field-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+  .field-head label{font-size:13px;color:#d6d9df;font-weight:500}
+  .req{color:var(--danger);font-weight:700}
+  .tag{font-size:10.5px;color:var(--muted);border:1px solid var(--line);border-radius:3px;padding:0 5px;line-height:16px}
+  .field-help{margin-top:4px;font-size:12px;color:var(--dim);line-height:1.55}
+  .field.invalid input,.field.invalid textarea{border-color:var(--danger)}
+  .field-error{margin-top:4px;font-size:12px;color:#ff9a9a}
+  .row{display:flex;gap:6px;align-items:center}
+  .row input{flex:1;min-width:0}
+  .row button{padding:5px 9px;font-size:12px;white-space:nowrap}
+  .checkline{display:flex;align-items:center;gap:8px;color:#cfd3d9}
+  .checkline input[type=checkbox]{flex:none}
+  .token-meter{display:flex;gap:12px;margin-top:5px;font-size:11.5px;color:var(--dim);font-family:var(--mono)}
+  .token-meter .good{color:var(--ok)}
+  .token-meter .bad{color:var(--warn)}
+  #healthText .good{color:var(--ok)}
+  #healthText .bad{color:var(--warn)}
+
+  .toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:18px;padding-top:16px;border-top:1px solid var(--line2)}
+  .toolbar .status{margin-left:auto;font-size:12px;color:var(--muted)}
+  .toolbar .status.dirty{color:var(--warn)}
+
+  .notice{padding:10px 12px;border-radius:4px;font-size:12.5px;margin-bottom:12px;line-height:1.6}
+  .notice.warn{background:#2e2818;border:1px solid #5c4a22;color:#f0d49a}
+  .notice.err{background:#2e1c1c;border:1px solid #5c2b2b;color:#ffb3b3}
+  .notice.ok{background:#182a22;border:1px solid #245240;color:#a8e6c8}
+  .notice:empty{display:none}
+  ul.errlist{margin:6px 0 0;padding-left:18px}
+  ul.errlist li{margin:2px 0}
+
+  .svc{border:1px solid var(--line2);border-radius:5px;padding:11px 12px;background:#1c1e22}
+  .svc+.svc{margin-top:10px}
+  .svc-head{display:flex;align-items:center;gap:8px}
+  .svc-head b{font-size:13px}
+  .svc-note{font-size:12px;color:var(--dim);margin:4px 0 9px}
+  .svc-meta{font-family:var(--mono);font-size:11.5px;color:var(--muted);margin-bottom:9px}
+  .svc-actions{display:flex;gap:6px}
+
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;border-radius:999px;
+        padding:1px 8px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
+  .pill::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--dim)}
+  .pill.on{color:#a8e6c8;border-color:#245240;background:#182a22}
+  .pill.on::before{background:var(--ok);box-shadow:0 0 6px rgba(62,207,142,.7)}
+  .pill.off::before{background:#555b63}
+  .pill.wait{color:#f0d49a;border-color:#5c4a22;background:#2e2818}
+  .pill.wait::before{background:var(--warn)}
+
+  .health{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;font-size:12.5px;color:var(--muted)}
+
+  #logs{height:260px;overflow:auto;margin:0;padding:10px 12px;background:#111214;border-top:1px solid var(--line2);
+        font-family:var(--mono);font-size:11.5px;line-height:1.65;white-space:pre-wrap;word-break:break-all}
+  .log-line{display:flex;gap:8px}
+  .log-time{color:#5d646d;flex:none}
+  .log-svc{color:#7f8790;flex:none;min-width:44px}
+  .log-text{color:#c9cdd4;min-width:0}
+  .log-line.stderr .log-text{color:#ff9a9a}
+  .log-line.setup .log-text{color:#8eb6e6}
+
+  details.rules{border-top:1px solid var(--line2)}
+  details.rules summary{cursor:pointer;padding:10px 14px;font-size:13px;color:#c7cbd2;background:var(--panel2)}
+  details.rules .body{padding:12px 14px 14px}
+  details.rules ol{margin:0;padding-left:20px;color:#b9bec6;font-size:12.5px;line-height:1.75}
+  details.rules ol li{margin-bottom:6px}
+  details.rules ol li::marker{color:var(--accent)}
+  .steps ol li::marker{color:var(--ok)}
+
+  footer{padding:0 22px 26px;color:var(--dim);font-size:11.5px;line-height:1.7}
+  .kbd{font-family:var(--mono);font-size:11.5px;background:#2a2d33;border:1px solid var(--line);border-radius:3px;padding:0 4px}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <b>街机音游赛事控制软件</b>
+    <span id="roleBadge" class="role">…</span>
+  </div>
+  <div class="spacer"></div>
+  <div class="path" id="configPath"></div>
+  <div class="top-actions">
+    <button class="ghost" id="reloadBtn" title="放弃未保存的修改并重新读取磁盘配置">重新载入</button>
+  </div>
+</header>
+
+<main>
+  <div class="col">
+    <section class="card">
+      <h2>配置 <span class="spacer"></span><span id="configState" class="tag"></span></h2>
+      <div class="body">
+        <div id="autoNote" class="notice warn"></div>
+        <div id="messages"></div>
+        <form id="form" autocomplete="off" onsubmit="return false"></form>
+        <div class="toolbar">
+          <button class="primary" id="saveBtn">保存配置</button>
+          <button id="saveStartBtn">保存并启动</button>
+          <span class="status" id="saveState"></span>
+        </div>
+      </div>
+    </section>
+
+    <section class="card steps">
+      <h2>接入步骤</h2>
+      <div class="body"><ol id="steps" class="rules-list"></ol></div>
+    </section>
+  </div>
+
+  <div class="col">
+    <section class="card">
+      <h2>服务 <span class="spacer"></span><span id="healthPill" class="pill off">未检测</span></h2>
+      <div class="body">
+        <div class="health" id="healthText"></div>
+        <div id="services"></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>运行日志 <span class="spacer"></span><button class="ghost" id="clearLogs" title="只清空显示，不影响服务">清屏</button></h2>
+      <pre id="logs"></pre>
+    </section>
+
+    <section class="card">
+      <details class="rules" open>
+        <summary>密钥规则（务必按这里配置）</summary>
+        <div class="body"><ol id="rules"></ol></div>
+      </details>
+    </section>
+  </div>
+</main>
+
+<footer>
+  本页面只监听 <span class="kbd">127.0.0.1</span>，不会暴露到公网。所有写操作都需要页面内嵌的临时令牌，跨站页面无法调用。<br>
+  修改配置后需点「保存配置」才会写盘；正在运行的服务不会自动读取新配置，需要重启对应服务。<br>
+  同一个服务不要同时用本配置台和旧的 <span class="kbd">start-edge.bat</span> / <span class="kbd">start-agent.bat</span> 启动，
+  否则会出现两个 Agent 互相顶替。<br>
+  关闭这个配置台窗口 / 按 Ctrl+C 会停止由它启动的服务；用系统服务方式长期运行请参考 README。
+</footer>
+
+<script>
+(() => {
+  'use strict';
+  const SETUP_TOKEN = '__SETUP_TOKEN__';
+  const ROLE = '__ROLE__';
+  let state = null;
+  let lastSeq = 0;
+  let dirty = false;
+  let busy = false;
+
+  const $ = (id) => document.getElementById(id);
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  async function api(path, body) {
+    const res = await fetch(path, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-setup-token': SETUP_TOKEN },
+      body: JSON.stringify(body || {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.ok === false) {
+      const err = new Error(data.error || `请求失败（${res.status}）`);
+      err.data = data;
+      throw err;
+    }
+    return data;
+  }
+
+  function setDirty(v) {
+    dirty = v;
+    const s = $('saveState');
+    s.textContent = v ? '有未保存的修改' : '配置已同步';
+    s.className = 'status' + (v ? ' dirty' : '');
+  }
+
+  function flash(text, kind) {
+    const box = $('messages');
+    if (!text) { box.textContent = ''; return; }
+    box.textContent = '';
+    box.append(el('div', 'notice ' + (kind || 'ok'), text));
+  }
+
+  function showProblems(errors, warnings) {
+    const box = $('messages');
+    box.textContent = '';
+    if (errors && errors.length) {
+      const wrap = el('div', 'notice err');
+      wrap.append(el('strong', '', '配置未保存：'));
+      const ul = el('ul', 'errlist');
+      for (const e of errors) {
+        const li = el('li', '', (e.field ? `${e.field}：` : '') + e.message);
+        ul.append(li);
+      }
+      wrap.append(ul);
+      box.append(wrap);
+      for (const e of errors) {
+        if (!e.field) continue;
+        const f = document.getElementById('field-' + e.field);
+        if (f) { f.classList.add('invalid'); f.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+      }
+    }
+    if (warnings && warnings.length) {
+      const wrap = el('div', 'notice warn');
+      wrap.append(el('strong', '', '提醒：'));
+      const ul = el('ul', 'errlist');
+      for (const w of warnings) ul.append(el('li', '', w));
+      wrap.append(ul);
+      box.append(wrap);
+    }
+  }
+
+  function clearInvalid() {
+    for (const n of document.querySelectorAll('.field.invalid')) n.classList.remove('invalid');
+  }
+
+  // ── 表单 ──────────────────────────────────────────────
+
+  function valueOf(key) {
+    const input = document.getElementById('in-' + key);
+    if (!input) return state.config[key];
+    if (input.type === 'checkbox') return input.checked;
+    if (input.dataset.type === 'list') return input.value;
+    return input.value;
+  }
+
+  function updateTokenMeter(field, input) {
+    const meter = document.getElementById('meter-' + field.key);
+    if (!meter) return;
+    const v = input.value.trim();
+    const len = v.length;
+    const charsetOk = /^[A-Za-z0-9_-]+$/.test(v);
+    meter.textContent = '';
+    meter.append(el('span', len >= 32 ? 'good' : len >= 24 ? '' : 'bad', `${len} 位`));
+    meter.append(el('span', charsetOk ? 'good' : 'bad', charsetOk ? '字符集 OK' : '含特殊字符'));
+    meter.append(el('span', '', len >= 24 ? '规则：≥24，推荐 43' : '太短'));
+  }
+
+  function renderField(field) {
+    const wrap = el('div', 'field');
+    wrap.id = 'field-' + field.key;
+
+    const head = el('div', 'field-head');
+    const label = el('label', '', field.label);
+    label.setAttribute('for', 'in-' + field.key);
+    head.append(label);
+    if (field.required) head.append(el('span', 'req', '*'));
+    if (field.secret) head.append(el('span', 'tag', '敏感'));
+    if (field.generate) head.append(el('span', 'tag', '可生成'));
+    if (field.danger) head.append(el('span', 'tag', '危险'));
+    wrap.append(head);
+
+    let input;
+    if (field.type === 'checkbox') {
+      const line = el('label', 'checkline');
+      input = document.createElement('input');
+      input.type = 'checkbox';
+      input.id = 'in-' + field.key;
+      input.checked = !!state.config[field.key];
+      line.append(input, el('span', '', field.checkedText || '启用'));
+      wrap.append(line);
+    } else if (field.type === 'list') {
+      input = document.createElement('textarea');
+      input.id = 'in-' + field.key;
+      input.dataset.type = 'list';
+      const v = state.config[field.key];
+      input.value = Array.isArray(v) ? v.join('\n') : String(v || '');
+      input.placeholder = '1.2.3.4\n5.6.7.8';
+      wrap.append(input);
+    } else if (field.type === 'password') {
+      const row = el('div', 'row');
+      input = document.createElement('input');
+      input.type = 'password';
+      input.id = 'in-' + field.key;
+      input.value = state.config[field.key] == null ? '' : String(state.config[field.key]);
+      input.spellcheck = false;
+      input.autocomplete = 'off';
+      row.append(input);
+
+      const eye = el('button', '', '显示');
+      eye.type = 'button';
+      eye.addEventListener('click', () => {
+        const showing = input.type === 'text';
+        input.type = showing ? 'password' : 'text';
+        eye.textContent = showing ? '显示' : '隐藏';
+      });
+      row.append(eye);
+
+      if (field.generate) {
+        const gen = el('button', '', '生成');
+        gen.type = 'button';
+        gen.title = '32 字节随机数（base64url，43 位）';
+        gen.addEventListener('click', async () => {
+          gen.disabled = true;
+          try {
+            const r = await api('/api/generate', { field: field.key });
+            input.value = r.token;
+            input.type = 'text';
+            eye.textContent = '隐藏';
+            onEdited(field);
+            await copyText(r.token, '新密钥已生成并复制');
+          } catch (e) {
+            flash(e.message, 'err');
+          } finally {
+            gen.disabled = false;
+          }
+        });
+        row.append(gen);
+      }
+      const copy = el('button', '', '复制');
+      copy.type = 'button';
+      copy.addEventListener('click', () => copyText(input.value, '已复制'));
+      row.append(copy);
+      wrap.append(row);
+
+      const meter = el('div', 'token-meter');
+      meter.id = 'meter-' + field.key;
+      wrap.append(meter);
+    } else {
+      input = document.createElement('input');
+      input.type = field.type === 'number' ? 'number' : 'text';
+      input.id = 'in-' + field.key;
+      input.value = state.config[field.key] == null ? '' : String(state.config[field.key]);
+      if (field.placeholder) input.placeholder = field.placeholder;
+      if (field.min != null) input.min = field.min;
+      if (field.max != null) input.max = field.max;
+      if (field.step != null) input.step = field.step;
+      if (field.type === 'number') input.inputMode = 'numeric';
+      wrap.append(input);
+    }
+
+    if (field.help) wrap.append(el('div', 'field-help', field.help));
+
+    if (input) {
+      input.addEventListener('input', () => onEdited(field));
+      input.addEventListener('change', () => onEdited(field));
+      if (field.secret) updateTokenMeter(field, input);
+    }
+    return wrap;
+  }
+
+  function onEdited(field) {
+    clearInvalid();
+    setDirty(true);
+    if (field.secret) updateTokenMeter(field, document.getElementById('in-' + field.key));
+  }
+
+  function renderForm() {
+    const form = $('form');
+    form.textContent = '';
+    const groups = new Map();
+    for (const f of state.fields) {
+      if (!groups.has(f.group)) groups.set(f.group, []);
+      groups.get(f.group).push(f);
+    }
+    for (const [name, fields] of groups) {
+      const section = el('div', 'group');
+      section.append(el('h3', 'group-title', name));
+      for (const f of fields) section.append(renderField(f));
+      form.append(section);
+    }
+    setDirty(false);
+  }
+
+  function collect() {
+    const out = {};
+    for (const f of state.fields) out[f.key] = valueOf(f.key);
+    return out;
+  }
+
+  async function copyText(text, okMessage) {
+    try {
+      await navigator.clipboard.writeText(text);
+      flash(okMessage || '已复制', 'ok');
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.append(ta);
+      ta.select();
+      try { document.execCommand('copy'); flash(okMessage || '已复制', 'ok'); }
+      catch { flash('复制失败，请手动选中复制', 'err'); }
+      ta.remove();
+    }
+  }
+
+  // ── 服务 / 健康 / 日志 ───────────────────────────────
+
+  function renderHealth() {
+    const pill = $('healthPill');
+    const text = $('healthText');
+    text.textContent = '';
+    pill.className = 'pill off';
+    pill.textContent = '未检测';
+
+    if (!state) return;
+
+    const edgeSvc = state.services.find((s) => s.id === 'edge');
+    const agentSvc = state.services.find((s) => s.id === 'agent');
+
+    if (ROLE === 'edge') {
+      const h = state.health || {};
+      if (h.reachable && h.agentConnected) {
+        pill.className = 'pill on';
+        pill.textContent = 'Agent 已连接';
+        text.append(el('span', 'good', '隧道正常，公网请求可以转发到内网。'));
+      } else if (h.reachable) {
+        pill.className = 'pill wait';
+        pill.textContent = '等待 Agent';
+        text.append(el('span', '', 'Edge 已在运行，但内网 Agent 还没有接入。'));
+      } else if (edgeSvc && edgeSvc.running) {
+        pill.className = 'pill wait';
+        pill.textContent = '端口未响应';
+        text.append(el('span', '', `Edge 进程在运行，但 127.0.0.1:${state.config.port} 没有响应：${h.error || '未知原因'}`));
+      } else {
+        pill.className = 'pill off';
+        pill.textContent = 'Edge 未运行';
+        text.append(el('span', '', '点下面的「启动」后，再把公网地址填进主控。'));
+      }
+      const pub = `http://${state.config.host === '0.0.0.0' ? '公网IP' : state.config.host}:${state.config.port}`;
+      text.append(el('span', 'mono', pub));
+      return;
+    }
+
+    // agent 角色
+    if (agentSvc && agentSvc.running) {
+      pill.className = 'pill on';
+      pill.textContent = 'Agent 运行中';
+    } else if (agentSvc) {
+      pill.className = 'pill off';
+      pill.textContent = 'Agent 未运行';
+    }
+    const mainSvc = state.services.find((s) => s.id === 'main');
+    if (mainSvc) {
+      text.append(el('span', mainSvc.running ? 'good' : '', mainSvc.running ? '主控运行中' : '主控未运行'));
+    }
+    if (state.config.remoteToken) text.append(el('span', '', 'remoteToken 已配置'));
+    else text.append(el('span', 'bad', 'remoteToken 为空'));
+  }
+
+  function renderServices() {
+    const box = $('services');
+    box.textContent = '';
+    for (const svc of state.services) {
+      const card = el('div', 'svc');
+
+      const head = el('div', 'svc-head');
+      head.append(el('b', '', svc.label));
+      const pill = el('span', 'pill ' + (svc.running ? 'on' : 'off'), svc.running ? '运行中' : '已停止');
+      head.append(pill);
+      card.append(head);
+
+      card.append(el('div', 'svc-note', svc.note));
+
+      const meta = el('div', 'svc-meta');
+      if (svc.running) {
+        const up = Math.max(0, Math.round((Date.now() - svc.startedAt) / 1000));
+        meta.textContent = `pid ${svc.pid} · 已运行 ${formatDuration(up)}`;
+      } else if (svc.exitCode !== null) {
+        meta.textContent = `上次退出码 ${svc.exitCode}`;
+      } else {
+        meta.textContent = '尚未启动';
+      }
+      if (svc.lastError) meta.textContent += ` · ${svc.lastError}`;
+      card.append(meta);
+
+      const actions = el('div', 'svc-actions');
+      const start = el('button', 'primary', '启动');
+      start.disabled = svc.running || busy;
+      start.addEventListener('click', () => serviceAction(svc.id, 'start'));
+      const stop = el('button', 'danger', '停止');
+      stop.disabled = !svc.running || busy;
+      stop.addEventListener('click', () => serviceAction(svc.id, 'stop'));
+      const restart = el('button', '', '重启');
+      restart.disabled = !svc.running || busy;
+      restart.addEventListener('click', () => serviceAction(svc.id, 'restart'));
+      actions.append(start, stop, restart);
+      card.append(actions);
+
+      box.append(card);
+    }
+  }
+
+  function formatDuration(sec) {
+    if (sec < 60) return `${sec}s`;
+    if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+    return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+  }
+
+  async function serviceAction(id, action) {
+    busy = true;
+    renderServices();
+    try {
+      const r = await api('/api/service/' + action, { id });
+      if (r && r.alreadyRunning) {
+        flash('该服务已经在运行（可能由外部脚本启动），配置台没有重复启动。', 'warn');
+      } else {
+        flash(action === 'stop' ? '已发送停止指令' : '已发送启动指令', 'ok');
+      }
+    } catch (e) {
+      flash(e.message, 'err');
+    } finally {
+      busy = false;
+      await poll(true);
+    }
+  }
+
+  function appendLogs(lines) {
+    const pre = $('logs');
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+    for (const line of lines) {
+      const row = el('div', 'log-line ' + line.stream);
+      const t = new Date(line.t).toLocaleTimeString('zh-CN', { hour12: false });
+      row.append(el('span', 'log-time', t));
+      const svc = el('span', 'log-svc', line.service);
+      row.append(svc);
+      row.append(el('span', 'log-text', line.text));
+      pre.append(row);
+    }
+    while (pre.childElementCount > 800) pre.firstElementChild.remove();
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  }
+
+  // ── 轮询 / 保存 ──────────────────────────────────────
+
+  async function poll(forceRender) {
+    let data;
+    try {
+      const res = await fetch('/api/state?since=' + lastSeq, {
+        cache: 'no-store',
+        headers: { 'x-setup-token': SETUP_TOKEN },
+      });
+      data = await res.json();
+    } catch (e) {
+      $('healthPill').className = 'pill off';
+      $('healthPill').textContent = '配置台已断开';
+      return;
+    }
+    if (!data.ok) return;
+
+    const first = !state;
+    state = data;
+    if (first || forceRender) {
+      renderForm();
+      renderStatic();
+    }
+    renderServices();
+    renderHealth();
+
+    if (data.autoStartNote) {
+      $('autoNote').textContent = data.autoStartNote;
+    } else {
+      $('autoNote').textContent = '';
+    }
+
+    if (data.logs && data.logs.lines.length) {
+      appendLogs(data.logs.lines);
+      lastSeq = data.logs.next;
+    }
+  }
+
+  function renderStatic() {
+    $('roleBadge').textContent = state.roleLabel;
+    $('roleBadge').className = 'role ' + (state.role === 'agent' ? 'agent' : '');
+    $('configPath').textContent = state.configFile;
+    $('configState').textContent = state.configExists ? '已存在' : '尚未创建';
+
+    const rules = $('rules');
+    rules.textContent = '';
+    for (const r of state.rules) rules.append(el('li', '', r));
+
+    const steps = $('steps');
+    steps.textContent = '';
+    for (const s of state.steps) steps.append(el('li', '', s));
+  }
+
+  async function save(startAfter) {
+    clearInvalid();
+    flash('');
+    busy = true;
+    $('saveBtn').disabled = true;
+    $('saveStartBtn').disabled = true;
+    let failed = false;
+    try {
+      const r = await api('/api/config', { config: collect() });
+      setDirty(false);
+      showProblems([], r.warnings || []);
+      if (!r.warnings || !r.warnings.length) flash('配置已保存。运行中的服务需要重启才会生效。', 'ok');
+      if (startAfter) {
+        try {
+          if (state.role === 'edge') {
+            const r = await api('/api/service/restart', { id: 'edge' });
+            if (r && r.alreadyRunning) {
+              flash('配置已保存，但 Edge 正在由外部进程运行；配置台无法重启它，请手动重启后生效。', 'warn');
+            } else {
+              flash('配置已保存，正在重启 Edge。', 'ok');
+            }
+          } else {
+            const main = state.services.find((s) => s.id === 'main');
+            if (!main || !main.running) await api('/api/service/start', { id: 'main' });
+            const r = await api('/api/service/restart', { id: 'agent' });
+            if (r && r.alreadyRunning) {
+              flash('配置已保存，主控已就绪；但 Agent 正在由外部进程运行，配置台无法重启它，请手动重启。', 'warn');
+            } else {
+              flash('配置已保存，主控与 Agent 已启动。', 'ok');
+            }
+          }
+        } catch (e) {
+          flash('配置已保存，但启动失败：' + e.message, 'err');
+        }
+      }
+    } catch (e) {
+      failed = true;
+      showProblems(e.data?.errors || [{ message: e.message }], []);
+    } finally {
+      busy = false;
+      $('saveBtn').disabled = false;
+      $('saveStartBtn').disabled = false;
+      // 失败时不要重绘表单，否则用户刚填的内容会被磁盘上的旧值覆盖
+      await poll(!failed);
+    }
+  }
+
+  // ── 绑定 ─────────────────────────────────────────────
+
+  $('saveBtn').addEventListener('click', () => save(false));
+  $('saveStartBtn').addEventListener('click', () => save(true));
+  $('reloadBtn').addEventListener('click', async () => {
+    if (dirty && !confirm('放弃未保存的修改？')) return;
+    lastSeq = 0;
+    $('logs').textContent = '';
+    state = null;
+    await poll(true);
+    flash('已重新读取配置。', 'ok');
+  });
+  $('clearLogs').addEventListener('click', () => { $('logs').textContent = ''; });
+
+  window.addEventListener('beforeunload', (e) => {
+    if (!dirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
+  poll(true);
+  setInterval(() => poll(false), 1600);
+})();
+</script>
+</body>
+</html>

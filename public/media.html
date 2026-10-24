@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>媒体库 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+  'use strict';
+  const { el, $, clear, ok, warn, err, toast, confirm, prompt, modal, withBusy, api, esc } = window.ui;
+  const ws = window.arcadeWS;
+  const fmt = window.fmt;
+
+  const page = window.ui.mount({
+    current: '/media',
+    title: '媒体库',
+    subtitle: '上传 / 自动索引 · 缩略图 · 引用检查（A-REQ-408）· 标签与目录（A-REQ-407）· 复制渲染端 URL（A-REQ-724）',
+  });
+  ws.start();
+
+  const S = { items: [], tags: [], groups: [], stats: null, q: '', tag: '', group: '', sel: new Set() };
+  let scanTimer = null;
+
+  // ═══════════════════ 统计条 ═══════════════════
+  const statPill = el('span', { class: 'pill mute' });
+  const sizePill = el('span', { class: 'pill mute' });
+  const thumbPill = el('span', { class: 'pill mute' });
+  const degradedNote = el('div', { class: 'note warn hidden mt8' });
+  const statCard = el('div', { class: 'card' },
+    el('div', { class: 'body tight' },
+      el('div', { class: 'statusbar' }, statPill, sizePill, thumbPill,
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'small muted', text: '直接往 media/ 目录丢图会自动索引（A-REQ-412）' }),
+      ),
+      degradedNote,
+    ),
+  );
+
+  function renderStats() {
+    const st = S.stats || {};
+    statPill.textContent = `资源 ${st.count ?? '—'} 项`;
+    statPill.className = `pill ${(st.count ?? 0) > 0 ? 'ok' : 'mute'}`;
+    sizePill.textContent = `占用 ${st.totalMB != null ? st.totalMB + ' MB' : '—'}`;
+    sizePill.className = 'pill mute';
+    thumbPill.textContent = `缩略图 ${st.thumbs ?? '—'} 张`;
+    thumbPill.className = 'pill mute';
+    if (st.degraded) {
+      degradedNote.textContent = `sharp 不可用 —— ${st.degradedNote || '缩略图与多分辨率派生已降级为使用原图'}（上传/扫描仍可用，控制端列表会变慢）`;
+      degradedNote.classList.remove('hidden');
+    } else {
+      degradedNote.classList.add('hidden');
+    }
+  }
+
+  // ═══════════════════ 工具栏 ═══════════════════
+  const search = el('input', { type: 'search', placeholder: '搜索文件名 / 标签…', class: 'grow' });
+  const tagSel = el('select', null, el('option', { value: '', text: '全部标签' }));
+  const groupSel = el('select', null, el('option', { value: '', text: '全部目录' }));
+  const upBtn = el('button', { class: 'btn primary sm', text: '⇪ 上传图片' });
+  const scanBtn = el('button', { class: 'btn ghost sm', text: '⟳ 重新扫描目录' });
+  const fileInput = el('input', {
+    type: 'file',
+    accept: 'image/png,image/jpeg,image/webp,image/gif',
+    class: 'hidden',
+  });
+  const toolCard = el('div', { class: 'card' },
+    el('header', null,
+      el('span', { text: '资源列表' }),
+      el('span', { class: 'sub', id: 'countSub', text: '' }),
+      el('span', { class: 'spacer' }),
+      search, tagSel, groupSel, upBtn, scanBtn,
+    ),
+    el('div', { class: 'body tight' }, fileInput),
+  );
+
+  let qTimer = null;
+  search.oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(() => { S.q = search.value; reload(); }, 250); };
+  tagSel.onchange = () => { S.tag = tagSel.value; reload(); };
+  groupSel.onchange = () => { S.group = groupSel.value; reload(); };
+  upBtn.onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    const f = fileInput.files?.[0];
+    fileInput.value = '';
+    if (f) uploadOne(f);
+  };
+  scanBtn.onclick = (e) => withBusy(e.target, async () => {
+    try {
+      const r = await api('/api/media/scan', { method: 'POST' });
+      ok(`扫描完成：新增 ${r.added ?? 0}，共 ${r.total ?? 0} 项（A-REQ-412）`);
+      reload();
+    } catch (ex) { err(ex.message); }
+  });
+
+  // ═══════════════════ 批量操作条 ═══════════════════
+  const selBar = el('div', { class: 'note info hidden mb12' });
+  function renderSelBar() {
+    const n = S.sel.size;
+    selBar.classList.toggle('hidden', !n);
+    if (!n) return;
+    clear(selBar);
+    selBar.append(
+      el('div', { class: 'inline items-center' },
+        el('span', { class: 'bold', text: `已选 ${n} 项` }),
+        el('span', { class: 'grow' }),
+        el('button', { class: 'btn danger sm', text: '批量删除', onclick: (e) => withBusy(e.target, batchDelete) }),
+        el('button', { class: 'btn sm', text: '打标签', onclick: (e) => withBusy(e.target, batchTag) }),
+        el('button', { class: 'btn ghost sm', text: '清除选择', onclick: () => { S.sel.clear(); renderGrid(); renderSelBar(); } }),
+      ),
+    );
+  }
+
+  // ═══════════════════ 网格 ═══════════════════
+  const gridBox = el('div');
+  $('.body.tight', toolCard).append(selBar, gridBox);
+
+  function renderGrid() {
+    clear(gridBox);
+    $('#countSub').textContent = `显示 ${S.items.length} / 共 ${S.stats?.count ?? '—'} 项`;
+    if (!S.items.length) {
+      gridBox.append(el('div', { class: 'note info center', style: { padding: '40px 20px' } },
+        el('div', { class: 'bold mb8', text: '媒体库还是空的' }),
+        el('div', null,
+          '直接把图片拷进 ', el('code', { text: 'media/' }), ' 目录即可，服务端会自动索引（A-REQ-412）；',
+          '也可以点「上传图片」或把文件拖到本页面上传。',
+        ),
+      ));
+      return;
+    }
+    const grid = el('div', { class: 'grid-cards media' });
+    for (const a of S.items) {
+      const sel = S.sel.has(a.hash);
+      grid.append(el('div', { class: `tile${sel ? ' selected' : ''}`, onclick: () => { toggleSel(a.hash); } },
+        el('span', { class: 'tile-del', text: '详情', onclick: (ev) => { ev.stopPropagation(); openDetail(a); } }),
+        el('div', { class: 'tile-thumb' }, el('img', { src: a.thumbnail, alt: '', loading: 'lazy' })),
+        el('div', { class: 'tile-title truncate', text: a.originalName || a.filename }),
+        el('div', {
+          class: 'tile-sub truncate',
+          title: a.uploaderIp ? `上传 ${fmt.datetime(a.uploadedAt || a.addedAt)} · IP ${a.uploaderIp}` : '',
+          text: `${a.width && a.height ? a.width + '×' + a.height + ' · ' : ''}${a.ext.toUpperCase()} · ${fmt.bytes(a.size)}`,
+        }),
+        (a.tags || []).length ? el('div', { class: 'inline mt8' }, a.tags.slice(0, 2).map((t) => el('span', { class: 'tag', text: t }))) : null,
+        a.group ? el('div', { class: 'sub tiny muted truncate mt8', text: a.group }) : null,
+      ));
+    }
+    gridBox.append(grid);
+  }
+
+  function toggleSel(hash) {
+    S.sel.has(hash) ? S.sel.delete(hash) : S.sel.add(hash);
+    renderGrid();
+    renderSelBar();
+  }
+
+  // ═══════════════════ 上传（单张图片） ═══════════════════
+  async function uploadOne(file) {
+    if (!/^image\/(png|jpeg|webp|gif)$/i.test(file.type || '')) {
+      warn('只允许上传静态位图（PNG / JPG / WebP / GIF）；SVG 因可携带脚本已禁止');
+      return;
+    }
+    ok(`正在上传 ${file.name}…`);
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const { res, data } = await ui.uploadFetch('/api/media/upload', fd);
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.nack?.msg || data.error || data.errors?.files || `HTTP ${res.status}`);
+      }
+      ok(`上传完成${data.deduped ? '（内容重复，已去重）' : ''}，A-REQ-405`);
+      reload();
+    } catch (e) {
+      err('上传失败：' + e.message);
+    }
+  }
+
+  document.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+  });
+  document.addEventListener('drop', (e) => {
+    if (!e.dataTransfer?.types?.includes('Files')) return;
+    e.preventDefault();
+    const f = [...e.dataTransfer.files].find((x) => (x.type || '').startsWith('image/'));
+    if (f) uploadOne(f);
+  });
+
+  // ═══════════════════ 详情 ═══════════════════
+  function openDetail(a) {
+    const img = el('img', { src: a.url, alt: '', style: { maxWidth: '100%', maxHeight: '280px', objectFit: 'contain', background: '#0d0d0d', borderRadius: '8px' } });
+    const tagsIn = el('input', { type: 'text', value: (a.tags || []).join(', '), placeholder: '逗号分隔，如：队徽,主赞助' });
+    const groupIn = el('input', { type: 'text', value: a.group || '', placeholder: '如：队徽 / 赞助商' });
+    const copyBox = el('div', { class: 'btn-row mb12' });
+
+    const m = modal({
+      title: a.originalName || a.filename,
+      wide: true,
+      body: el('div', null,
+        el('div', { class: 'cols two' },
+          el('div', null, img),
+          el('div', null,
+            el('div', { class: 'kv mb12' }, [
+              ['文件', a.filename],
+              ['格式', (a.ext || '').toUpperCase() + (a.hasAlpha ? '（含透明通道）' : '')],
+              ['尺寸', a.width && a.height ? `${a.width} × ${a.height}` : '—'],
+              ['大小', fmt.bytes(a.size)],
+              ['标签', (a.tags || []).join('、') || '—'],
+              ['目录', a.group || '—'],
+              ['上传时间', fmt.datetime(a.uploadedAt || a.addedAt)],
+              ['上传 IP', a.uploaderIp || '—'],
+              ['上传来源', a.source || '—'],
+            ].map(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })])),
+          ),
+        ),
+        el('div', { class: 'field' },
+          el('label', { text: '标签（A-REQ-407）' }),
+          el('div', { class: 'inline' },
+            tagsIn,
+            el('button', { class: 'btn sm', text: '保存标签', onclick: (e) => withBusy(e.target, async () => {
+              try {
+                const r = await api('/api/media/tags', { method: 'POST', body: { hash: a.hash, tags: tagsIn.value.split(',').map((s) => s.trim()).filter(Boolean) } });
+                Object.assign(a, r.asset);
+                ok('标签已保存');
+                renderGrid();
+              } catch (ex) { err(ex.message); }
+            }) }),
+          ),
+        ),
+        el('div', { class: 'field' },
+          el('label', { text: '目录分组' }),
+          el('div', { class: 'inline' },
+            groupIn,
+            el('button', { class: 'btn sm', text: '保存目录', onclick: (e) => withBusy(e.target, async () => {
+              try {
+                await api('/api/media/group', { method: 'POST', body: { hash: a.hash, group: groupIn.value.trim() || null } });
+                a.group = groupIn.value.trim() || null;
+                ok('目录已保存');
+                reload();
+              } catch (ex) { err(ex.message); }
+            }) }),
+          ),
+        ),
+        el('div', { class: 'field' },
+          el('label', { text: '渲染端 URL（A-REQ-724）' }),
+          copyBox,
+          el('div', { class: 'help', text: '原图 / 缩略图 / 1x / 2x —— 1x、2x 为多分辨率派生，OBS 浏览器源 1080p 建议用 2x（A-REQ-406）。' }),
+        ),
+      ),
+      footer: [
+        el('button', { class: 'btn danger', text: '删除', onclick: (e) => withBusy(e.target, async () => delAsset(a, m)) }),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'btn ghost', text: '关闭', onclick: () => m.close() }),
+      ],
+    });
+
+    const urls = [
+      ['原图', a.url],
+      ['缩略图', a.thumbnail],
+      ['1x', a.derivatives?.['1x']],
+      ['2x', a.derivatives?.['2x']],
+    ];
+    for (const [name, u] of urls) {
+      if (!u) continue;
+      copyBox.append(el('button', { class: 'btn sm', text: `复制 ${name}`, onclick: () => copyText(location.origin + u) }));
+    }
+  }
+
+  function copyText(t) {
+    const fallback = () => {
+      const ta = el('textarea', { style: { position: 'fixed', opacity: '0' } }, t);
+      document.body.append(ta);
+      ta.select();
+      try { document.execCommand('copy'); ok('已复制'); } catch { warn('复制失败，请手动复制：' + t); }
+      ta.remove();
+    };
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(t).then(() => ok('已复制：' + t)).catch(fallback);
+    } else fallback();
+  }
+
+  // ═══════════════════ 删除（引用检查 A-REQ-408 / A-REQ-722） ═══════════════════
+  function refText(ref) {
+    if (ref.type === 'entity') return `实体「${ref.name}」(${ref.kind})`;
+    if (ref.type === 'overlay') return `当前叠加状态 · 槽位 ${ref.slot}`;
+    if (ref.type === 'queue') return `播出队列 · 槽位 ${ref.slot}`;
+    if (ref.type === 'template') return `模板「${ref.name}」(${ref.id})`;
+    return JSON.stringify(ref);
+  }
+
+  async function fetchRefs(hash) {
+    try {
+      const r = await api(`/api/media/${hash}/refs`, { quiet: true });
+      return r.refs || [];
+    } catch (e) { warn(`引用检查失败（${hash.slice(0, 8)}…）：${e.message}`); return []; }
+  }
+
+  async function delAsset(a, modalRef) {
+    const refs = await fetchRefs(a.hash);
+    let force = false;
+    if (refs.length) {
+      const yes = await confirm({
+        danger: true,
+        title: '删除媒体（存在引用）',
+        message: `「${a.originalName || a.filename}」正被 ${refs.length} 处引用：`,
+        detail: refs.map((r) => esc(refText(r))).join('<br>'),
+        confirmText: '强制删除',
+      });
+      if (!yes) return;
+      force = true;
+    } else {
+      const yes = await confirm({ danger: true, title: '删除媒体', message: `确认删除「${a.originalName || a.filename}」？` });
+      if (!yes) return;
+    }
+    try {
+      await api(`/api/media/${a.hash}${force ? '?force=1' : ''}`, { method: 'DELETE' });
+      ok('已删除');
+      S.sel.delete(a.hash);
+      if (modalRef) modalRef.close();
+      reload();
+    } catch (e) {
+      if (e.status === 409) {
+        warn('服务端拒绝删除：仍有引用。' + (e.data?.hint || ''));
+        const yes2 = await confirm({ danger: true, title: '强制删除', message: '直播中删除被引用的图片会导致画面 404。确认强制删除？', confirmText: '强制删除' });
+        if (yes2) {
+          try { await api(`/api/media/${a.hash}?force=1`, { method: 'DELETE' }); ok('已强制删除'); if (modalRef) modalRef.close(); reload(); } catch (ex) { err(ex.message); }
+        }
+      } else {
+        err(e.message);
+      }
+    }
+  }
+
+  async function batchDelete() {
+    const hashes = [...S.sel];
+    if (!hashes.length) return;
+    const refsAll = {};
+    for (const h of hashes) refsAll[h] = await fetchRefs(h);
+    const blocked = hashes.filter((h) => refsAll[h].length);
+    let force = false;
+    if (blocked.length) {
+      const detail = blocked.map((h) => {
+        const a = S.items.find((x) => x.hash === h);
+        return `<b>${esc(a?.originalName || a?.filename || h.slice(0, 12))}</b>：${refsAll[h].map((r) => esc(refText(r))).join('、')}`;
+      }).join('<br>');
+      const yes = await confirm({
+        danger: true,
+        title: '批量删除（存在引用）',
+        message: `选中的 ${hashes.length} 张里有 ${blocked.length} 张正被引用。直播中删除被引用的图片会导致画面 404（A-REQ-408）。`,
+        detail: detail,
+        confirmText: '强制删除全部',
+      });
+      if (!yes) return;
+      force = true;
+    } else {
+      const yes = await confirm({ danger: true, title: '批量删除', message: `确认删除选中的 ${hashes.length} 张图片？` });
+      if (!yes) return;
+    }
+    try {
+      const r = await api('/api/media/bulkDelete', { method: 'POST', body: { hashes, force } });
+      ok(`已删除 ${r.removed} 张${(r.blocked || []).length ? `，${r.blocked.length} 张仍被引用未删除` : ''}`);
+      S.sel.clear();
+      reload();
+    } catch (e) { err(e.message); }
+  }
+
+  async function batchTag() {
+    const hashes = [...S.sel];
+    if (!hashes.length) return;
+    const input = el('input', { type: 'text', placeholder: '逗号分隔，如：队徽,赞助商' });
+    const m = modal({
+      title: `给 ${hashes.length} 张图片打标签`,
+      body: el('div', null,
+        el('div', { class: 'field' }, el('label', { text: '标签（覆盖写入）' }), input),
+        S.tags.length ? el('div', { class: 'inline mb8' }, S.tags.slice(0, 12).map((t) => el('button', { class: 'btn ghost sm', text: t, onclick: () => { input.value = input.value ? input.value + ',' + t : t; } }))) : null,
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', text: '保存',
+          onclick: (e) => withBusy(e.target, async () => {
+            const tags = input.value.split(',').map((s) => s.trim()).filter(Boolean);
+            try {
+              for (const h of hashes) await api('/api/media/tags', { method: 'POST', body: { hash: h, tags } });
+              ok(`已为 ${hashes.length} 张图片保存标签`);
+              m.close();
+              reload();
+            } catch (ex) { err(ex.message); }
+          }),
+        }),
+      ],
+    });
+  }
+
+  // ═══════════════════ 数据 ═══════════════════
+  async function reload() {
+    const p = new URLSearchParams({ limit: '500' });
+    if (S.q) p.set('q', S.q);
+    if (S.tag) p.set('tag', S.tag);
+    if (S.group) p.set('group', S.group);
+    try {
+      const r = await api(`/api/media?${p.toString()}`);
+      S.items = r.items || [];
+      S.tags = r.tags || [];
+      S.groups = r.groups || [];
+      S.stats = r.stats || {};
+      renderAll();
+    } catch (e) { console.warn('[media] 拉取失败', e.message); }
+  }
+
+  function renderAll() {
+    const tcur = tagSel.value, gcur = groupSel.value;
+    tagSel.replaceChildren(el('option', { value: '', text: '全部标签' }), ...S.tags.map((t) => el('option', { value: t, text: t })));
+    tagSel.value = tcur;
+    groupSel.replaceChildren(el('option', { value: '', text: '全部目录' }), ...S.groups.map((g) => el('option', { value: g, text: g })));
+    groupSel.value = gcur;
+    renderStats();
+    renderGrid();
+    renderSelBar();
+  }
+
+  ws.on('overlay:assets', () => {
+    clearTimeout(scanTimer);
+    scanTimer = setTimeout(reload, 600);
+  });
+
+  page.append(statCard, el('div', { class: 'mt16' }, toolCard));
+
+  reload();
+})();
+</script>
+</body>
+</html>

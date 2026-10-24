@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>扫码选曲 · 街机音游赛事控制软件</title>
+<style>
+  :root {
+    --bg: #1e1f22;
+    --surface: #25272b;
+    --surface-2: #2b2e33;
+    --surface-3: #34373d;
+    --border: #3a3d43;
+    --border-strong: #4b4f57;
+    --text: #dfe1e5;
+    --text-dim: #aeb2b8;
+    --text-mute: #858a92;
+    --accent: #4a9eff;
+    --ok: #4f9a6a;
+    --warn: #c2a03c;
+    --danger: #c04c4c;
+    --left: #d0344e;
+    --right: #3d78c9;
+    --gold: #d9a441;
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+    --safe-b: env(safe-area-inset-bottom, 0px);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    font-size: 15px; line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px 14px calc(118px + var(--safe-b)); }
+  header { display: flex; align-items: flex-start; gap: 10px; padding: 4px 0 12px; }
+  .mark { width: 4px; height: 26px; background: var(--gold); margin-top: 3px; flex: 0 0 auto; }
+  .title { font-size: 20px; font-weight: 800; letter-spacing: .3px; }
+  .sub { font-size: 12.5px; color: var(--text-mute); margin-top: 2px; }
+  .status { margin-left: auto; font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: 1.5px; padding: 3px 7px; border: 1px solid var(--border); color: var(--text-mute); white-space: nowrap; }
+  .status.live { color: #8fc7a2; border-color: #345641; }
+  .status.finished { color: var(--gold); border-color: #5a4a22; }
+
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 4px; }
+  .card .body { padding: 12px; }
+  .label { font-size: 11.5px; color: var(--text-mute); margin-bottom: 5px; }
+
+  .side-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .side-btn {
+    min-height: 52px; border: 1px solid var(--border-strong); background: var(--surface-2);
+    color: var(--text-dim); border-radius: 3px; font-family: inherit;
+    font-size: 16px; font-weight: 800; letter-spacing: 1px; cursor: pointer;
+  }
+  .side-btn.left.on { background: var(--left); border-color: var(--left); color: #fff; }
+  .side-btn.right.on { background: var(--right); border-color: var(--right); color: #fff; }
+
+  .search { display: flex; gap: 8px; margin-top: 10px; }
+  input[type=search], select {
+    width: 100%; min-height: 44px; padding: 8px 10px;
+    background: var(--surface-3); border: 1px solid var(--border-strong);
+    border-radius: 3px; color: var(--text); font-family: inherit; font-size: 16px;
+  }
+  input[type=search]:focus, select:focus { outline: none; border-color: var(--accent); }
+  .filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+  .check-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  .check { display: flex; align-items: center; gap: 8px; margin-top: 10px; min-height: 30px; font-size: 13.5px; color: var(--text-dim); }
+  .check input { width: 18px; height: 18px; }
+
+  .meta-line { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; font-size: 11.5px; color: var(--text-mute); }
+  .tag { border: 1px solid var(--border-strong); padding: 1px 6px; border-radius: 2px; }
+  .tag.cn { color: #8fc7a2; border-color: #345641; }
+  .tag.banned { color: var(--danger); border-color: #5a2a2a; }
+  .tag.used { color: var(--gold); border-color: #5a4a22; }
+
+  .results { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+  .song { padding: 8px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; display: flex; gap: 10px; align-items: flex-start; }
+  .song.dim { opacity: .55; }
+  .song .cover { width: 56px; height: 56px; flex: 0 0 auto; object-fit: cover; border-radius: 3px; background: #111; border: 1px solid var(--border); }
+  .song .cover.ph { display: flex; align-items: center; justify-content: center; color: var(--text-mute); font-size: 20px; }
+  .song .body { flex: 1; min-width: 0; }
+  .song .top { display: flex; align-items: baseline; gap: 8px; }
+  .song .t { font-size: 15.5px; font-weight: 700; min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .song .a { font-size: 12px; color: var(--text-mute); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+  .chip {
+    min-height: 34px; padding: 5px 9px; border: 1px solid rgba(255,255,255,.18);
+    border-radius: 3px; color: #fff; font-family: var(--mono);
+    font-size: 11.5px; font-weight: 800; letter-spacing: .3px; cursor: pointer;
+  }
+  .chip b { font-size: 13px; }
+  .chip[data-diff="ultima"] { border-color: rgba(255,255,255,.72); }
+  .chip:disabled { opacity: .28; cursor: not-allowed; filter: grayscale(.6); }
+  .chip.sel { outline: 2px solid #fff; outline-offset: 1px; }
+
+  .more { align-self: center; margin: 6px 0; min-height: 38px; padding: 6px 14px; }
+  .empty { padding: 26px 12px; text-align: center; color: var(--text-mute); font-size: 13.5px; }
+
+  .submit-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 20;
+    padding: 10px 14px calc(10px + var(--safe-b));
+    background: rgba(30,31,34,.97); border-top: 1px solid var(--border);
+    backdrop-filter: blur(8px);
+  }
+  .submit-inner { max-width: 760px; margin: 0 auto; display: flex; align-items: center; gap: 10px; }
+  .submit-info { min-width: 0; flex: 1; font-size: 12px; color: var(--text-dim); display: flex; align-items: center; gap: 10px; }
+  .submit-info .sel-cover { width: 44px; height: 44px; flex: 0 0 auto; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); background: #111; }
+  .submit-info .sel-cover.hidden { display: none; }
+  .submit-info .txt { min-width: 0; flex: 1; }
+  .submit-info .song-name { font-size: 14px; font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .submit-info .diff-name { font-family: var(--mono); font-size: 11px; color: var(--text-mute); }
+  .submit-btn {
+    min-height: 50px; padding: 0 20px; border: 0; border-radius: 3px;
+    background: var(--accent); color: #fff; font-family: inherit; font-size: 16px; font-weight: 800;
+    letter-spacing: .5px; cursor: pointer; white-space: nowrap;
+  }
+  .submit-btn:disabled { background: var(--surface-3); color: var(--text-mute); }
+
+  .toast {
+    position: fixed; left: 50%; top: 16px; transform: translateX(-50%);
+    z-index: 50; max-width: 88vw; padding: 10px 16px; border-radius: 4px;
+    background: #111; border: 1px solid var(--border-strong);
+    font-size: 13.5px; color: var(--text); box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    opacity: 0; pointer-events: none; transition: opacity .18s;
+  }
+  .toast.on { opacity: 1; }
+  .toast.ok { border-color: #345641; color: #a9d9b9; }
+  .toast.err { border-color: #5a2a2a; color: #e0a0a0; }
+
+  .done-card { margin-top: 12px; padding: 14px; border: 1px solid #345641; background: rgba(79,154,106,.1); border-radius: 4px; display: none; }
+  .done-card.on { display: block; }
+  .done-card .big { font-size: 17px; font-weight: 800; color: #a9d9b9; }
+  .done-card .small { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="mark"></span>
+    <div>
+      <div class="title" id="matchName">扫码选曲</div>
+      <div class="sub" id="matchSub">选择 P1 / P2，然后挑一首歌提交给导播</div>
+    </div>
+    <span class="status" id="matchStatus">加载中</span>
+  </header>
+
+  <section class="card">
+    <div class="body">
+      <div class="label">我是</div>
+      <div class="side-toggle">
+        <button class="side-btn left on" type="button" data-side="left">P1 · 左侧</button>
+        <button class="side-btn right" type="button" data-side="right">P2 · 右侧</button>
+      </div>
+
+      <div class="search">
+        <input type="search" id="q" placeholder="搜索曲名 / 曲师 / ID…" autocomplete="off" />
+      </div>
+      <div class="filter-row">
+        <select id="genre"><option value="">全部分类</option></select>
+        <select id="diff"><option value="any">全部难度</option></select>
+      </div>
+      <div class="check-row">
+        <label class="check"><input type="checkbox" id="cnOnly" /> 只看国服曲目</label>
+        <label class="check"><input type="checkbox" id="includeWe" /> 包含 WE 特殊谱面</label>
+      </div>
+
+      <div class="meta-line" id="metaLine"></div>
+    </div>
+  </section>
+
+  <div class="done-card" id="done">
+    <div class="big" id="doneTitle">已提交给导播</div>
+    <div class="small" id="doneSub"></div>
+  </div>
+
+  <div class="results" id="results">
+    <div class="empty">输入关键词开始搜索</div>
+  </div>
+</div>
+
+<div class="submit-bar">
+  <div class="submit-inner">
+    <div class="submit-info">
+      <img class="sel-cover hidden" id="selCover" alt="" />
+      <div class="txt">
+        <div class="song-name" id="selTitle">还没有选择曲目</div>
+        <div class="diff-name" id="selDiff">先选一个难度</div>
+      </div>
+    </div>
+    <button class="submit-btn" id="submit" disabled>提交选曲</button>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+'use strict';
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const state = {
+    side: 'left',
+    meta: null,
+    pub: null,
+    selected: null,
+    results: [],
+    offset: 0,
+    total: 0,
+    loading: false,
+    submitting: false,
+  };
+
+  function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+  let toastTimer = null;
+  function toast(msg, type = 'ok') {
+    const n = $('toast');
+    n.textContent = msg;
+    n.className = `toast on ${type}`;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { n.className = 'toast'; }, 2600);
+  }
+
+  async function api(path, opts = {}) {
+    const res = await fetch(path, {
+      method: opts.method || 'GET',
+      headers: opts.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    let data = null;
+    try { data = await res.json(); } catch { /* ignore */ }
+    if (!res.ok || (data && data.ok === false)) {
+      const msg = data?.nack?.msg || data?.msg || `请求失败（HTTP ${res.status}）`;
+      const e = new Error(msg);
+      e.code = data?.nack?.code;
+      throw e;
+    }
+    return data;
+  }
+
+  function setStatus() {
+    const p = state.pub;
+    const finished = p?.status === 'finished';
+    $('matchName').textContent = p?.name || '扫码选曲';
+    $('matchSub').textContent = finished
+      ? '本局已经结束，不能再提交选曲'
+      : `${p?.modeLabel || '比赛'} · 选择 P1 / P2，挑一首歌提交给导播`;
+    const st = $('matchStatus');
+    st.textContent = finished ? '已结束' : p ? '进行中' : '加载中';
+    st.className = `status ${finished ? 'finished' : 'live'}`;
+    $('submit').disabled = finished || !state.selected || state.submitting;
+    if (finished) {
+      $('done').classList.remove('on');
+      $('selTitle').textContent = '本局已结束';
+      $('selDiff').textContent = '等待导播开启下一轮';
+    }
+  }
+
+  function setSelCover(src) {
+    const img = $('selCover');
+    if (!img) return;
+    if (!src) {
+      img.classList.add('hidden');
+      img.removeAttribute('src');
+      return;
+    }
+    img.src = src;
+    img.classList.remove('hidden');
+  }
+
+  function renderChips(song) {
+    const order = [...(state.meta?.difficultyOrder || ['basic', 'advanced', 'expert', 'master', 'ultima'])];
+    const includeWe = $('includeWe').checked;
+    if (includeWe && song.we) order.push('we');
+    const banned = new Set(state.pub?.banned || []);
+    const used = new Set((state.pub?.songs || []).map((s) => s.musicId));
+    const isBanned = banned.has(song.id);
+    const isUsed = used.has(song.id);
+    const box = document.createElement('div');
+    box.className = 'chips';
+    for (const key of order) {
+      const isWe = key === 'we';
+      const level = isWe ? song.we?.star : song.difficulties?.[key];
+      if (!level) continue;
+      const meta = isWe ? (state.meta?.we || {}) : (state.meta?.difficulties?.[key] || {});
+      const label = isWe ? `WE ${song.we.kanji}★${song.we.star}` : `${meta.name || key} ${level}`;
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'chip';
+      b.dataset.diff = key;
+      b.style.background = meta.color || (isWe ? '#b04ad9' : '#4a4e56');
+      b.disabled = isBanned || isUsed;
+      b.innerHTML = isWe
+        ? `WE <b>${esc(song.we.kanji)}★${esc(song.we.star)}</b>`
+        : `${esc((meta.name || key).slice(0, 3))} <b>${esc(level)}</b>`;
+      b.title = isBanned ? '这首已被 ban' : isUsed ? '这首已经被选了' : label;
+      if (state.selected && state.selected.song.id === song.id && state.selected.difficulty === key) b.classList.add('sel');
+      b.onclick = () => {
+        state.selected = { song, difficulty: key, level, meta };
+        $('selTitle').textContent = `${state.side === 'left' ? 'P1' : 'P2'} · ${song.name}`;
+        $('selDiff').textContent = `${label} · ${song.artist || ''}`;
+        setSelCover(song.cover);
+        $('submit').disabled = state.pub?.status === 'finished' || state.submitting;
+        renderResults();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      };
+      box.append(b);
+    }
+    return box;
+  }
+
+  function renderResults() {
+    const root = $('results');
+    root.innerHTML = '';
+    if (!state.results.length) {
+      root.innerHTML = `<div class="empty">${state.loading ? '搜索中…' : '没有匹配的曲目'}</div>`;
+      return;
+    }
+    const banned = new Set(state.pub?.banned || []);
+    const used = new Set((state.pub?.songs || []).map((s) => s.musicId));
+    for (const song of state.results) {
+      const isBanned = banned.has(song.id);
+      const isUsed = used.has(song.id);
+      const card = document.createElement('div');
+      card.className = `song${isBanned || isUsed ? ' dim' : ''}`;
+      const tags = [
+        song.cn ? '<span class="tag cn">国服</span>' : '<span class="tag">日服</span>',
+        isBanned ? '<span class="tag banned">已 ban</span>' : '',
+        isUsed ? '<span class="tag used">已选</span>' : '',
+      ].join('');
+      const cover = song.cover
+        ? `<img class="cover" src="${esc(song.cover)}" alt="" loading="lazy" />`
+        : '<span class="cover ph">♪</span>';
+      card.innerHTML = `
+        ${cover}
+        <div class="body">
+          <div class="top"><span class="t">${esc(song.name)}</span>${tags}</div>
+          <div class="a">${esc(song.artist || '—')} · ${esc(song.genreLabel || song.genre || '未分类')}</div>
+        </div>
+      `;
+      card.querySelector('.body').append(renderChips(song));
+      root.append(card);
+    }
+    if (state.offset + state.results.length < state.total) {
+      const more = document.createElement('button');
+      more.type = 'button';
+      more.className = 'chip more';
+      more.style.background = 'var(--surface-3)';
+      more.textContent = `加载更多（${state.offset + state.results.length} / ${state.total}）`;
+      more.onclick = () => load(false);
+      root.append(more);
+    }
+  }
+
+  function params() {
+    const p = {};
+    const q = $('q').value.trim();
+    if (q) p.q = q;
+    if ($('genre').value) p.genre = $('genre').value;
+    if ($('diff').value && $('diff').value !== 'any') p.difficulty = $('diff').value;
+    if ($('cnOnly').checked) p.cnOnly = true;
+    if ($('includeWe').checked || $('diff').value === 'we') p.includeWe = true;
+    return p;
+  }
+
+  async function load(reset = true) {
+    if (state.loading) return;
+    state.loading = true;
+    if (reset) { state.offset = 0; state.results = []; renderResults(); }
+    try {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(params())) q.set(k, v === true ? '1' : String(v));
+      q.set('limit', '40');
+      q.set('offset', String(state.offset));
+      // 这里用 /api/music 搜「全部曲目」；ban / 已选只做禁用标记
+      const r = await api(`/api/music?${q.toString()}`);
+      state.total = r.total || 0;
+      state.results = reset ? (r.items || []) : [...state.results, ...(r.items || [])];
+      state.offset = state.results.length;
+      $('metaLine').innerHTML = `<span>共 ${state.total} 首</span>`
+        + (state.pub?.banned?.length ? `<span>本局 ban ${state.pub.banned.length} 首</span>` : '')
+        + (state.pub?.songs?.length ? `<span>已选 ${state.pub.songs.length} 首</span>` : '');
+    } catch (e) {
+      $('results').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    } finally {
+      state.loading = false;
+      renderResults();
+    }
+  }
+
+  async function submit() {
+    if (!state.selected || state.submitting) return;
+    state.submitting = true;
+    $('submit').disabled = true;
+    $('submit').textContent = '提交中…';
+    try {
+      const r = await api('/api/match/pick', {
+        method: 'POST',
+        body: {
+          side: state.side,
+          musicId: state.selected.song.id,
+          difficulty: state.selected.difficulty,
+        },
+      });
+      const p = r.pick;
+      $('done').classList.add('on');
+      $('doneTitle').textContent = `已提交给导播：${p.title}`;
+      $('doneSub').textContent = `${state.side === 'left' ? 'P1' : 'P2'} · ${p.difficultyName} ${p.level}。导播确认后才会写入曲目表。`;
+      toast('选曲已提交，等待导播确认', 'ok');
+      state.selected = null;
+      $('selTitle').textContent = '可以继续选下一首';
+      $('selDiff').textContent = '同一首重复提交不会重复排队';
+      setSelCover('');
+      await refreshPublic();
+      load(true);
+    } catch (e) {
+      toast(e.message, 'err');
+      if (e.code === 'match_finished') { await refreshPublic(); setStatus(); }
+    } finally {
+      state.submitting = false;
+      $('submit').textContent = '提交选曲';
+      setStatus();
+    }
+  }
+
+  async function refreshPublic() {
+    try {
+      const r = await api('/api/match/public');
+      state.pub = r;
+      setStatus();
+      if (state.results.length) renderResults();
+    } catch { /* ignore */ }
+  }
+
+  function fillMeta() {
+    const genre = $('genre');
+    const diff = $('diff');
+    genre.innerHTML = '<option value="">全部分类</option>';
+    for (const g of state.meta?.genres || []) {
+      const o = document.createElement('option');
+      o.value = g.name;
+      o.textContent = `${g.label}（${g.count}）`;
+      genre.append(o);
+    }
+    diff.innerHTML = '<option value="any">全部难度</option>';
+    for (const key of state.meta?.difficultyOrder || []) {
+      const d = state.meta?.difficulties?.[key];
+      if (!d) continue;
+      const o = document.createElement('option');
+      o.value = key;
+      o.textContent = d.name || key.toUpperCase();
+      diff.append(o);
+    }
+    if (state.meta?.we) {
+      const o = document.createElement('option');
+      o.value = 'we';
+      o.textContent = "WORLD'S END（特殊谱面）";
+      diff.append(o);
+    }
+  }
+
+  // 侧别切换
+  for (const btn of document.querySelectorAll('.side-btn')) {
+    btn.onclick = () => {
+      state.side = btn.dataset.side === 'right' ? 'right' : 'left';
+      for (const b of document.querySelectorAll('.side-btn')) b.classList.toggle('on', b === btn);
+      if (state.selected) {
+        $('selTitle').textContent = `${state.side === 'left' ? 'P1' : 'P2'} · ${state.selected.song.name}`;
+        setSelCover(state.selected.song.cover);
+      }
+    };
+  }
+
+  let timer = null;
+  $('q').oninput = () => { clearTimeout(timer); timer = setTimeout(() => load(true), 260); };
+  for (const id of ['genre', 'diff', 'cnOnly', 'includeWe']) $(id).onchange = () => load(true);
+  $('submit').onclick = submit;
+
+  (async function init() {
+    try {
+      const [meta, pub] = await Promise.all([api('/api/music/meta'), api('/api/match/public')]);
+      state.meta = meta;
+      state.pub = pub;
+      fillMeta();
+      setStatus();
+      // 首屏给一批曲目，省得选手不知道要搜什么
+      load(true);
+    } catch (e) {
+      $('results').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+      $('matchStatus').textContent = '连接失败';
+    }
+  })();
+})();
+</script>
+</body>
+</html>

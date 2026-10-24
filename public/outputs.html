@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>输出与场景 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .out-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+  .out-card > header .badge-src { margin-left: 0; }
+  .out-card .out-url {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-dim); background: #17181b; border: 1px solid var(--border);
+    border-radius: 3px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .out-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .out-line .small { flex: 0 0 auto; }
+  .out-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .out-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+  .out-tag {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .04em;
+    color: var(--text-mute); border: 1px solid var(--border); padding: 1px 6px; border-radius: 2px;
+  }
+  .out-tag.full { color: #d9a441; border-color: #5a4a22; }
+  .out-tag.qr { color: var(--accent); border-color: var(--accent-dim); }
+  .out-note { margin-top: 8px; font-size: 11.5px; color: var(--text-mute); line-height: 1.55; }
+  .out-note b { color: var(--text-dim); }
+
+  .pub-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+  .qr-box img {
+    width: 210px; height: 210px; background: #fff; padding: 8px; border-radius: 3px;
+    border: 1px solid var(--border); object-fit: contain;
+  }
+  .qr-url {
+    width: 100%; word-break: break-all; text-align: center;
+    font-family: var(--mono); font-size: 11px; color: var(--text-mute);
+    background: #17181b; border: 1px solid var(--border); padding: 5px 7px; border-radius: 3px;
+  }
+  .qr-actions { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; }
+
+  .asset-list { display: flex; flex-direction: column; gap: 4px; }
+  .asset-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .asset-row:last-child { border-bottom: none; }
+  .asset-row .nm { font-weight: 700; min-width: 140px; }
+  .asset-row .asset-url {
+    flex: 1; min-width: 220px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-mute); background: #17181b; border: 1px solid var(--border);
+    border-radius: 3px; padding: 4px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, clear, api, ok, warn, err, mount } = ui;
+
+  const page = mount({
+    current: '/outputs',
+    title: '输出与场景',
+    subtitle: '所有 OBS 浏览器源、公共扫码入口与背景素材集中在这里 · 统一查看连接状态与复制地址',
+  });
+
+  const RENDER = ui.CATALOG.flatMap((g) => g.items).filter((i) => i.kind === 'render');
+  const PUBLIC = ui.CATALOG.flatMap((g) => g.items).filter((i) => i.kind === 'public');
+  const statusNodes = new Map();
+
+  // ── 顶部说明 ─────────────────────────────────────────────
+  page.append(el('section', { class: 'card mb12' },
+    el('header', null, el('span', { text: 'OBS 使用约定' }), el('span', { class: 'spacer' }),
+      el('a', { class: 'btn ghost sm', href: '/settings', text: '前往设置' })),
+    el('div', { class: 'body' },
+      el('div', { class: 'note info', html:
+        '浏览器源统一建议 <strong>1920×1080</strong>、<strong>shutdown=false</strong>、<strong>restart_when_active=false</strong>。'
+        + '透明叠加源（主叠加 / 致谢 / 比分条 / 选曲二维码 / 抽奖）直接盖在画面上；'
+        + '<strong>总比分画面</strong>是独立整屏场景，不要和比分条叠在同一区域。' }),
+      el('div', { class: 'note warn mt8', html:
+        '比分条 <strong>合并输出</strong>与 <strong>三路分件</strong>请二选一：同时加到 OBS 会看到双份画面。'
+        + '分件的宽高与地址在 <a href="/scoreboard">比分条控制台</a> 里按实际布局生成。' }),
+    ),
+  ));
+
+  // ── OBS 浏览器源 ─────────────────────────────────────────
+  const renderGrid = el('div', { class: 'out-grid' });
+  page.append(el('div', { class: 'card mb12' },
+    el('header', null, el('span', { text: 'OBS 浏览器源' }), el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: `${RENDER.length} 路 · 连接状态来自 overlay:ready` })),
+    el('div', { class: 'body' }, renderGrid),
+  ));
+
+  function statusFor(target) {
+    // 解说端是受众（audience: cast），不是 overlay 渲染端，状态从 cue 计数来
+    if (target === 'cast') {
+      const n = arcadeWS.state?.cue?.counts?.cast || 0;
+      return n ? { cls: 'ok', text: `已接入 ${n}` } : { cls: 'mute', text: '未接入' };
+    }
+    const clients = arcadeWS.state?.overlay?.clients || {};
+    const c = clients[target];
+    if (!c) return { cls: 'mute', text: '未连接' };
+    const at = c.at || c.connectedAt;
+    return { cls: 'ok', text: at ? `已连接 · ${fmt.clock(at)}` : '已连接' };
+  }
+
+  function refreshStatuses() {
+    for (const [target, node] of statusNodes) {
+      const s = statusFor(target);
+      node.className = `pill ${s.cls}`;
+      node.textContent = s.text;
+    }
+  }
+
+  function copyText(text, label = '地址') {
+    const done = () => ok(`已复制${label}`);
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallback());
+      return;
+    }
+    fallback();
+    function fallback() {
+      const ta = el('textarea', { style: { position: 'fixed', left: '-9999px' } });
+      ta.value = text;
+      document.body.append(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch { warn('复制失败，请手动选中地址'); }
+      ta.remove();
+    }
+  }
+
+  function controlLinks(item) {
+    const links = [];
+    if (item.id === 'render-main' || item.id === 'render-credits') {
+      links.push(el('a', { class: 'btn ghost sm', href: item.id === 'render-main' ? '/overlay' : '/credits', text: item.id === 'render-main' ? '叠加控制台' : '致谢编辑' }));
+    }
+    if (item.id === 'render-score') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/scoreboard', text: '比分条控制台' }));
+    }
+    if (item.id === 'render-match') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/match', text: '比赛计分' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/render/match?static=1&window=1', target: '_blank', text: '静态背景版' }));
+    }
+    if (item.id === 'render-pick') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/pick', text: '手机选曲页' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/match', text: '比赛计分' }));
+    }
+    if (item.id === 'render-lottery') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/lottery', text: '抽奖控制台' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/guests', text: '签到管理' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/join', text: '签到页' }));
+    }
+    if (item.id === 'cast-source') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/cast', text: '打开解说页' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/cues', text: '话术模板' }));
+    }
+    return links;
+  }
+
+  for (const item of RENDER) {
+    const url = `${location.origin}${item.href}`;
+    const status = el('span', { class: 'pill mute', text: '未连接' });
+    statusNodes.set(item.target, status);
+    const actions = [
+      el('button', { class: 'btn sm', type: 'button', text: '复制地址', onclick: () => copyText(url, `${item.title}地址`) }),
+    ];
+    if (item.previewHref) {
+      actions.push(el('a', { class: 'btn ghost sm', href: item.previewHref, target: '_blank', text: '打开预览' }));
+    }
+    if (item.open === 'window') {
+      actions.push(el('a', { class: 'btn ghost sm', href: `${item.href}?window=1`, target: '_blank', text: '打开窗口' }));
+    }
+    actions.push(...controlLinks(item));
+
+    renderGrid.append(el('section', { class: 'card out-card' },
+      el('header', null,
+        el('span', { text: item.title }),
+        el('span', { class: 'badge-src', text: item.badge || '' }),
+        el('span', { class: 'spacer' }),
+        status,
+      ),
+      el('div', { class: 'body' },
+        el('div', { class: 'small muted', text: item.desc }),
+        el('div', { class: 'out-tags' },
+          el('span', { class: `out-tag${item.layer === '整屏场景' ? ' full' : ''}`, text: item.layer || '透明叠加' }),
+          el('span', { class: 'out-tag', text: item.size || '1920×1080' }),
+          item.target ? el('span', { class: 'out-tag', text: `target: ${item.target}` }) : null,
+        ),
+        el('div', { class: 'out-line mt8' }, el('code', { class: 'out-url', text: url })),
+        el('div', { class: 'out-actions' }, actions),
+        item.id === 'render-score'
+          ? el('div', { class: 'out-note', html: '合并输出与三路分件二选一；<b>分件</b>的尺寸 / 地址在比分条控制台里生成。' })
+          : null,
+        item.id === 'render-match'
+          ? el('div', { class: 'out-note', html: '整屏场景：复用 <b>assets/直播间背景-动态.mp4</b>；视频解码问题或省 GPU 时用 <b>?static=1</b>。' })
+          : null,
+        item.id === 'render-pick'
+          ? el('div', { class: 'out-note', html: '扫码选曲大屏：二维码指向 <b>/pick</b>，手机提交后由导播在比赛页确认。' })
+          : null,
+        item.id === 'cast-source'
+          ? el('div', { class: 'out-note', html: '以 <b>audience=cast</b> 接入；连接数可从导播页 / 提示状态里看到，断开时倒计时和提示会停止更新。' })
+          : null,
+      ),
+    ));
+  }
+
+  // ── 公共扫码入口 ─────────────────────────────────────────
+  const pubGrid = el('div', { class: 'pub-grid' });
+  page.append(el('div', { class: 'card mb12' },
+    el('header', null, el('span', { text: '公共扫码入口' }), el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '手机扫码 · 与电脑同一 Wi-Fi，或使用设置里的公网地址' })),
+    el('div', { class: 'body' }, pubGrid),
+  ));
+
+  async function loadPublic(item) {
+    const origin = encodeURIComponent(location.origin);
+    const isLottery = item.qr === 'lottery';
+    const infoUrl = isLottery
+      ? `/api/lottery/joinUrl?origin=${origin}`
+      : `/api/match/pickUrl?origin=${origin}`;
+    const qrUrl = isLottery
+      ? `/api/lottery/qr?size=240&origin=${origin}`
+      : `/api/match/qr?size=240&origin=${origin}`;
+
+    const img = el('img', { alt: `${item.title}二维码`, src: qrUrl });
+    const urlBox = el('div', { class: 'qr-url', text: '解析地址中…' });
+    const card = el('section', { class: 'card' },
+      el('header', null,
+        el('span', { text: item.title }),
+        el('span', { class: 'badge-src badge-public', text: '公共' }),
+        el('span', { class: 'spacer' }),
+        el('a', { class: 'btn ghost sm', href: item.href, target: '_blank', text: '打开页面' }),
+      ),
+      el('div', { class: 'body' },
+        el('div', { class: 'small muted', text: item.desc }),
+        el('div', { class: 'qr-box mt12' }, img, urlBox,
+          el('div', { class: 'qr-actions' },
+            el('button', { class: 'btn sm', text: '复制地址', onclick: () => copyText(urlBox.textContent, `${item.title}地址`) }),
+          ),
+        ),
+      ),
+    );
+    pubGrid.append(card);
+    try {
+      const info = await api(infoUrl, { quiet: true });
+      urlBox.textContent = info.url;
+      if (info.warning) {
+        card.querySelector('.body').append(el('div', { class: 'note warn mt8', text: info.warning }));
+      }
+    } catch (e) {
+      urlBox.textContent = item.href;
+      card.querySelector('.body').append(el('div', { class: 'note warn mt8', text: `地址解析失败：${e.message}` }));
+    }
+  }
+  PUBLIC.forEach((item) => loadPublic(item));
+
+  // ── 背景素材 ─────────────────────────────────────────────
+  const assets = [
+    { name: '动态背景（MP4）', file: '/assets/liveroom-background.mp4', desc: '总比分画面默认背景，12s 无缝循环' },
+    { name: '静态背景（PNG）', file: '/assets/liveroom-background.png', desc: '封面 / 视频失败兜底；?static=1 使用' },
+    { name: '静态背景（SVG）', file: '/assets/liveroom-background.svg', desc: '源文件，便于二次编辑' },
+  ];
+  page.append(el('div', { class: 'card mb12' },
+    el('header', null, el('span', { text: '直播间背景素材' }), el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '总比分画面复用 · 来自项目根目录' })),
+    el('div', { class: 'body' },
+      el('div', { class: 'asset-list' },
+        assets.map((a) => el('div', { class: 'asset-row' },
+          el('span', { class: 'nm', text: a.name }),
+          el('span', { class: 'small muted', text: a.desc }),
+          el('code', { class: 'asset-url', text: `${location.origin}${a.file}` }),
+          el('button', { class: 'btn sm', text: '复制', onclick: () => copyText(`${location.origin}${a.file}`, a.name) }),
+          el('a', { class: 'btn ghost sm', href: a.file, target: '_blank', text: '打开' }),
+        )),
+      ),
+    ),
+  ));
+
+  // ── 连接状态 ─────────────────────────────────────────────
+  refreshStatuses();
+  arcadeWS.on('hello', refreshStatuses);
+  arcadeWS.watch('overlay.clients', refreshStatuses);
+  arcadeWS.watch('cue.counts', refreshStatuses);   // /cast 是受众，不是 overlay 渲染端
+  setInterval(refreshStatuses, 2500);
+})();
+</script>
+</body>
+</html>

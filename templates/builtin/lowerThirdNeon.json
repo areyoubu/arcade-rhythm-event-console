@@ -1,0 +1,74 @@
+{
+  "id": "lowerThirdNeon",
+  "name": "姓名条·霓虹",
+  "category": "player",
+  "family": "lowerThird",
+  "style": "neon",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "name",
+      "label": "姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24,
+      "placeholder": "选手A"
+    },
+    {
+      "key": "subtitle",
+      "label": "副标题",
+      "type": "text",
+      "required": false,
+      "maxLength": 48,
+      "placeholder": "中二节奏 / 1P"
+    },
+    {
+      "key": "avatar",
+      "label": "头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "teamName",
+      "label": "队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "teamAvatar",
+      "label": "队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色（霓虹）",
+      "type": "color",
+      "required": false,
+      "default": "#22d3ee"
+    }
+  ],
+  "defaultAnim": {
+    "in": "slideLeft",
+    "out": "fadeOut",
+    "durationMs": 400
+  },
+  "cssVars": {
+    "--ln-cyan": "#22d3ee",
+    "--ln-magenta": "#f472b6",
+    "--ln-accent": "#22d3ee",
+    "--ln-name-size": "52px",
+    "--ln-sub-size": "22px",
+    "--ln-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--ln-radius": "16px",
+    "--ln-avatar-size": "112px",
+    "--ln-team-size": "24px",
+    "--ln-team-logo": "32px"
+  },
+  "html": "<div class=\"ln-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--ln-accent\">\n  <div class=\"ln-avatar\">\n    <img data-slot=\"avatar\" data-slot-type=\"image\" alt=\"\" />\n    <span class=\"ln-fallback\">?</span>\n  </div>\n  <div class=\"ln-panel\">\n    <span class=\"ln-edge\"></span>\n    <div class=\"ln-text\">\n      <div class=\"ln-team\"><span class=\"ln-team-logo\"><img data-slot=\"teamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"ln-team-fallback\"></span></span><span class=\"ln-team-name\" data-slot=\"teamName\"></span></div>\n      <div class=\"ln-name\" data-slot=\"name\"></div>\n      <div class=\"ln-sub\" data-slot=\"subtitle\"></div>\n    </div>\n    <span class=\"ln-scan\"></span>\n  </div>\n</div>",
+  "css": ".ln-root{position:absolute;left:64px;bottom:72px;display:flex;align-items:flex-end;font-family:var(--ln-font);}\n.ln-avatar{width:var(--ln-avatar-size);height:var(--ln-avatar-size);border-radius:var(--ln-radius);overflow:hidden;background:linear-gradient(160deg,#071018,#160a1a);box-shadow:0 0 0 2px var(--ln-cyan),0 0 30px rgba(34,211,238,.5);display:flex;align-items:center;justify-content:center;flex:0 0 auto;}\n.ln-avatar img{width:100%;height:100%;object-fit:cover;display:none;}\n.ln-avatar img.is-ready{display:block;}\n.ln-fallback{color:rgba(255,255,255,.35);font-size:40px;font-weight:800;line-height:1;}\n.ln-avatar:has(img.is-ready) .ln-fallback{display:none;}\n.ln-panel{position:relative;overflow:hidden;background:linear-gradient(100deg,rgba(6,8,16,.94),rgba(10,6,20,.82));border-radius:var(--ln-radius);padding:18px 56px 18px 24px;min-width:340px;box-shadow:0 0 34px rgba(34,211,238,.18),inset 0 0 30px rgba(244,114,182,.07);}\n.ln-edge{position:absolute;left:0;top:0;bottom:0;width:4px;background:linear-gradient(180deg,var(--ln-cyan),var(--ln-magenta));box-shadow:0 0 18px var(--ln-cyan);}\n.ln-text{position:relative;z-index:2;}\n.ln-team{display:flex;align-items:center;gap:10px;margin-bottom:6px;}\n.ln-team:not(:has(.ln-team-name:not(:empty),img.is-ready)){display:none;}\n.ln-team-logo{position:relative;width:var(--ln-team-logo);height:var(--ln-team-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;}\n.ln-team-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.ln-team-logo img.is-ready{display:block;}\n.ln-team-fallback{width:8px;height:8px;border-radius:50%;background:var(--ln-magenta);box-shadow:0 0 10px var(--ln-magenta);}\n.ln-team-logo:has(img.is-ready) .ln-team-fallback{display:none;}\n.ln-team-name{color:var(--ln-magenta);font-size:var(--ln-team-size);font-weight:700;letter-spacing:2px;line-height:1.2;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;text-shadow:0 0 10px rgba(244,114,182,.75),0 0 26px rgba(244,114,182,.35);}\n.ln-team-name:empty{display:none;}\n.ln-name{color:#fff;font-size:var(--ln-name-size);font-weight:800;letter-spacing:.5px;line-height:1.12;white-space:nowrap;text-shadow:0 0 12px rgba(34,211,238,.6),0 0 32px rgba(244,114,182,.28);}\n.ln-sub{color:rgba(255,255,255,.78);font-size:var(--ln-sub-size);font-weight:500;line-height:1.3;margin-top:4px;white-space:nowrap;min-height:1.3em;text-shadow:0 0 10px rgba(34,211,238,.35);}\n.ln-sub:empty{display:none;}\n.ln-scan{position:absolute;inset:0;background:repeating-linear-gradient(180deg,rgba(255,255,255,.04) 0 1px,transparent 1px 4px);pointer-events:none;z-index:1;}"
+}

@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>现场抽奖签到</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  body {
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 22px; background: #0f1013;
+  }
+  .join-card {
+    width: 100%; max-width: 480px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-top: 3px solid #d9a441; border-radius: 10px;
+    padding: 26px 24px 24px; box-sizing: border-box;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, .45);
+  }
+  .eyebrow { font-family: var(--mono); font-size: 11px; letter-spacing: 3px; color: #8d9199; }
+  h1 { font-size: 24px; margin: 8px 0 6px; }
+  .lead { color: var(--text-dim); font-size: 13px; line-height: 1.6; margin: 0 0 20px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 12.5px; font-weight: 700; color: var(--text-dim); margin-bottom: 6px; }
+  .field input {
+    width: 100%; padding: 11px 12px; font-size: 16px; /* ≥16px 防止 iOS 自动缩放 */
+    background: #1b1c1f; color: var(--text);
+    border: 1px solid var(--border-strong); border-radius: 5px; outline: none;
+  }
+  .field input:focus { border-color: #d9a441; box-shadow: 0 0 0 2px rgba(217, 164, 65, .18); }
+  .hint { font-size: 11.5px; color: var(--text-mute); margin-top: 5px; }
+  .submit {
+    width: 100%; min-height: 50px; margin-top: 6px;
+    font-size: 17px; font-weight: 800; letter-spacing: 1px;
+    color: #141210; background: #d9a441; border: 1px solid #e2b55f;
+    border-radius: 6px; cursor: pointer;
+  }
+  .submit:disabled { opacity: .55; cursor: default; }
+  .msg { margin-top: 12px; font-size: 13px; min-height: 18px; color: #e39a9a; }
+  .msg.ok { color: #8ec9a5; }
+
+  .success { display: none; text-align: center; padding: 8px 0 4px; }
+  .success .tick { font-size: 42px; line-height: 1; color: #d9a441; }
+  .success h2 { margin: 12px 0 6px; font-size: 22px; }
+  .success .nm { font-size: 18px; font-weight: 700; color: var(--text); }
+  .success .ticket { margin-top: 10px; font-family: var(--mono); font-size: 13px; color: var(--text-mute); }
+  .again { margin-top: 18px; width: 100%; min-height: 42px; }
+
+  .footer { margin-top: 18px; font-size: 11.5px; color: var(--text-mute); line-height: 1.6; }
+</style>
+</head>
+<body>
+<div class="join-card">
+  <div id="formView">
+    <div class="eyebrow">CHUNITHM · LIVE LOTTERY</div>
+    <h1>现场抽奖签到</h1>
+    <p class="lead">填写你的名字，就能加入现场抽奖池。<br>同一个人重复提交会自动忽略。</p>
+
+    <div class="field">
+      <label for="name">姓名 <span style="color:#d9a441">*</span></label>
+      <input id="name" type="text" maxlength="40" autocomplete="name" placeholder="怎么称呼你？">
+    </div>
+    <div class="field">
+      <label for="handle">昵称 / 游戏 ID（可选）</label>
+      <input id="handle" type="text" maxlength="40" placeholder="如：2B铅笔">
+    </div>
+    <div class="field">
+      <label for="team">队伍（可选）</label>
+      <input id="team" type="text" maxlength="40" placeholder="如：15块钱">
+    </div>
+
+    <button class="submit" id="submitBtn" type="button">加入抽奖池</button>
+    <div class="msg" id="msg"></div>
+    <div class="footer">信息仅用于本次现场抽奖，不会公开展示或另作他用。</div>
+  </div>
+
+  <div class="success" id="successView">
+    <div class="tick">✓</div>
+    <h2>已加入抽奖池</h2>
+    <div class="nm" id="okName"></div>
+    <div class="ticket" id="okTicket"></div>
+    <button class="btn again" id="againBtn" type="button">再填一位</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const formView = $('formView');
+  const successView = $('successView');
+  const msg = $('msg');
+  const btn = $('submitBtn');
+
+  function showMsg(text, ok) {
+    msg.textContent = text || '';
+    msg.className = `msg${ok ? ' ok' : ''}`;
+  }
+
+  async function submit() {
+    const name = $('name').value.trim();
+    if (!name) { showMsg('请先填写姓名'); $('name').focus(); return; }
+    btn.disabled = true;
+    btn.textContent = '提交中…';
+    showMsg('');
+    try {
+      const res = await fetch('/api/lottery/join', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          handle: $('handle').value.trim(),
+          team: $('team').value.trim(),
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || data.ok === false) {
+        const m = data?.nack?.msg || data?.msg || `提交失败（HTTP ${res.status}）`;
+        showMsg(m);
+        btn.disabled = false;
+        btn.textContent = '加入抽奖池';
+        return;
+      }
+      $('okName').textContent = data.guest?.name || name;
+      $('okTicket').textContent = `签到序号 #${data.ticket} · 共 ${data.count} 人`;
+      formView.style.display = 'none';
+      successView.style.display = 'block';
+    } catch (e) {
+      showMsg('网络异常，请确认手机连的是现场 Wi-Fi，然后重试');
+      btn.disabled = false;
+      btn.textContent = '加入抽奖池';
+    }
+  }
+
+  btn.addEventListener('click', submit);
+  $('name').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  $('handle').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+  $('team').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });
+
+  $('againBtn').addEventListener('click', () => {
+    successView.style.display = 'none';
+    formView.style.display = 'block';
+    $('name').value = '';
+    $('handle').value = '';
+    $('team').value = '';
+    btn.disabled = false;
+    btn.textContent = '加入抽奖池';
+    showMsg('');
+    $('name').focus();
+  });
+})();
+</script>
+</body>
+</html>

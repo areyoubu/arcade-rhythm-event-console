@@ -1,0 +1,446 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>总比分画面 · 街机音游赛事控制软件</title>
+<!--
+  比赛总比分画面 —— 独立整屏场景（OBS 浏览器源 / 独立窗口 / 副屏）。
+
+  · 1920×1080 全屏场景，复用 assets/「直播间背景-动态.mp4」作为动态背景，
+    PNG 作为封面 / 视频失败时的兜底；?static=1 可强制使用静态背景。
+  · 空行不渲染，曲目区高度随 1–4 首自适应。
+  · 与 /render/score 共用队色与选手（都读 overlay.lineup）。
+  · 画面是整屏不透明场景，不再作为透明叠加使用。
+-->
+<style>
+  :root {
+    --left-color: #d0344e;
+    --right-color: #3d78c9;
+    --gold: #d9a441;
+    --panel: rgba(10, 11, 14, .82);
+    --panel-2: rgba(16, 17, 21, .86);
+    --line: #34373d;
+    --line-soft: #26282d;
+    --ink: #ffffff;
+    --ink-dim: #b7bac1;
+    --ink-mute: #858a92;
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: #0a0b0d;
+    color: #ffffff;
+    overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body.preview { background: #0a0b0d; }
+  body.windowed { background: #0a0b0d; }
+
+  #stage {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    transform-origin: top left;
+    overflow: hidden;
+    background: #0a0b0d;
+  }
+
+  /* ── 背景：动态视频 + 静态兜底 ── */
+  .bg {
+    position: absolute; inset: 0; z-index: 0;
+    background: #0a0b0d url('/assets/liveroom-background.png') center / cover no-repeat;
+  }
+  .bg-video {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .bg-video[hidden] { display: none; }
+  .bg-shade {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, rgba(5, 6, 8, .74) 0%, rgba(5, 6, 8, .22) 22%, rgba(5, 6, 8, .12) 60%, rgba(5, 6, 8, .72) 100%),
+      radial-gradient(120% 90% at 50% 45%, rgba(0, 0, 0, 0) 28%, rgba(0, 0, 0, .42) 100%);
+  }
+
+  /* ── 场景内容 ── */
+  .scene {
+    position: absolute; inset: 0; z-index: 2;
+    display: flex; flex-direction: column;
+    padding: 44px 100px 34px;
+    gap: 18px;
+    box-sizing: border-box;
+  }
+
+  .scene-head {
+    position: relative;
+    display: flex; align-items: center; gap: 18px;
+    height: 64px; flex: 0 0 auto;
+    padding: 0 22px;
+    background: linear-gradient(90deg, rgba(10, 11, 14, .90), rgba(10, 11, 14, .48));
+    border: 1px solid rgba(74, 78, 86, .55);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .28);
+  }
+  /* 左侧一条红→金→蓝的细线，和直播间背景的左右队色呼应 */
+  .scene-head::before {
+    content: '';
+    position: absolute; left: -1px; top: -1px; bottom: -1px;
+    width: 4px;
+    background: linear-gradient(180deg, var(--left-color), var(--gold), var(--right-color));
+  }
+  .brand {
+    display: inline-flex; align-items: center; gap: 9px;
+    font-family: var(--mono); font-size: 11.5px; font-weight: 600;
+    letter-spacing: 2.5px; color: #9096a1; white-space: nowrap;
+  }
+  .brand .dot { width: 7px; height: 7px; background: var(--gold); }
+  .brand b { color: #dfe1e5; font-weight: 700; }
+  .title-wrap { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1; }
+  .title-wrap .mark { width: 4px; height: 26px; background: var(--gold); flex: 0 0 auto; }
+  .name {
+    font-size: 27px; font-weight: 800; letter-spacing: .5px;
+    color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .status {
+    flex: 0 0 auto;
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700; letter-spacing: 2px;
+    padding: 3px 8px; border: 1px solid var(--line); color: var(--ink-mute);
+  }
+  .status.live { color: #8fc7a2; border-color: #345641; }
+  .status.finished { color: var(--gold); border-color: #5a4a22; }
+  .head-meta { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+  .chip {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 700; letter-spacing: 1px;
+    padding: 4px 9px; background: rgba(20, 21, 25, .88);
+    border: 1px solid var(--line); color: var(--ink-dim);
+  }
+  .chip.gold { color: var(--gold); border-color: #5a4a22; }
+
+  /* 中间主区：选手 + 曲目表，在剩余高度里垂直居中；空行多/少都不会顶到画面边缘 */
+  .scene-main {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex; flex-direction: column;
+    justify-content: center;
+    gap: 22px;
+  }
+
+  /* ── 选手区 ── */
+  .players {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 220px minmax(0, 1fr);
+    align-items: stretch;
+    flex: 0 0 auto;
+    filter: drop-shadow(0 16px 38px rgba(0, 0, 0, .28));
+  }
+  .player {
+    display: flex; align-items: center; gap: 18px;
+    padding: 18px 24px;
+    min-width: 0;
+    background: linear-gradient(90deg, rgba(10, 11, 14, .88), rgba(10, 11, 14, .42));
+    border: 1px solid rgba(74, 78, 86, .50);
+    position: relative;
+  }
+  .player.left { border-left: 5px solid var(--left-color); }
+  .player.right {
+    border-right: 5px solid var(--right-color);
+    flex-direction: row-reverse; text-align: right;
+    background: linear-gradient(270deg, rgba(10, 11, 14, .88), rgba(10, 11, 14, .42));
+  }
+  .player.is-winner { background-color: rgba(217, 164, 65, .08); }
+  .player.left.is-winner { background: linear-gradient(90deg, rgba(217, 164, 65, .14), rgba(10, 11, 14, .42)); }
+  .player.right.is-winner { background: linear-gradient(270deg, rgba(217, 164, 65, .14), rgba(10, 11, 14, .42)); }
+
+  .p-avatar {
+    position: relative;
+    width: 100px; height: 100px; flex: 0 0 auto;
+    background: #17171b; border: 1px solid #3a3c43; overflow: hidden;
+  }
+  .p-avatar img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .p-avatar img.is-ready { display: block; }
+  .p-fb {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 36px; font-weight: 800; color: #5e626b;
+  }
+  .p-avatar img.is-ready + .p-fb { display: none; }
+
+  .p-info { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; gap: 5px; }
+  .p-name {
+    font-size: 40px; font-weight: 800; line-height: 1.1; color: #ffffff;
+    text-shadow: 0 3px 14px rgba(0, 0, 0, .55);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .p-team-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .player.right .p-team-line { flex-direction: row-reverse; }
+  .p-team-logo { width: 24px; height: 24px; flex: 0 0 auto; object-fit: contain; display: none; }
+  .p-team-logo.is-ready { display: block; }
+  .p-team {
+    font-size: 19px; font-weight: 500; color: var(--ink-dim); letter-spacing: .5px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .p-team:empty { display: none; }
+
+  .p-score {
+    flex: 0 0 auto; display: flex; flex-direction: column; align-items: flex-end; gap: 2px;
+    min-width: 280px;
+  }
+  .player.right .p-score { align-items: flex-start; }
+  .p-agg {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 88px; font-weight: 800; line-height: 1; letter-spacing: -2px;
+    text-shadow: 0 4px 18px rgba(0, 0, 0, .35);
+  }
+  .player.left .p-agg { color: var(--left-color); }
+  .player.right .p-agg { color: var(--right-color); }
+  .p-agg[data-digits="4"] { font-size: 82px; }
+  .p-agg[data-digits="5"] { font-size: 76px; }
+  .p-agg[data-digits="6"] { font-size: 68px; letter-spacing: -3px; }
+  .p-agg[data-digits="7"] { font-size: 60px; letter-spacing: -3px; }
+  .p-agg[data-digits="8"] { font-size: 54px; letter-spacing: -3px; }
+  .p-agg-label {
+    font-family: var(--mono); font-size: 13px; font-weight: 700;
+    letter-spacing: 2px; color: var(--ink-dim);
+  }
+
+  .center {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 5px; padding: 14px 10px;
+    background: rgba(10, 11, 14, .62);
+    border-top: 1px solid rgba(74, 78, 86, .45);
+    border-bottom: 1px solid rgba(74, 78, 86, .45);
+  }
+  .vs { font-family: var(--mono); font-size: 28px; font-weight: 800; letter-spacing: 4px; color: var(--ink); }
+  .center-mode { font-size: 13px; font-weight: 700; letter-spacing: 2px; color: var(--ink-mute); }
+  .center-state {
+    margin-top: 4px; font-size: 15px; font-weight: 800; letter-spacing: 1px;
+    color: var(--ink-dim); text-align: center; line-height: 1.3;
+  }
+  .center-state.win { color: var(--gold); font-size: 19px; }
+  .center-state:empty { display: none; }
+
+  /* ── 曲目表 ── */
+  .song-panel {
+    flex: 0 1 auto; min-height: 0;
+    background: linear-gradient(180deg, rgba(10, 11, 14, .86), rgba(10, 11, 14, .74));
+    border: 1px solid rgba(74, 78, 86, .55);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, .30);
+  }
+  .songs-wrap { padding: 4px 26px 10px; }
+  /* 结构：左 P1 成绩 · 中间曲目 · 右 P2 成绩 */
+  .song-head, .song-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+  }
+  .song-head {
+    padding: 10px 0 7px;
+    font-family: var(--mono); font-size: 11.5px; font-weight: 700;
+    letter-spacing: 2px; color: var(--ink-mute);
+  }
+  .song-head .h-left { text-align: right; padding-right: 34px; }
+  .song-head .h-center { text-align: center; }
+  .song-head .h-right { text-align: left; padding-left: 34px; }
+  .song-row {
+    min-height: 100px;
+    border-top: 1px solid var(--line-soft);
+    position: relative;
+  }
+  .song-row.is-current {
+    background: linear-gradient(90deg, rgba(217, 164, 65, .07), rgba(217, 164, 65, .01) 32%, rgba(217, 164, 65, .01) 68%, rgba(217, 164, 65, .05));
+  }
+  .song-row.is-current::before {
+    content: ''; position: absolute; left: -26px; top: 8px; bottom: 8px;
+    width: 3px; background: var(--gold);
+  }
+
+  /* 两边成绩 */
+  .side-score {
+    position: relative;
+    display: flex; align-items: center; min-width: 0;
+  }
+  .side-score.left { justify-content: flex-end; padding-right: 30px; }
+  .side-score.right { justify-content: flex-start; padding-left: 30px; }
+  .score-num {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 56px; font-weight: 800; line-height: 1; letter-spacing: -2px;
+    color: var(--ink); white-space: nowrap;
+    text-shadow: 0 4px 18px rgba(0, 0, 0, .35);
+  }
+  .score-num.empty { color: #4d5058; font-weight: 500; letter-spacing: 0; }
+  .score-num.win { color: var(--gold); }
+  /*
+   * 「胜」标记绝对定位在成绩列的 padding 里，不参与 flex 布局。
+   * 如果它和数字一起排流，有胜的行的数字会向左/向右偏 30px，
+   * 导致每行分数对不齐（截图里的问题）。
+   */
+  .score-flag {
+    position: absolute; top: 50%; transform: translateY(-50%);
+    font-family: var(--mono); font-size: 12px; font-weight: 800; letter-spacing: 1px;
+    color: var(--gold); border: 1px solid #5a4a22; padding: 2px 6px;
+    background: rgba(10, 11, 14, .65);
+    pointer-events: none;
+  }
+  .side-score.left .score-flag { right: 0; }
+  .side-score.right .score-flag { left: 0; }
+
+  /* 中间曲目 */
+  .song-center {
+    display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 12px;
+    min-width: 0; text-align: center; padding: 8px;
+  }
+  .song-cover {
+    width: 76px; height: 76px; flex: 0 0 auto;
+    object-fit: cover; border-radius: 3px; background: #111;
+    border: 1px solid rgba(255, 255, 255, .18);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
+  }
+  .song-cover.hidden { display: none; }
+  .song-text {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    min-width: 0;
+  }
+  .song-tags {
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px; margin-bottom: 1px; flex-wrap: wrap;
+  }
+  .row-no {
+    font-family: var(--mono); font-size: 11px; font-weight: 800;
+    color: var(--ink-mute); letter-spacing: 1px;
+  }
+  .song-row.is-current .row-no { color: var(--gold); }
+  .now {
+    font-family: var(--mono); font-size: 9.5px; font-weight: 800; letter-spacing: 1.5px;
+    color: var(--gold); border: 1px solid #5a4a22; padding: 1px 5px;
+  }
+  .draw-flag {
+    font-family: var(--mono); font-size: 10px; font-weight: 800; letter-spacing: 1px;
+    color: var(--ink-dim); border: 1px solid var(--line); padding: 1px 5px;
+  }
+  .diff {
+    flex: 0 0 auto;
+    display: inline-flex; align-items: baseline; gap: 5px;
+    padding: 3px 7px;
+    font-family: var(--mono); font-size: 11.5px; font-weight: 800; letter-spacing: .5px;
+    color: #fff; border: 1px solid rgba(255, 255, 255, .18);
+    white-space: nowrap;
+  }
+  .diff b { font-size: 13.5px; letter-spacing: 0; }
+  .song-title {
+    font-size: 30px; font-weight: 800; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 100%; line-height: 1.15;
+  }
+  .song-artist {
+    font-size: 15px; color: var(--ink-mute);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 100%;
+  }
+  .song-artist:empty { display: none; }
+
+  .empty {
+    padding: 34px 26px 40px;
+    text-align: center; font-size: 16px; letter-spacing: 1px; color: var(--ink-mute);
+    border-top: 1px solid var(--line-soft);
+  }
+
+  /* ── 底部 ── */
+  .foot {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    height: 40px; padding: 0 18px;
+    background: linear-gradient(90deg, rgba(10, 11, 14, .58), rgba(10, 11, 14, .30));
+    border: 1px solid rgba(74, 78, 86, .35);
+    font-family: var(--mono); font-size: 10.5px; font-weight: 600;
+    letter-spacing: 1.5px; color: var(--ink-mute);
+  }
+  .foot .gold { color: var(--gold); }
+
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <!-- 背景：直播间动态背景；静态 PNG 作为封面/视频失败兜底 -->
+  <div class="bg" aria-hidden="true">
+    <video class="bg-video" id="bgVideo" autoplay muted loop playsinline preload="auto"
+           poster="/assets/liveroom-background.png">
+      <source src="/assets/liveroom-background.mp4" type="video/mp4" />
+    </video>
+    <div class="bg-shade"></div>
+  </div>
+
+  <div class="scene" id="board">
+    <header class="scene-head">
+      <span class="brand"><span class="dot"></span><b>CHUNITHM</b> · MATCH SCORE</span>
+      <div class="title-wrap">
+        <span class="mark"></span>
+        <span class="name" id="matchName">比赛</span>
+        <span class="status" id="matchStatus">进行中</span>
+      </div>
+      <div class="head-meta">
+        <span class="chip" id="modeChip">总分制</span>
+        <span class="chip" id="countChip">0 / 4 首</span>
+      </div>
+    </header>
+
+    <div class="scene-main">
+      <div class="players">
+        <section class="player left" id="leftPlayer">
+          <div class="p-avatar"><img id="leftImg" alt="" /><span class="p-fb" id="leftFb">P1</span></div>
+          <div class="p-info">
+            <div class="p-name" id="leftName">P1</div>
+            <div class="p-team-line"><img class="p-team-logo" id="leftTeamLogo" alt="" /><div class="p-team" id="leftTeam"></div></div>
+          </div>
+          <div class="p-score">
+            <span class="p-agg" id="leftAgg">0</span>
+            <span class="p-agg-label" id="leftAggLabel">总分</span>
+          </div>
+        </section>
+
+        <div class="center">
+          <span class="vs">VS</span>
+          <span class="center-mode" id="centerMode">总分制</span>
+          <span class="center-state" id="centerState"></span>
+        </div>
+
+        <section class="player right" id="rightPlayer">
+          <div class="p-avatar"><img id="rightImg" alt="" /><span class="p-fb" id="rightFb">P2</span></div>
+          <div class="p-info">
+            <div class="p-name" id="rightName">P2</div>
+            <div class="p-team-line"><img class="p-team-logo" id="rightTeamLogo" alt="" /><div class="p-team" id="rightTeam"></div></div>
+          </div>
+          <div class="p-score">
+            <span class="p-agg" id="rightAgg">0</span>
+            <span class="p-agg-label" id="rightAggLabel">总分</span>
+          </div>
+        </section>
+      </div>
+
+      <div class="song-panel">
+        <div class="songs-wrap" id="songsWrap">
+          <div class="song-head">
+            <span class="h-left">P1 分数</span>
+            <span class="h-center">曲目</span>
+            <span class="h-right">P2 分数</span>
+          </div>
+          <div id="songs"></div>
+        </div>
+        <div class="empty hidden" id="empty">等待选曲与录入分数</div>
+      </div>
+    </div>
+
+    <footer class="foot">
+      <span id="footLeft"></span>
+      <span id="footRight"></span>
+    </footer>
+  </div>
+</div>
+<script src="/shared/ws.js"></script>
+<script src="/render/match.js"></script>
+</body>
+</html>

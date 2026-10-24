@@ -1,0 +1,55 @@
+{
+  "id": "cornerBadge",
+  "name": "角标（常驻）",
+  "category": "custom",
+  "family": "cornerBadge",
+  "style": "broadcast",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "title",
+      "label": "主文字",
+      "type": "text",
+      "required": true,
+      "maxLength": 20,
+      "default": "中二节奏"
+    },
+    {
+      "key": "subtitle",
+      "label": "副文字",
+      "type": "text",
+      "required": false,
+      "maxLength": 28,
+      "default": "8强 胜者组"
+    },
+    {
+      "key": "icon",
+      "label": "图标",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "sponsor"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#d9d9d9"
+    }
+  ],
+  "defaultAnim": {
+    "in": "fadeIn",
+    "out": "fadeOut",
+    "durationMs": 350
+  },
+  "cssVars": {
+    "--cb-accent": "#d9d9d9",
+    "--cb-title-size": "22px",
+    "--cb-sub-size": "15px",
+    "--cb-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--cb-icon-size": "40px"
+  },
+  "html": "<div class=\"cb-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--cb-accent\">\n  <div class=\"cb-icon\"><img data-slot=\"icon\" data-slot-type=\"image\" alt=\"\" /><span class=\"cb-dot\"></span></div>\n  <div class=\"cb-meta\">\n    <div class=\"cb-title\" data-slot=\"title\"></div>\n    <div class=\"cb-sub\" data-slot=\"subtitle\"></div>\n  </div>\n</div>",
+  "css": ".cb-root{position:absolute;right:64px;top:64px;display:flex;align-items:center;gap:10px;padding:9px 18px 9px 12px;background:rgba(10,10,11,.92);border:1px solid #2c2c30;border-right:3px solid var(--cb-accent);font-family:var(--cb-font);}\n.cb-icon{width:var(--cb-icon-size);height:var(--cb-icon-size);display:flex;align-items:center;justify-content:center;position:relative;}\n.cb-icon img{max-width:100%;max-height:100%;object-fit:contain;display:none;}\n.cb-icon img.is-ready{display:block;}\n.cb-dot{width:8px;height:8px;background:var(--cb-accent);}\n.cb-icon:has(img.is-ready) .cb-dot{display:none;}\n.cb-meta{display:flex;flex-direction:column;gap:2px;}\n.cb-title{font-size:var(--cb-title-size);font-weight:700;color:#f2f2ee;line-height:1.15;white-space:nowrap;}\n.cb-sub{font-size:var(--cb-sub-size);font-weight:500;color:var(--cb-accent);letter-spacing:1px;line-height:1.2;white-space:nowrap;}\n.cb-sub:empty{display:none;}"
+}

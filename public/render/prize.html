@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>奖品大屏 · 街机音游赛事控制软件</title>
+<!--
+  本轮奖品展示（OBS 浏览器源，整屏场景）。
+
+  · 背景复用 assets/直播间背景-动态.mp4；?static=1 用静态 PNG
+  · 奖品图片 object-fit: contain，任何比例都完整显示；后面加一层同图模糊铺满屏幕
+  · 奖品名称大号居中，抽奖中 / 揭晓时更新状态条与中奖者
+
+  URL：?static=1 静态背景 / ?fit=0 不缩放 / ?window=1 深色窗口 / ?preview=1 预览角标
+-->
+<style>
+  :root {
+    --gold: #d9a441;
+    --ink: #f4f5f7;
+    --dim: #b6bbc4;
+    --mute: #7d838d;
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: #0a0b0d; overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #stage {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    overflow: hidden;
+    background: #0a0b0d url('/assets/liveroom-background.png') center / cover no-repeat;
+  }
+  #bgVideo, #bgBlur {
+    position: absolute; pointer-events: none;
+  }
+  #bgVideo {
+    left: 0; top: 0; width: 100%; height: 100%;
+    object-fit: cover; opacity: .62;
+  }
+  #bgBlur {
+    left: -6%; top: -6%; width: 112%; height: 112%;
+    object-fit: cover; opacity: 0; filter: blur(64px) saturate(.85);
+    transition: opacity .6s ease;
+  }
+  #bgBlur.is-ready { opacity: .38; }
+
+  .shade {
+    position: absolute; inset: 0;
+    background:
+      radial-gradient(ellipse at 50% 42%, rgba(0, 0, 0, .10), rgba(0, 0, 0, .58) 72%),
+      linear-gradient(180deg, rgba(8, 9, 11, .58), rgba(8, 9, 11, .16) 26%, rgba(8, 9, 11, .30) 62%, rgba(8, 9, 11, .86));
+  }
+
+  .frame {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    padding: 44px 76px 54px;
+    box-sizing: border-box;
+  }
+  .topbar {
+    display: flex; align-items: center; gap: 18px; flex: 0 0 auto;
+  }
+  .eyebrow {
+    font-family: var(--mono); font-size: 22px; font-weight: 800;
+    letter-spacing: 9px; color: var(--gold);
+  }
+  .status {
+    margin-left: auto;
+    font-family: var(--mono); font-size: 15px; letter-spacing: 3px;
+    color: var(--dim); border: 1px solid rgba(255, 255, 255, .22);
+    border-radius: 999px; padding: 6px 18px;
+    background: rgba(10, 11, 13, .35);
+  }
+  .status.spinning { color: #f0d49a; border-color: rgba(230, 180, 80, .55); }
+  .status.revealed { color: #a8e6c8; border-color: rgba(62, 207, 142, .5); }
+
+  .main {
+    flex: 1; min-height: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px;
+    padding: 10px 0 8px;
+  }
+  .image-wrap {
+    flex: 1; min-height: 0; width: 100%;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #prizeImg {
+    max-width: 94%; max-height: 100%;
+    object-fit: contain;
+    opacity: 0; transform: scale(.985);
+    transition: opacity .55s ease, transform .55s ease;
+    filter: drop-shadow(0 26px 60px rgba(0, 0, 0, .55));
+  }
+  #prizeImg.is-ready { opacity: 1; transform: scale(1); }
+
+  .prize-text { flex: 0 0 auto; text-align: center; max-width: 1680px; }
+  #prizeName {
+    font-size: clamp(64px, 7.1vw, 150px);
+    font-weight: 900; line-height: 1.06;
+    letter-spacing: 1px; color: var(--ink);
+    text-shadow: 0 8px 38px rgba(0, 0, 0, .72);
+    word-break: break-word;
+  }
+  #prizeName.pop { animation: namePop .5s cubic-bezier(.2, .9, .25, 1); }
+  @keyframes namePop {
+    0% { opacity: 0; transform: translateY(18px) scale(.97); }
+    100% { opacity: 1; transform: none; }
+  }
+  #prizeNote {
+    margin-top: 12px;
+    font-size: 30px; letter-spacing: 2px; color: var(--dim);
+    text-shadow: 0 4px 18px rgba(0, 0, 0, .7);
+  }
+  #prizeNote:empty { display: none; }
+
+  .winner {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center; gap: 24px;
+    padding: 18px 32px;
+    border-top: 1px solid rgba(217, 164, 65, .45);
+    background: linear-gradient(0deg, rgba(0, 0, 0, .55), rgba(0, 0, 0, .05));
+    opacity: 0; transform: translateY(18px);
+    transition: opacity .45s ease, transform .45s ease;
+  }
+  .winner.show { opacity: 1; transform: none; }
+  .winner .label {
+    font-family: var(--mono); font-size: 18px; letter-spacing: 5px; color: var(--gold);
+  }
+  #winnerName {
+    font-size: 62px; font-weight: 900; color: #fff;
+    text-shadow: 0 6px 26px rgba(0, 0, 0, .7);
+  }
+  #winnerTeam { font-size: 28px; color: var(--dim); }
+  #winnerTeam:empty { display: none; }
+
+  .empty-hint {
+    display: none;
+    font-family: var(--mono); font-size: 16px; letter-spacing: 4px; color: var(--mute);
+  }
+  #stage.empty #prizeImg { display: none; }
+  #stage.empty .image-wrap { display: none; }
+  #stage.empty .empty-hint { display: block; }
+  #stage.no-image .image-wrap { display: none; }
+
+  body.preview::after {
+    content: 'PREVIEW';
+    position: fixed; right: 18px; top: 16px;
+    font-family: var(--mono); font-size: 11px; letter-spacing: 3px;
+    color: #c9c9c4; background: rgba(0, 0, 0, .45);
+    border: 1px solid rgba(255, 255, 255, .18); border-radius: 3px;
+    padding: 3px 8px; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="stage">
+  <video id="bgVideo" autoplay muted loop playsinline poster="/assets/liveroom-background.png">
+    <source src="/assets/liveroom-background.mp4" type="video/mp4" />
+  </video>
+  <img id="bgBlur" alt="" />
+  <div class="shade"></div>
+
+  <div class="frame">
+    <div class="topbar">
+      <div class="eyebrow">本轮奖品 · PRIZE</div>
+      <div class="status" id="status">本轮奖品</div>
+    </div>
+
+    <div class="main">
+      <div class="empty-hint">PRIZE · TO BE ANNOUNCED</div>
+      <div class="image-wrap"><img id="prizeImg" alt="" /></div>
+      <div class="prize-text">
+        <div id="prizeName">奖品待公布</div>
+        <div id="prizeNote"></div>
+      </div>
+    </div>
+
+    <div class="winner" id="winnerBar">
+      <span class="label">恭喜</span>
+      <span id="winnerName"></span>
+      <span id="winnerTeam"></span>
+    </div>
+  </div>
+</div>
+<script src="/shared/ws.js"></script>
+<script src="/render/prize.js"></script>
+</body>
+</html>

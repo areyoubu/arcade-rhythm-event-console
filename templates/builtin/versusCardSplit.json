@@ -1,0 +1,101 @@
+{
+  "id": "versusCardSplit",
+  "name": "对阵卡·斜切分屏（全屏）",
+  "category": "player",
+  "family": "versusCard",
+  "style": "split",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "leftName",
+      "label": "左侧姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24
+    },
+    {
+      "key": "leftAvatar",
+      "label": "左侧头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "rightName",
+      "label": "右侧姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24
+    },
+    {
+      "key": "rightAvatar",
+      "label": "右侧头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "leftTeam",
+      "label": "左侧队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "leftTeamAvatar",
+      "label": "左侧队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "rightTeam",
+      "label": "右侧队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "rightTeamAvatar",
+      "label": "右侧队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "roundLabel",
+      "label": "轮次标签",
+      "type": "text",
+      "required": false,
+      "maxLength": 32,
+      "placeholder": "胜者组 决赛"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色（VS 徽章）",
+      "type": "color",
+      "required": false,
+      "default": "#d9d9d9"
+    }
+  ],
+  "defaultAnim": {
+    "in": "wipeRight",
+    "out": "fadeOut",
+    "durationMs": 650
+  },
+  "cssVars": {
+    "--vs-accent": "#d9d9d9",
+    "--vs-left": "#151515",
+    "--vs-right": "#1d1d1d",
+    "--vs-name-size": "54px",
+    "--vs-round-size": "20px",
+    "--vs-avatar-size": "250px",
+    "--vs-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--vs-team-size": "24px",
+    "--vs-team-logo": "34px"
+  },
+  "html": "<div class=\"vs-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--vs-accent\">\n  <div class=\"vs-panel vs-panel-left\"></div>\n  <div class=\"vs-panel vs-panel-right\"></div>\n  <div class=\"vs-seam\"></div>\n  <div class=\"vs-round\" data-slot=\"roundLabel\"></div>\n  <div class=\"vs-side vs-left\">\n    <div class=\"vs-avatar\">\n      <img data-slot=\"leftAvatar\" data-slot-type=\"image\" alt=\"\" />\n      <span class=\"vs-fallback\">1P</span>\n    </div>\n    <div class=\"vs-team\"><span class=\"vs-team-logo\"><img data-slot=\"leftTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"vs-team-fallback\"></span></span><span class=\"vs-team-name\" data-slot=\"leftTeam\"></span></div>\n    <div class=\"vs-name\" data-slot=\"leftName\"></div>\n  </div>\n  <div class=\"vs-side vs-right\">\n    <div class=\"vs-avatar\">\n      <img data-slot=\"rightAvatar\" data-slot-type=\"image\" alt=\"\" />\n      <span class=\"vs-fallback\">2P</span>\n    </div>\n    <div class=\"vs-team\"><span class=\"vs-team-logo\"><img data-slot=\"rightTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"vs-team-fallback\"></span></span><span class=\"vs-team-name\" data-slot=\"rightTeam\"></span></div>\n    <div class=\"vs-name\" data-slot=\"rightName\"></div>\n  </div>\n  <div class=\"vs-badge\"><span class=\"vs-vs\">VS</span></div>\n</div>",
+  "css": ".vs-root{position:absolute;inset:0;font-family:var(--vs-font);overflow:hidden;background:#0b0b0c;}\n.vs-panel{position:absolute;top:0;bottom:0;}\n.vs-panel-left{left:0;width:58%;background:var(--vs-left);clip-path:polygon(0 0,100% 0,76% 100%,0 100%);}\n.vs-panel-right{left:42%;width:58%;background:var(--vs-right);clip-path:polygon(24% 0,100% 0,100% 100%,0 100%);}\n.vs-seam{position:absolute;left:50%;top:-10%;width:2px;height:120%;background:var(--vs-accent);transform:translateX(-50%) rotate(13.5deg);}\n.vs-round{position:absolute;left:50%;top:52px;transform:translateX(-50%);font-size:var(--vs-round-size);font-weight:700;letter-spacing:6px;color:#c9c9c2;background:rgba(8,8,9,.85);padding:6px 26px;border:1px solid #34343a;text-transform:uppercase;white-space:nowrap;}\n.vs-round:empty{display:none;}\n.vs-side{position:absolute;top:50%;transform:translateY(-50%);width:500px;display:flex;flex-direction:column;align-items:center;gap:20px;}\n.vs-left{left:7%;}\n.vs-right{right:7%;}\n.vs-avatar{width:var(--vs-avatar-size);height:var(--vs-avatar-size);overflow:hidden;background:#0d0d0e;border:1px solid #3a3a3f;display:flex;align-items:center;justify-content:center;}\n.vs-avatar img{width:100%;height:100%;object-fit:cover;display:none;}\n.vs-avatar img.is-ready{display:block;}\n.vs-fallback{font-size:56px;font-weight:700;color:#55554e;letter-spacing:2px;}\n.vs-name{font-size:var(--vs-name-size);font-weight:700;color:#f4f4f0;letter-spacing:.5px;text-align:center;line-height:1.12;max-width:500px;word-break:break-word;}\n.vs-badge{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);padding:10px 20px;background:#0b0b0c;border:1px solid var(--vs-accent);}\n.vs-vs{font-size:24px;font-weight:700;letter-spacing:5px;color:var(--vs-accent);}\n.vs-team{display:flex;align-items:center;gap:10px;max-width:500px;}\n.vs-team:not(:has(.vs-team-name:not(:empty),img.is-ready)){display:none;}\n.vs-team-logo{position:relative;width:var(--vs-team-logo);height:var(--vs-team-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;}\n.vs-team-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.vs-team-logo img.is-ready{display:block;}\n.vs-team-fallback{width:6px;height:6px;background:var(--vs-accent);}\n.vs-team-logo:has(img.is-ready) .vs-team-fallback{display:none;}\n.vs-team-name{font-size:var(--vs-team-size);font-weight:700;letter-spacing:2px;line-height:1.2;color:var(--vs-accent);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}\n.vs-team-name:empty{display:none;}"
+}

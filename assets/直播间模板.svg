@@ -1,0 +1,60 @@
+<svg width="1920" height="1080" viewBox="0 0 1920 1080" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#181a1e"/>
+      <stop offset="1" stop-color="#101114"/>
+    </linearGradient>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#ffffff" stroke-opacity="0.022" stroke-width="1"/>
+    </pattern>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#bg)"/>
+  <rect width="1920" height="1080" fill="url(#grid)"/>
+
+  <!-- 上方：留给浏览器叠加（本模板不包含） -->
+  <rect x="40" y="26" width="1840" height="238" rx="8" fill="none" stroke="#33363c" stroke-width="1.5" stroke-dasharray="10 8"/>
+  <text x="960" y="140" font-family="'Microsoft YaHei','Noto Sans SC',sans-serif" font-size="26" font-weight="700" fill="#4a4f57" text-anchor="middle" dominant-baseline="central">浏览器叠加区（比分条 + 选手牌）</text>
+  <text x="960" y="178" font-family="'Consolas','Cascadia Mono',monospace" font-size="15" fill="#3f444b" text-anchor="middle" dominant-baseline="central">/render/score · 不包含在本模板内</text>
+
+  <!-- 框体背景 -->
+  <rect x="28" y="284" width="1864" height="750" rx="10" fill="#141519" stroke="#2a2d32" stroke-width="1"/>
+
+  
+  <rect x="40" y="296" width="908" height="510" rx="6" fill="#0b0c0e"/>
+  <rect x="40" y="296" width="908" height="510" rx="6" fill="none" stroke="#3a3d43" stroke-width="1"/>
+  <rect x="40" y="304" width="4" height="494" rx="2" fill="#d0344e"/>
+  <path d="M 54 297 H 104" stroke="#d0344e" stroke-width="2"/>
+  <path d="M 934 297 H 884" stroke="#d0344e" stroke-width="2"/>
+  <text x="494" y="543" font-family="'Microsoft YaHei','Noto Sans SC',sans-serif" font-size="54" font-weight="700" fill="#e0556c" text-anchor="middle" dominant-baseline="central">屏幕采集 1P</text>
+  <text x="494" y="589" font-family="'Consolas','Cascadia Mono',monospace" font-size="18" fill="#5f646c" text-anchor="middle" dominant-baseline="central">908 × 510</text>
+  <text x="494" y="790" font-family="'Consolas','Cascadia Mono',monospace" font-size="13" fill="#3f444b" text-anchor="middle">SOURCE PLACEHOLDER</text>
+  <rect x="972" y="296" width="908" height="510" rx="6" fill="#0b0c0e"/>
+  <rect x="972" y="296" width="908" height="510" rx="6" fill="none" stroke="#3a3d43" stroke-width="1"/>
+  <rect x="1876" y="304" width="4" height="494" rx="2" fill="#3d78c9"/>
+  <path d="M 986 297 H 1036" stroke="#3d78c9" stroke-width="2"/>
+  <path d="M 1866 297 H 1816" stroke="#3d78c9" stroke-width="2"/>
+  <text x="1426" y="543" font-family="'Microsoft YaHei','Noto Sans SC',sans-serif" font-size="54" font-weight="700" fill="#e0556c" text-anchor="middle" dominant-baseline="central">屏幕采集 2P</text>
+  <text x="1426" y="589" font-family="'Consolas','Cascadia Mono',monospace" font-size="18" fill="#5f646c" text-anchor="middle" dominant-baseline="central">908 × 510</text>
+  <text x="1426" y="790" font-family="'Consolas','Cascadia Mono',monospace" font-size="13" fill="#3f444b" text-anchor="middle">SOURCE PLACEHOLDER</text>
+  <rect x="40" y="826" width="908" height="196" rx="6" fill="#0b0c0e"/>
+  <rect x="40" y="826" width="908" height="196" rx="6" fill="none" stroke="#3a3d43" stroke-width="1"/>
+  <rect x="40" y="834" width="4" height="180" rx="2" fill="#d0344e"/>
+  <path d="M 54 827 H 104" stroke="#d0344e" stroke-width="2"/>
+  <path d="M 934 827 H 884" stroke="#d0344e" stroke-width="2"/>
+  <text x="494" y="924" font-family="'Microsoft YaHei','Noto Sans SC',sans-serif" font-size="38" font-weight="700" fill="#e0556c" text-anchor="middle" dominant-baseline="central">摄像头 1P</text>
+  <text x="494" y="954" font-family="'Consolas','Cascadia Mono',monospace" font-size="15" fill="#5f646c" text-anchor="middle" dominant-baseline="central">908 × 196</text>
+  <text x="494" y="1006" font-family="'Consolas','Cascadia Mono',monospace" font-size="13" fill="#3f444b" text-anchor="middle">SOURCE PLACEHOLDER</text>
+  <rect x="972" y="826" width="908" height="196" rx="6" fill="#0b0c0e"/>
+  <rect x="972" y="826" width="908" height="196" rx="6" fill="none" stroke="#3a3d43" stroke-width="1"/>
+  <rect x="1876" y="834" width="4" height="180" rx="2" fill="#3d78c9"/>
+  <path d="M 986 827 H 1036" stroke="#3d78c9" stroke-width="2"/>
+  <path d="M 1866 827 H 1816" stroke="#3d78c9" stroke-width="2"/>
+  <text x="1426" y="924" font-family="'Microsoft YaHei','Noto Sans SC',sans-serif" font-size="38" font-weight="700" fill="#e0556c" text-anchor="middle" dominant-baseline="central">摄像头 2P</text>
+  <text x="1426" y="954" font-family="'Consolas','Cascadia Mono',monospace" font-size="15" fill="#5f646c" text-anchor="middle" dominant-baseline="central">908 × 196</text>
+  <text x="1426" y="1006" font-family="'Consolas','Cascadia Mono',monospace" font-size="13" fill="#3f444b" text-anchor="middle">SOURCE PLACEHOLDER</text>
+
+  <!-- 列标识 -->
+  <text x="40" y="272" font-family="'Consolas','Cascadia Mono',monospace" font-size="14" letter-spacing="2" fill="#d0344e">CHANNEL 1P</text>
+  <text x="1880" y="272" font-family="'Consolas','Cascadia Mono',monospace" font-size="14" letter-spacing="2" fill="#3d78c9" text-anchor="end">CHANNEL 2P</text>
+</svg>

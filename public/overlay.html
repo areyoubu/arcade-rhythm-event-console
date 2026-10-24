@@ -1,0 +1,1133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>叠加控制台 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+  'use strict';
+  const { el, $, clear, ok, warn, err, toast, confirm, prompt, modal, withBusy, sortable, api, esc, cmdError } = window.ui;
+  const ws = window.arcadeWS;
+  const fmt = window.fmt;
+
+  const page = window.ui.mount({
+    current: '/overlay',
+    title: '叠加控制台',
+    subtitle: '模块 A 主控制台 —— 模板选择（A-REQ-501）· 实体一键填充（A-REQ-502）· 槽位热改（A-REQ-505）· 队列（A-REQ-508）· 实时预览（A-REQ-701）',
+  });
+  ws.start();
+
+  // ═══════════════════ 页面状态 ═══════════════════
+  const S = {
+    templates: [],
+    entities: [],
+    mediaCount: 0,
+    selectedId: null,     // 控制台里选中的模板 id
+    selectedDef: null,    // 其 slots 定义
+    draft: {},            // 槽位草稿（就地热改的数据源）
+    q: '',
+    kindFilter: '',
+    focus: -1,            // 方向键焦点（实体卡片）
+    /**
+     * 双人模板的「下一次点实体填哪一侧」游标。
+     * 点一下填 A，再点一下填 B，循环 —— 这样点两个不同的人就能分别填进两个槽位，
+     * 而不是点一下就把两个槽位都变成同一个人。
+     */
+    fillSide: 'A',
+
+    /**
+     * 编辑目标：'preview' | 'main'
+     *
+     * 默认编辑预览 —— 网页里的预览画面与直播输出**完全分离**，
+     * 试模板、改文案都不会影响正在播出的画面。
+     * 确认后按「⬆ 输出到直播」一次性推过去。
+     */
+    editTarget: 'preview',
+  };
+  const sendTimers = {};
+  let lastSig = '';
+
+  const CATS = [['player', '选手'], ['talent', '解说'], ['credits', '致谢'], ['custom', '自定义']];
+  const KIND_LABEL = { player: '选手', talent: '解说', sponsor: '赞助商', team: '队伍' };
+  const CAT_LABEL = Object.fromEntries(CATS);
+
+  /** 主目标状态 —— 用 overlay.all.main 避免被 credits 目标的操作污染（all 每次操作都会整体更新） */
+  const overlayAll = () => (ws.state.overlay && ws.state.overlay.all) || {};
+  /** 当前编辑目标的状态（预览或输出） */
+  const M = () => overlayAll()[S.editTarget] || (S.editTarget === 'main' ? (ws.state.overlay || {}) : {});
+  /** 直播输出的状态 —— 只读，用于「输出当前在播什么」的提示 */
+  const OUT = () => overlayAll().main || {};
+  const isPreviewMode = () => S.editTarget === 'preview';
+  const rendererCount = () => ws.state.health?.overlayClients ?? 0;
+  const isOffline = () => rendererCount() === 0;
+
+  // ═══════════════════ 顶部状态条 ═══════════════════
+  const stPill = el('span', { class: 'pill mute' });
+  const tplPill = el('span', { class: 'pill mute' });
+  const mediaPill = el('span', { class: 'pill mute' });
+  const modePill = el('span', { class: 'pill mute' });
+  const modeBtn = el('button', { class: 'btn ghost sm' });
+  const sentSpan = el('span', { class: 'small mono-num muted' });
+  const bar = el('div', { class: 'statusbar' },
+    stPill, tplPill, mediaPill, modePill,
+    el('span', { class: 'spacer' }),
+    modeBtn, sentSpan,
+  );
+
+  function syncStatus() {
+    const rc = rendererCount();
+    const clients = ws.state.overlay?.clients || {};
+    clear(stPill);
+    stPill.className = `pill ${rc > 0 ? 'ok' : 'err'}`;
+    stPill.append(el('span', { class: `dot-led ${rc > 0 ? 'ok' : 'err'}` }));
+    stPill.append(el('span', { text: rc > 0 ? `渲染端已连接 ×${rc}` : '渲染端离线' }));
+    stPill.title = Object.entries(clients).map(([t, i]) => `${t}: ${String(i.ua || '').slice(0, 90)}`).join('\n')
+      || 'OBS 浏览器源未连接：请确认 /render/main 已加载（AC-A16）';
+
+    const tplN = (Array.isArray(ws.state.overlay?.templates) ? ws.state.overlay.templates : S.templates).length;
+    clear(tplPill);
+    tplPill.className = `pill ${tplN > 0 ? 'ok' : 'warn'}`;
+    tplPill.append(el('span', { text: `模板 ${tplN} 个` }));
+
+    clear(mediaPill);
+    mediaPill.className = 'pill mute';
+    mediaPill.append(el('span', { text: `媒体 ${S.mediaCount} 项` }));
+
+    const m = M();
+    clear(modePill);
+    modePill.className = `pill ${m.mode === 'replay' ? 'warn' : 'ok'}`;
+    modePill.append(el('span', { class: `dot-led ${m.mode === 'replay' ? 'replay' : 'ok'}` }));
+    modePill.append(el('span', { text: m.mode === 'replay' ? `回放态${m.modeLabel ? ' · ' + m.modeLabel : ''}` : '直播态' }));
+    modeBtn.textContent = m.mode === 'replay' ? '切回直播态' : '切到回放态';
+  }
+
+  /** A-REQ-708：「指令已发 / 已渲染」双状态 */
+  function renderSent() {
+    const m = M();
+    const o = OUT();
+    const tplName = (id) => (S.templates.find((t) => t.id === id) || {}).name || id || '—';
+    if (outSummary) {
+      outSummary.textContent = `编辑：${tplName(m.activeTemplate)}${m.visible ? ' · 已显示' : '（未显示）'}`;
+    }
+    syncLivePill();
+    const sent = m.sentAt || 0;
+    const ren = m.renderedAt || 0;
+    if (!sent) {
+      sentSpan.textContent = '指令状态：—';
+      sentSpan.className = 'small mono-num muted';
+      return;
+    }
+    if (sent > ren) {
+      sentSpan.textContent = `已发未渲染 · ${fmt.relTime(sent)}`;
+      sentSpan.className = 'small mono-num';
+      sentSpan.style.color = 'var(--warn)';
+    } else {
+      sentSpan.textContent = `已渲染 · ${fmt.relTime(ren)}`;
+      sentSpan.className = 'small mono-num';
+      sentSpan.style.color = 'var(--ok)';
+    }
+  }
+
+  modeBtn.onclick = () => withBusy(modeBtn, async () => {
+    const m = M();
+    try {
+      if (m.mode !== 'replay') {
+        const label = await prompt({ title: '回放态文案（可选）', label: '上屏时显示的回放标签', placeholder: '如：回放 · 第2局' });
+        if (label === null) return;
+        await ws.cmd('overlay.mode', { mode: 'replay', label: label || null, target: S.editTarget });
+      } else {
+        await ws.cmd('overlay.mode', { mode: 'live', label: null, target: S.editTarget });
+      }
+      ok('回放模式指示已切换');
+    } catch (e) { cmdError(e, '切换回放模式'); }
+  });
+
+  // ═══════════════════ 模板区 ═══════════════════
+  const tplCount = el('span', { class: 'pill mute', text: '0' });
+  // 模板多（19 套）时卡片会很高：在固定高度里滚动，给下面留空间
+  const tplGrid = el('div', { class: 'tpl-scroll' });
+  const tplCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '模板' }), tplCount, el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '点击选择' })),
+    el('div', { class: 'body tight' }, tplGrid),
+  );
+
+  /** 模板是否是双人（左右）型：同时存在 A 侧与 B 侧槽位 */
+  function isDualTpl(def) {
+    const sides = new Set((def?.slots || []).map((x) => sideOfKey(x.key)).filter(Boolean));
+    return sides.has('A') && sides.has('B');
+  }
+  function sideOfKey(key) {
+    if (/^a[A-Z]/.test(key) || /^left/.test(key)) return 'A';
+    if (/^b[A-Z]/.test(key) || /^right/.test(key)) return 'B';
+    return null;
+  }
+
+  /**
+   * 把「当前阵容」（服务端 overlay.lineup 快照）映射到新模板的某个槽位。
+   * 用于换模板时保留已选选手：双人模板换到另一个双人模板不需要重新点人。
+   */
+  function lineupValueForSlot(def, snap) {
+    if (!snap) return '';
+    const k = String(def.key).toLowerCase();
+    if (def.type === 'image' || k.includes('avatar')) {
+      return k.includes('team') ? (snap.teamImage || '') : (snap.image || '');
+    }
+    if (k.includes('team')) return snap.teamName || '';
+    if (k.includes('role')) return snap.role || '';
+    if (k.includes('name')) return snap.name || '';
+    return '';
+  }
+
+  /**
+   * 模板列表：**按「类型 → 图形族 → 风格」三级展示**。
+   *
+   * 同一图形（姓名条 / 对阵卡 / 双人名牌）的风变体并排成一行，
+   * 一眼就能比较「标准 / 霓虹 / 极简 / 粗描边」并选一个，
+   * 而不是十几个名字堆在一个网格里找。
+   */
+  function renderTplGrid() {
+    clear(tplGrid);
+    if (!S.templates.length) {
+      tplCount.textContent = '0';
+      tplGrid.append(el('div', { class: 'muted small', text: '模板未加载 —— 服务端未连接？' }));
+      return;
+    }
+    tplCount.textContent = `${S.templates.length} 个`;
+    const m = M();
+    for (const [cat, catLabel] of CATS) {
+      const list = S.templates.filter((t) => t.category === cat);
+      if (!list.length) continue;
+      tplGrid.append(el('h4', { class: 'mt8 mb8', text: catLabel }));
+
+      // 按 family 分组，保持服务端返回顺序
+      const families = [];
+      const byFam = new Map();
+      for (const t of list) {
+        const fam = t.family || t.id;
+        if (!byFam.has(fam)) { byFam.set(fam, []); families.push(fam); }
+        byFam.get(fam).push(t);
+      }
+
+      for (const fam of families) {
+        const items = byFam.get(fam);
+        const famLabel = items[0].familyLabel || fam;
+        const hasStyles = new Set(items.map((t) => t.style || 'classic')).size > 1;
+
+        tplGrid.append(el('div', { class: 'inline mb8', style: { gap: '6px' } },
+          el('span', { class: 'small bold dim', text: famLabel }),
+          hasStyles
+            ? el('span', { class: 'tiny muted', text: `${items.length} 种风格` })
+            : el('span', { class: 'tiny muted', text: items[0].styleLabel || '' }),
+        ));
+
+        const grid = el('div', { class: 'grid-cards mb8', style: { gridTemplateColumns: 'repeat(auto-fill, minmax(104px, 1fr))' } });
+        for (const t of items) {
+          const cls = ['tile'];
+          if (S.selectedId === t.id) cls.push('active');
+          if (m.activeTemplate === t.id) cls.push('selected');
+          grid.append(el('div', { class: cls.join(' '), dataset: { tplId: t.id }, title: `${t.name}（${t.id}）`, onclick: () => selectTemplate(t.id) },
+            el('div', { class: 'tile-title', style: { fontSize: '13px', textAlign: 'center' }, text: t.styleLabel || t.name }),
+            el('div', { class: 'tile-sub center', style: { fontSize: '10.5px' }, text: t.style && t.style !== 'classic' ? t.id : '' }),
+            t.overridden ? el('span', { class: 'tag P3', text: '覆盖' }) : null,
+          ));
+        }
+        tplGrid.append(grid);
+      }
+    }
+  }
+
+
+  function selectTemplate(id) {
+    S.selectedId = id;
+    S.selectedDef = S.templates.find((t) => t.id === id) || null;
+    S.draft = {};
+    const m = M();
+    const dual = isDualTpl(S.selectedDef);
+    const lineup = ws.state.overlay?.lineup || {};
+    for (const def of S.selectedDef?.slots || []) {
+      let v = (m.activeTemplate === id && m.slotValues && m.slotValues[def.key] !== undefined)
+        ? m.slotValues[def.key]
+        : (def.default !== undefined ? def.default : '');
+      // 双人模板：空着的 A/B 侧用当前阵容补上（换模板不清空人物）
+      const side = dual ? sideOfKey(def.key) : null;
+      if (side && (v === undefined || v === null || v === '')) {
+        v = lineupValueForSlot(def, lineup[side]);
+      }
+      S.draft[def.key] = v;
+    }
+    S.fillSide = 'A';                 // 换模板时游标回到 A 位
+    renderSlots();
+    renderTplGrid();
+    renderFillTargetHint();
+    sync();
+  }
+
+  // ═══════════════════ 实体区 ═══════════════════
+  const entSearch = el('input', { type: 'search', placeholder: '搜索选手 / 解说 / 赞助商…' });
+  const kindSel = el('select', null,
+    ['', 'player', 'talent', 'sponsor'].map((k) => el('option', { value: k, text: k === '' ? '全部类型' : KIND_LABEL[k] })),
+  );
+  const entCount = el('span', { class: 'pill mute', text: '0' });
+  // 选手可能有几十个：网格自身滚动，不再把整张卡片撑高
+  const entGrid = el('div', { class: 'grid-cards ent-scroll' });
+  const fillTargetHint = el('div', { style: { display: 'none' } });
+  const entCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '实体' }), entCount, el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '数字键 1-9 快速选择 · 方向键 + 回车（A-REQ-702）' })),
+    el('div', { class: 'body tight' },
+      el('div', { class: 'inline mb8' }, entSearch, kindSel),
+      fillTargetHint,
+      entGrid,
+    ),
+  );
+
+  /**
+   * 双人模板的填充目标指示器。
+   *
+   * 交互按用户要求设计成「第一次点击填 A 位，第二次点击填 B 位」：
+   * 点一个实体只填一侧，不会把两个槽位都写成同一个人。
+   * 游标可以手动点回 A，也可以交换。
+   */
+  function renderFillTargetHint() {
+    clear(fillTargetHint);
+    const dual = isDualTpl(S.selectedDef);
+    if (!dual) { fillTargetHint.style.display = 'none'; return; }
+    fillTargetHint.style.display = '';
+
+    const mk = (side, label) => el('button', {
+      class: `btn sm ${S.fillSide === side ? 'primary' : 'ghost'}`,
+      text: label,
+      onclick: () => { S.fillSide = side; renderFillTargetHint(); },
+    });
+
+    fillTargetHint.append(el('div', { class: 'note info', style: { padding: '8px 10px', marginBottom: '8px' } },
+      el('div', { class: 'bold small', text: `双人模板 · 下一次点击填入 ${S.fillSide} 位` }),
+      el('div', { class: 'inline mt8' },
+        mk('A', 'A 位'),
+        mk('B', 'B 位'),
+        el('span', { class: 'grow' }),
+        el('button', {
+          class: 'btn ghost sm', text: '⇄ 交换',
+          onclick: async () => {
+            // 交换两侧：把当前槽位值按侧别对调
+            const vals = M().slotValues || {};
+            const keys = (S.selectedDef?.slots || []).map((x) => x.key);
+            const next = { ...vals };
+            for (const k of keys) {
+              const side = sideOfKey(k);
+              if (!side) continue;
+              const twin = keys.find((o) => o !== k && sideOfKey(o) && sideOfKey(o) !== side);
+              if (twin && k < twin) { next[k] = vals[twin]; next[twin] = vals[k]; }
+            }
+            try { await ws.cmd('overlay.updateMany', { values: next, target: S.editTarget }); ok('已交换 A / B'); }
+            catch (e) { cmdError(e, '交换'); }
+          },
+        }),
+      ),
+      el('div', { class: 'tiny mt8', style: { color: 'var(--text-mute)' },
+        text: '点一个实体 → 只填当前这一侧；游标随后自动切到另一侧。这样点两个人就能分别填进两个槽位。' }),
+    ));
+  }
+  entSearch.oninput = () => { S.q = entSearch.value; S.focus = -1; renderEntGrid(); };
+  kindSel.onchange = () => { S.kindFilter = kindSel.value; S.focus = -1; renderEntGrid(); };
+
+  function filteredEntities() {
+    const q = S.q.trim().toLowerCase();
+    return S.entities.filter((e) => (!S.kindFilter || e.kind === S.kindFilter)
+      && (!q || `${e.name} ${e.team || ''} ${e.handle || ''} ${(e.tags || []).join(' ')}`.toLowerCase().includes(q)));
+  }
+
+  function renderEntGrid() {
+    renderFillTargetHint();
+    const list = filteredEntities();
+    if (S.focus >= list.length) S.focus = list.length ? list.length - 1 : -1;
+    entCount.textContent = `${list.length} 个`;
+    clear(entGrid);
+    if (!list.length) {
+      entGrid.append(el('div', { class: 'muted small', text: '没有匹配的实体 —— 去「选手 / 解说」页添加，或换一个搜索词' }));
+      return;
+    }
+    list.forEach((e, i) => {
+      entGrid.append(el('div', { class: `tile${i === S.focus ? ' active' : ''}`, onclick: () => { S.focus = i; renderEntGrid(); fillEntity(e); } },
+        el('div', { class: 'tile-thumb' }, e.image
+          ? el('img', { src: e.image, alt: '', loading: 'lazy' })
+          : el('span', { class: 'muted', text: (e.name || '?').slice(0, 1) })),
+        i < 9 ? el('span', { class: 'kbd-hint', text: String(i + 1) }) : null,
+        el('div', { class: 'tile-title truncate', text: e.name }),
+        el('div', { class: 'tile-sub truncate', text: [e.team, e.handle, e.role, e.tier].filter(Boolean).join(' / ') || '—' }),
+        el('span', { class: 'tag', text: KIND_LABEL[e.kind] || e.kind }),
+      ));
+    });
+  }
+
+  function moveFocus(delta, ev) {
+    const list = filteredEntities();
+    if (!list.length) return;
+    ev.preventDefault();
+    S.focus = Math.min(list.length - 1, Math.max(0, S.focus < 0 ? 0 : S.focus + delta));
+    renderEntGrid();
+    const t = entGrid.children[S.focus];
+    if (t) t.scrollIntoView({ block: 'nearest' });
+  }
+
+  /**
+   * A-REQ-502：实体一键填充。
+   *
+   * 双人模板：只填**当前游标那一侧**，成功后游标切到另一侧。
+   * 所以「点第一个人 → A 位」「点第二个人 → B 位」，两个槽位是两个人。
+   * 单人模板：忽略游标，照常整体填充。
+   */
+  async function fillEntity(e) {
+    if (!S.selectedId) { warn('请先在左侧选择一个模板，再点实体填充'); return; }
+    const dual = isDualTpl(S.selectedDef);
+    const side = dual ? S.fillSide : undefined;
+    try {
+      const r = await ws.cmd('overlay.fill', { entityId: e.id, template: S.selectedId, side, target: S.editTarget });
+      if (dual) {
+        S.fillSide = r?.nextSide || (side === 'A' ? 'B' : 'A');
+        renderFillTargetHint();
+        ok(`已填入 ${side} 位：「${e.name}」→ 下一次点击填 ${S.fillSide} 位`);
+      } else {
+        ok(`已填充「${e.name}」→ ${S.selectedDef?.name || S.selectedId}${e.kind === 'player' ? '（并设为当前选手）' : ''}`);
+      }
+    } catch (ex) { cmdError(ex, '实体填充'); }
+  }
+
+  // ═══════════════════ 预览区 ═══════════════════
+  const pvFrame = el('iframe', {
+    src: '/render/main?target=preview&preview=1&guides=1&fit=1',
+    title: '渲染端实时预览',
+    style: { width: '100%', height: '100%', border: '0', display: 'block', background: '#05070d' },
+  });
+  const pvCard = el('div', { class: 'card' },
+    el('header', null,
+      el('span', { text: '预览' }),
+      el('span', { class: 'sub', text: '实时 · 安全区参考线仅预览可见（A-REQ-701 / A-REQ-533）' }),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'btn ghost sm', text: '新窗口打开', onclick: () => window.open(isPreviewMode() ? '/render/main?target=preview&preview=1&guides=1' : '/render/main?preview=1&guides=1', 'arcade-preview') }),
+    ),
+    el('div', { class: 'body tight' },
+      el('div', { style: { aspectRatio: '16/9', background: '#05070d', borderRadius: '8px', overflow: 'hidden' } }, pvFrame),
+    ),
+  );
+
+  // ═══════════════════ 槽位编辑区（A-REQ-703） ═══════════════════
+  const slotsBox = el('div');
+  const slotSub = el('span', { class: 'sub' });
+  const showBtn = el('button', { class: 'btn primary to-output', text: '▶ 显示' });
+  const hideBtn = el('button', { class: 'btn', text: '⏹ 隐藏' });
+  const clearBtn = el('button', { class: 'btn', text: '清空' });
+  const undoBtn = el('button', { class: 'btn', text: '撤销' });
+  const pinBtn = el('button', { class: 'btn', text: '常驻' });
+  const offlineNote = el('div', { class: 'note warn mt8', text: '渲染端离线 —— 请确认 OBS 浏览器源 /render/main 已加载（AC-A16），显示类按钮已禁用。' });
+  const slotsCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '槽位编辑' }), slotSub),
+    el('div', { class: 'body tight' },
+      slotsBox,
+      el('div', { class: 'btn-row mt12' }, showBtn, hideBtn, clearBtn, undoBtn, pinBtn),
+      offlineNote,
+    ),
+  );
+
+  /** A-REQ-505：就地热改 —— 改草稿 → 200ms 防抖 → overlay.update（不重播动画） */
+  function setDraft(key, value) {
+    S.draft[key] = value;
+    const m = M();
+    if (m.activeTemplate === S.selectedId) {
+      clearTimeout(sendTimers[key]);
+      sendTimers[key] = setTimeout(() => {
+        ws.cmd('overlay.update', { slot: key, value: S.draft[key], target: S.editTarget })
+          .catch((e) => { if (e?.code !== 'nothing_active') console.warn('[overlay] 热改失败', key, e.message); });
+      }, 200);
+    }
+  }
+
+  function renderSlots() {
+    clear(slotsBox);
+    const tpl = S.selectedDef;
+    if (!tpl) {
+      slotsBox.append(el('div', { class: 'muted small', text: '先在左侧选择模板，然后在这里填槽位。' }));
+      return;
+    }
+    if (!tpl.slots || !tpl.slots.length) {
+      slotsBox.append(el('div', { class: 'muted small', text: '该模板没有可编辑槽位。' }));
+      return;
+    }
+    for (const def of tpl.slots) slotsBox.append(slotField(def));
+    slotsBox.append(el('div', { class: 'help', text: '显示中修改槽位会原地更新上屏内容，不重播入场动画（A-REQ-505）' }));
+  }
+
+  function renderSlot(key) {
+    const def = S.selectedDef?.slots?.find((s) => s.key === key);
+    if (!def) return;
+    const old = slotsBox.querySelector(`[data-slot-key="${key}"]`);
+    if (old) old.replaceWith(slotField(def));
+  }
+
+  function slotField(def) {
+    const key = def.key;
+    const v = S.draft[key];
+    const f = el('div', { class: 'field', dataset: { slotKey: key } },
+      el('label', null,
+        el('span', { text: def.label + (def.required ? ' *' : '') }),
+        el('span', { class: 'tiny muted mono', text: key }),
+      ),
+    );
+    if (def.type === 'text') {
+      if (def.multi) f.append(multiTextEditor(def));
+      else f.append(el('input', {
+        type: 'text',
+        maxlength: def.maxLength || null,
+        placeholder: def.placeholder || '',
+        value: typeof v === 'string' ? v : '',
+        oninput: (e) => setDraft(key, e.target.value),
+      }));
+    } else if (def.type === 'number') {
+      f.append(el('input', {
+        type: 'number', step: 'any',
+        value: v === null || v === undefined ? '' : v,
+        oninput: (e) => setDraft(key, e.target.value === '' ? '' : Number(e.target.value)),
+      }));
+    } else if (def.type === 'color') {
+      f.append(colorEditor(def));
+    } else if (def.type === 'select') {
+      const opts = [...(def.options || [])];
+      const cur = String(v ?? def.default ?? '');
+      if (cur && !opts.includes(cur)) opts.unshift(cur);
+      f.append(el('select', { onchange: (e) => setDraft(key, e.target.value) },
+        opts.map((o) => el('option', { value: o, text: o, selected: o === cur })),
+      ));
+    } else if (def.type === 'image') {
+      if (def.multi) f.append(multiImageEditor(def));
+      else f.append(singleImageEditor(def));
+    }
+    return f;
+  }
+
+  function normHex(h) {
+    if (/^#[0-9a-f]{3}$/i.test(h)) return '#' + h.slice(1).split('').map((c) => c + c).join('');
+    return h;
+  }
+
+  function colorEditor(def) {
+    const key = def.key;
+    const raw = String(S.draft[key] ?? def.default ?? '#d9d9d4');
+    const hexOk = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(raw);
+    const pick = el('input', { type: 'color', value: hexOk ? normHex(raw) : '#d9d9d4' });
+    const txt = el('input', { type: 'text', value: raw, style: { width: '116px', flex: '0 0 auto', fontFamily: 'var(--mono)' } });
+    pick.oninput = () => { txt.value = pick.value; setDraft(key, pick.value); };
+    txt.oninput = () => { setDraft(key, txt.value); if (/^#[0-9a-f]{6}$/i.test(txt.value)) pick.value = txt.value; };
+    return el('div', { class: 'inline' }, pick, txt, el('span', { class: 'small muted', text: '十六进制色值，如 #d9d9d9' }));
+  }
+
+  function singleImageEditor(def) {
+    const key = def.key;
+    const v = S.draft[key] || '';
+    const img = el('img', { src: v, alt: '', style: { maxWidth: '100%', maxHeight: '64px', objectFit: 'contain' } });
+    const box = el('div', null,
+      el('div', {
+        style: {
+          width: '120px', height: '68px', background: '#0d0d0d', border: '1px solid var(--border)',
+          borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          padding: '4px', marginBottom: '8px',
+        },
+      }, img),
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn sm', text: '从媒体库选', onclick: () => openMediaPicker({ onPick: (a) => { setDraft(key, a.url); img.src = a.url; } }) }),
+        el('button', { class: 'btn sm ghost', text: '用实体绑定图', onclick: () => pickEntityImage(def) }),
+        v ? el('button', { class: 'btn sm ghost', text: '✕ 清除', onclick: () => { setDraft(key, ''); img.src = ''; } }) : null,
+      ),
+      el('div', { class: 'help', text: `${def.entitySource ? '可绑定' + (KIND_LABEL[def.entitySource] || def.entitySource) + '图片' : '图片槽位'}${def.aspectRatio ? ' · 建议比例 ' + def.aspectRatio : ''} · 透明 PNG 效果最佳（A-REQ-704）` }),
+    );
+    return box;
+  }
+
+  function pickEntityImage(def) {
+    const srcKind = def.entitySource || 'player';
+    const list = S.entities.filter((e) => e.kind === srcKind);
+    const grid = el('div', { class: 'grid-cards scroll yl' });
+    const m = modal({
+      title: `用实体绑定图（${KIND_LABEL[srcKind] || srcKind}）`,
+      body: el('div', null,
+        el('p', { class: 'muted small', text: '选择实体后，该槽位填入实体的头像图片。' }),
+        grid,
+      ),
+      footer: [el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() })],
+    });
+    if (!list.length) {
+      grid.append(el('div', { class: 'muted small', text: `实体库里还没有 ${KIND_LABEL[srcKind]} 类实体` }));
+      return;
+    }
+    for (const e of list) {
+      grid.append(el('div', { class: `tile${e.image ? '' : ' opacity-50'}`, onclick: () => {
+        if (!e.image) { warn(`「${e.name}」没有绑定图片`); return; }
+        setDraft(def.key, e.image);
+        m.close();
+        renderSlot(def.key);
+      } },
+        el('div', { class: 'tile-thumb' }, e.image ? el('img', { src: e.image, alt: '' }) : el('span', { class: 'muted', text: '无图' })),
+        el('div', { class: 'tile-title truncate', text: e.name }),
+        el('div', { class: 'tile-sub truncate', text: e.team || e.handle || e.role || '' }),
+      ));
+    }
+  }
+
+  function multiTextEditor(def) {
+    const key = def.key;
+    const raw = Array.isArray(S.draft[key]) ? S.draft[key] : [];
+    const items = raw.map((it) => typeof it === 'string' ? { group: '', text: it } : { group: it.group ?? '', text: it.text ?? '' });
+    const list = el('div', { class: 'list mb8' });
+    const save = () => setDraft(key, items.map((it) => ({ group: it.group || '', text: it.text || '' })));
+    const render = () => {
+      clear(list);
+      items.forEach((it, i) => {
+        list.append(el('div', { class: 'list-row', draggable: 'true', dataset: { id: String(i) }, style: { cursor: 'grab' } },
+          el('input', {
+            type: 'text', placeholder: '分组标题（留空不显示）', value: it.group,
+            style: { width: '150px', flex: '0 0 auto' },
+            oninput: (e) => { it.group = e.target.value; save(); },
+          }),
+          el('input', {
+            type: 'text', placeholder: def.placeholder || '条目文本', value: it.text, class: 'grow',
+            oninput: (e) => { it.text = e.target.value; save(); },
+          }),
+          el('button', { class: 'btn ghost sm', text: '✕', onclick: () => { items.splice(i, 1); render(); save(); } }),
+        ));
+      });
+    };
+    sortable(list, {
+      selector: '[data-id]',
+      onEnd: (ids) => { const next = ids.map((id) => items[Number(id)]); items.splice(0, items.length, ...next); save(); },
+    });
+    render();
+    return el('div', null,
+      list,
+      el('button', { class: 'btn sm ghost', text: '＋ 添加一行', onclick: () => { items.push({ group: '', text: '' }); render(); save(); } }),
+    );
+  }
+
+  function multiImageEditor(def) {
+    const key = def.key;
+    const rks = (def.rowKeys || []).filter((k) => !['src', 'image', 'url'].includes(k));
+    const raw = Array.isArray(S.draft[key]) ? S.draft[key] : [];
+    const items = raw.map((it) => typeof it === 'string' ? { src: it } : { ...it });
+    const list = el('div', { class: 'list mb8' });
+    const save = () => setDraft(key, items);
+    const render = () => {
+      clear(list);
+      items.forEach((it, i) => {
+        list.append(el('div', { class: 'list-row', draggable: 'true', dataset: { id: String(i) }, style: { cursor: 'grab' } },
+          el('img', {
+            src: it.src || '', alt: '',
+            style: { width: '36px', height: '36px', objectFit: 'contain', background: '#0d0d0d', borderRadius: '6px', flex: '0 0 auto' },
+          }),
+          el('div', { class: 'grow', style: { minWidth: '90px' } },
+            el('div', { class: 'sub truncate mono', text: it.src || '（未选图）' })),
+          rks.map((rk) => el('input', {
+            type: 'text', placeholder: rk, value: it[rk] ?? '',
+            style: { width: '90px', flex: '0 0 auto' },
+            oninput: (e) => { it[rk] = e.target.value; save(); },
+          })),
+          el('button', { class: 'btn ghost sm', text: '✕', onclick: () => { items.splice(i, 1); render(); save(); } }),
+        ));
+      });
+    };
+    sortable(list, {
+      selector: '[data-id]',
+      onEnd: (ids) => { const next = ids.map((id) => items[Number(id)]); items.splice(0, items.length, ...next); save(); },
+    });
+    render();
+    return el('div', null,
+      list,
+      el('div', { class: 'btn-row' },
+        el('button', {
+          class: 'btn sm', text: '＋ 从媒体库添加',
+          onclick: () => openMediaPicker({
+            multi: true,
+            onPick: (assets) => {
+              for (const a of assets) items.push({ src: a.url, name: a.originalName || a.filename });
+              render(); save();
+            },
+          }),
+        }),
+      ),
+      el('div', { class: 'help', text: def.help || '多值图片槽位：可拖拽排序' }),
+    );
+  }
+
+  // ── 服务器值回写（不打断正在输入的控件） ──
+  function applyServerValues(values) {
+    const defs = S.selectedDef?.slots || [];
+    for (const def of defs) {
+      const key = def.key;
+      if (JSON.stringify(S.draft[key]) !== JSON.stringify(values[key])) {
+        const box = slotsBox.querySelector(`[data-slot-key="${key}"]`);
+        if (box && box.contains(document.activeElement)) continue;
+        S.draft[key] = values[key];
+        if (box) box.replaceWith(slotField(def));
+      }
+    }
+  }
+
+  // ── 媒体选择器（A-REQ-704「从媒体库选」共用） ──
+  function openMediaPicker(opts) {
+    const { multi = false, onPick, title = '从媒体库选择' } = opts;
+    let assets = [];
+    const picked = [];
+    const grid = el('div', { class: 'grid-cards media scroll yl' });
+    const search = el('input', { type: 'search', placeholder: '搜索文件名 / 标签…', class: 'grow' });
+    const count = el('span', { class: 'muted small nowrap' });
+    const okBtn = multi
+      ? el('button', { class: 'btn primary', text: '确认加入', disabled: true, onclick: () => { onPick(picked.map((p) => p.asset)); m.close(); } })
+      : null;
+    const m = modal({
+      title, wide: true,
+      body: el('div', null,
+        el('div', { class: 'inline mb12' }, search, count),
+        grid,
+      ),
+      footer: [el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }), okBtn],
+    });
+    const render = () => {
+      const q = search.value.trim().toLowerCase();
+      const list = assets.filter((a) => !q || `${a.originalName || ''} ${a.filename} ${(a.tags || []).join(' ')}`.toLowerCase().includes(q));
+      count.textContent = `共 ${assets.length} 项${q ? ' · 命中 ' + list.length : ''}`;
+      clear(grid);
+      if (!list.length) {
+        grid.append(el('div', { class: 'muted small', text: '没有匹配的资源（可把图片直接拷进 media/ 目录，服务端会自动索引）' }));
+        return;
+      }
+      for (const a of list) {
+        const isSel = multi && picked.some((p) => p.hash === a.hash);
+        grid.append(el('div', { class: `tile${isSel ? ' selected' : ''}`, onclick: () => {
+          if (!multi) { onPick(a); m.close(); return; }
+          const i = picked.findIndex((p) => p.hash === a.hash);
+          if (i >= 0) picked.splice(i, 1); else picked.push({ hash: a.hash, asset: a });
+          render();
+          okBtn.disabled = !picked.length;
+          okBtn.textContent = `确认加入 ${picked.length} 张`;
+        } },
+          el('div', { class: 'tile-thumb' }, el('img', { src: a.thumbnail, alt: '', loading: 'lazy' })),
+          el('div', { class: 'tile-title truncate', text: a.originalName || a.filename }),
+          el('div', { class: 'tile-sub truncate', text: `${a.width && a.height ? a.width + '×' + a.height + ' · ' : ''}${a.ext} · ${fmt.bytes(a.size)}` }),
+        ));
+      }
+    };
+    search.oninput = render;
+    api('/api/media?limit=500').then((r) => { assets = r.items || []; render(); }).catch(() => render());
+    return m;
+  }
+
+  // ── 按钮动作 ──
+  async function doShow() {
+    const tpl = S.selectedDef;
+    if (!tpl) { warn('请先选择模板'); return; }
+    if (isOffline()) { warn('渲染端离线，无法显示（AC-A16）'); return; }
+    const missing = (tpl.slots || []).filter((s) => s.required && (S.draft[s.key] === undefined || S.draft[s.key] === null || (typeof S.draft[s.key] === 'string' && !S.draft[s.key].trim())));
+    if (missing.length) { warn(`必填槽位未填：${missing.map((s) => s.label).join('、')}`); return; }
+    try {
+      const r = await ws.cmd('overlay.show', { template: tpl.id, values: S.draft, target: S.editTarget });
+      // 服务端可能从 lineup 补了双人槽位，把实际生效的值回填到槽位编辑器
+      if (r?.state?.slotValues) {
+        S.draft = { ...r.state.slotValues };
+        renderSlots();
+      }
+      ok(`已发送显示指令：${tpl.name}`);
+    } catch (e) { cmdError(e, '显示'); }
+  }
+
+  showBtn.onclick = () => withBusy(showBtn, doShow);
+  hideBtn.onclick = () => withBusy(hideBtn, async () => {
+    try { await ws.cmd('overlay.hide', { target: S.editTarget }); ok('已隐藏'); } catch (e) { cmdError(e, '隐藏'); }
+  });
+  clearBtn.onclick = () => withBusy(clearBtn, async () => {
+    try { await ws.cmd('overlay.clear', { target: S.editTarget }); ok('已清空（可撤销）'); } catch (e) { cmdError(e, '清空'); }
+  });
+  undoBtn.onclick = () => withBusy(undoBtn, async () => {
+    try { const r = await ws.cmd('overlay.undo', { target: S.editTarget }); ok(`已撤销：${r.undone || ''}`); } catch (e) { cmdError(e, '撤销'); }
+  });
+  pinBtn.onclick = () => withBusy(pinBtn, async () => {
+    const m = M();
+    try {
+      await ws.cmd('overlay.pin', { pinned: !m.pinned, target: S.editTarget });
+      ok(m.pinned ? '已取消常驻' : '已设为常驻（A-REQ-507）');
+    } catch (e) { cmdError(e, '常驻'); }
+  });
+
+  async function toggleVisibility() {
+    const m = M();
+    if (m.visible && m.activeTemplate) {
+      try { await ws.cmd('overlay.hide', { target: S.editTarget }); ok('已隐藏'); } catch (e) { cmdError(e, '隐藏'); }
+      return;
+    }
+    await doShow();
+  }
+
+  // ═══════════════════ 队列区（A-REQ-508） ═══════════════════
+  const durInput = el('input', { type: 'number', value: '6000', min: '500', step: '500', style: { width: '110px', flex: '0 0 auto' } });
+  const qPlayPill = el('span', { class: 'pill mute', text: '未播放' });
+  const queueList = el('div', { class: 'list' });
+  const qStartBtn = el('button', { class: 'btn ok sm', text: '▶ 开始' });
+  const qPauseBtn = el('button', { class: 'btn sm', text: '⏸ 暂停' });
+  const qClearBtn = el('button', { class: 'btn sm', text: '清空' });
+  const qAddBtn = el('button', { class: 'btn sm', text: '＋ 当前模板入队' });
+  const queueCard = el('div', { class: 'card' },
+    el('header', null,
+      el('span', { text: '队列' }), qPlayPill,
+      el('span', { class: 'spacer' }),
+      el('label', { class: 'small muted', text: '每条时长 ms' }), durInput, qAddBtn,
+    ),
+    el('div', { class: 'body tight' },
+      queueList,
+      el('div', { class: 'btn-row mt8' }, qStartBtn, qPauseBtn, qClearBtn),
+    ),
+  );
+
+  function renderQueue() {
+    const q = ws.state.overlay?.queue || [];
+    const playing = !!ws.state.overlay?.queuePlaying;
+    clear(queueList);
+    qPlayPill.className = `pill ${playing ? 'ok' : 'mute'}`;
+    qPlayPill.textContent = playing ? '播放中' : '未播放';
+    if (!q.length) {
+      queueList.append(el('div', { class: 'muted small', text: '队列为空 —— 用「当前模板入队」把多张卡排成播出序列，拖拽可排序' }));
+      return;
+    }
+    q.forEach((item, i) => {
+      const tpl = S.templates.find((t) => t.id === item.template);
+      queueList.append(el('div', { class: 'list-row', draggable: 'true', dataset: { id: item.id }, style: { cursor: 'grab' } },
+        el('span', { class: 'mono-num muted', text: `${i + 1}.` }),
+        el('div', { class: 'grow' },
+          el('div', { class: 'name', text: item.label || tpl?.name || item.template }),
+          el('div', { class: 'sub', text: `${tpl?.name || item.template} · 停留 ${fmt.secs(item.durationMs || 6000)}` })),
+        el('button', {
+          class: 'btn ghost sm', text: '✕',
+          onclick: (ev) => {
+            ev.stopPropagation();
+            withBusy(ev.target, async () => {
+              try { await api('/api/overlay/queue/remove', { method: 'POST', body: { id: item.id } }); ok('已移出队列'); } catch (e) { err(e.message); }
+            });
+          },
+        }),
+      ));
+    });
+  }
+
+  sortable(queueList, {
+    selector: '[data-id]',
+    onEnd: (ids) => {
+      const cur = (ws.state.overlay?.queue || []).map((x) => x.id);
+      if (ids.join() !== cur.join()) {
+        api('/api/overlay/queue/reorder', { method: 'POST', body: { ids } }).catch(() => {});
+      }
+    },
+  });
+
+  qAddBtn.onclick = () => withBusy(qAddBtn, async () => {
+    if (!S.selectedId) { warn('请先选择模板'); return; }
+    try {
+      await ws.cmd('overlay.queue.add', {
+        template: S.selectedId,
+        values: S.draft,
+        durationMs: Number(durInput.value) || 6000,
+        label: S.selectedDef?.name || S.selectedId,
+      });
+      ok('已加入队列末尾');
+    } catch (e) { cmdError(e, '加入队列'); }
+  });
+  qStartBtn.onclick = () => withBusy(qStartBtn, async () => {
+    try { await ws.cmd('overlay.queue.start', { target: S.editTarget }); ok('队列开始播放'); } catch (e) { cmdError(e, '队列开始'); }
+  });
+  qPauseBtn.onclick = () => withBusy(qPauseBtn, async () => {
+    try { await ws.cmd('overlay.queue.pause', { target: S.editTarget }); ok('队列已暂停'); } catch (e) { cmdError(e, '队列暂停'); }
+  });
+  qClearBtn.onclick = () => withBusy(qClearBtn, async () => {
+    const yes = await confirm({ title: '清空队列', message: '确认清空整个播出队列？' });
+    if (!yes) return;
+    try { await ws.cmd('overlay.queue.clear', { target: S.editTarget }); ok('队列已清空'); } catch (e) { cmdError(e, '清空队列'); }
+  });
+
+  // ═══════════════════ 快捷键（A-REQ-509） ═══════════════════
+  const scCard = el('div', { class: 'card' },
+    el('details', null,
+      el('summary', { style: { padding: '11px 16px', cursor: 'pointer', fontWeight: 700 } }, '⌨ 快捷键说明（点击展开）'),
+      el('div', { class: 'body tight' },
+        el('div', { class: 'kv' }, [
+          ['数字 1-9', '快速选择第 N 个实体并填充'],
+          ['方向键 + 回车', '在实体卡片间移动焦点并选中（A-REQ-702）'],
+          ['空格', '显示 / 隐藏'],
+          ['Esc', '清空'],
+          ['Ctrl+Z', '撤销（最近 10 步，A-REQ-510）'],
+        ].map(([k, v]) => [el('dt', null, el('kbd', { text: k })), el('dd', { text: v })])),
+      ),
+    ),
+  );
+
+  document.addEventListener('keydown', (e) => {
+    const t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
+    if (document.querySelector('.modal-back')) return;
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); undoBtn.click(); return; }
+    if (e.key >= '1' && e.key <= '9') {
+      const list = filteredEntities();
+      const i = Number(e.key) - 1;
+      if (list[i]) { e.preventDefault(); fillEntity(list[i]); }
+      return;
+    }
+    switch (e.key) {
+      case 'ArrowDown': case 'ArrowRight': moveFocus(1, e); break;
+      case 'ArrowUp': case 'ArrowLeft': moveFocus(-1, e); break;
+      case 'Enter': {
+        const list = filteredEntities();
+        if (S.focus >= 0 && list[S.focus]) { e.preventDefault(); fillEntity(list[S.focus]); }
+        break;
+      }
+      case ' ': e.preventDefault(); toggleVisibility(); break;
+      case 'Escape': e.preventDefault(); clearBtn.click(); break;
+      default: break;
+    }
+  });
+
+  // ═══════════════════ 同步 ═══════════════════
+  function sync() {
+    if (Array.isArray(ws.state.overlay?.templates)) S.templates = ws.state.overlay.templates;
+    if (Array.isArray(ws.state.overlay?.entities)) S.entities = ws.state.overlay.entities;
+    const m = M();
+    const sig = JSON.stringify([
+      rendererCount(), ws.state.overlay?.clients,
+      m.activeTemplate, m.visible, m.pinned, m.mode, m.modeLabel, m.sentAt, m.renderedAt, m.slotValues,
+      ws.state.overlay?.queue, ws.state.overlay?.queuePlaying, ws.state.overlay?.undoDepth,
+      S.templates.length, S.mediaCount, S.entities.length,
+    ]);
+    if (sig === lastSig) return;
+    lastSig = sig;
+
+    syncStatus();
+    renderSent();
+    renderTplGrid();
+    renderEntGrid();
+    renderQueue();
+    if (S.selectedId && m.activeTemplate === S.selectedId) applyServerValues(m.slotValues || {});
+    if (S.selectedId && !S.templates.some((t) => t.id === S.selectedId)) selectTemplate(null);
+
+    showBtn.disabled = isOffline() || !S.selectedId;
+    hideBtn.disabled = isOffline() || !m.activeTemplate;
+    clearBtn.disabled = isOffline();
+    pinBtn.disabled = isOffline() || !m.activeTemplate;
+    undoBtn.disabled = !(ws.state.overlay?.undoDepth > 0);
+    qStartBtn.disabled = isOffline();
+    pinBtn.className = `btn${m.pinned ? ' on' : ''}`;
+    pinBtn.textContent = m.pinned ? '常驻中' : '常驻';
+    const activeName = m.activeTemplate ? (S.templates.find((t) => t.id === m.activeTemplate)?.name || m.activeTemplate) : '';
+    slotSub.textContent = `${S.selectedDef?.name || '未选择'}${activeName ? ' · 上屏中：' + activeName : ''}${m.visible ? ' · 已显示' : ''}`;
+    undoBtn.textContent = `↩ 撤销${ws.state.overlay?.undoDepth > 0 ? ' (' + ws.state.overlay.undoDepth + ')' : ''}`;
+    offlineNote.classList.toggle('hidden', !isOffline());
+    bar.classList.toggle('bad', isOffline());
+  }
+
+  ws.on('hello', () => { sync(); syncCompMode(); });
+  ws.on('patch', (m) => { if (!m.path || m.path.startsWith('config.competition')) syncCompMode(); sync(); });
+  ws.on('overlay:assets', () => {
+    api('/api/media?limit=1').then((r) => { S.mediaCount = r.total ?? 0; sync(); }).catch(() => {});
+  });
+
+  // ═══════════════════ 预览 / 输出 分离 ═══════════════════
+  /**
+   * 默认编辑「预览」：所有显示/隐藏/改值/队列都只作用在预览渲染端
+   * （`/render/main?target=preview`），直播输出完全不受影响。
+   * 确认无误后按「⬆ 输出到直播」一次性推过去。
+   */
+  const outTargetSel = el('select', {
+    onchange: (e) => { S.editTarget = e.target.value; onTargetChanged(); },
+  },
+    el('option', { value: 'preview', text: '预览（不影响直播）', selected: S.editTarget === 'preview' }),
+    el('option', { value: 'main', text: '直播输出（立即上屏）', selected: S.editTarget === 'main' }),
+  );
+
+  const outSummary = el('span', { class: 'small muted' });
+  const commitBtn = el('button', {
+    class: 'btn ok', text: '输出到直播',
+    onclick: (e) => ui.withBusy(e.target, async () => {
+      try {
+        const r = await ws.cmd('overlay.commit', { target: 'main' });
+        ok(r.action === 'show' ? '已推送到直播输出' : '已清空直播输出');
+        sync();
+      } catch (ex) { cmdError(ex, '输出到直播'); }
+    }),
+  });
+  const revertBtn = el('button', {
+    class: 'btn ghost sm', text: '从直播同步',
+    title: '把直播输出当前的内容复制到预览，接着改',
+    onclick: (e) => ui.withBusy(e.target, async () => {
+      try { await ws.cmd('overlay.revert', { from: 'main' }); ok('已从直播输出同步到预览'); sync(); }
+      catch (ex) { cmdError(ex, '从直播同步'); }
+    }),
+  });
+
+  const liveBanner = el('div', { class: 'note warn', style: { display: 'none' } },
+    '当前编辑的是**直播输出** —— 所有操作会立即上屏。');
+
+  // ── 比赛模式切换（团队赛 / 单人赛）──
+  // 团队赛：叠加显示「队伍名 + 选手名」（含队伍 Logo）
+  // 单人赛：队伍槽位清空并被模板 CSS 隐藏，只显示选手名
+  const compModeSel = el('select', {
+    title: '比赛模式：团队赛显示队伍+选手名，单人赛只显示选手名',
+    onchange: (e) => ui.withBusy(e.target, async () => {
+      try {
+        const r = await ws.cmd('competition.setMode', { mode: e.target.value });
+        ok(r.mode === 'team' ? '已切到团队赛模式' : '已切到单人赛模式');
+      } catch (ex) { cmdError(ex, '切换比赛模式'); }
+    }),
+  },
+    el('option', { value: 'team', text: '团队赛' }),
+    el('option', { value: 'solo', text: '单人赛' }),
+  );
+
+  // ── 直播输出的常驻控制 ──
+  // 这几个按钮**始终作用于 main**，与「编辑目标」无关。
+  // 场景：从预览推到直播后，解说还在念上一段的队伍名，需要立刻把输出藏掉 ——
+  // 这时不该逼操作员先切到「直播输出」再点隐藏，那一下耽误的是直播画面。
+  const livePill = el('span', { class: 'pill mute', text: '输出：—' });
+
+  const hideOutBtn = el('button', {
+    class: 'btn warn sm', text: '隐藏输出',
+    title: '立即隐藏直播输出（保留内容，可再点「输出到直播」恢复）',
+    onclick: (e) => ui.withBusy(e.target, async () => {
+      try { await ws.cmd('overlay.hide', { target: 'main' }); ok('直播输出已隐藏'); sync(); }
+      catch (ex) { cmdError(ex, '隐藏输出'); }
+    }),
+  });
+
+  const clearOutBtn = el('button', {
+    class: 'btn ghost sm', text: '清空输出',
+    title: '清空直播输出（模板与槽位值一并清掉）',
+    onclick: (e) => ui.withBusy(e.target, async () => {
+      try { await ws.cmd('overlay.clear', { target: 'main' }); ok('直播输出已清空'); sync(); }
+      catch (ex) { cmdError(ex, '清空输出'); }
+    }),
+  });
+
+  const outputBar = el('div', { class: 'statusbar mt16', style: { gap: '10px' } },
+    el('span', { class: 'small bold', text: '编辑目标' }),
+    outTargetSel,
+    outSummary,
+    el('span', { class: 'spacer' }),
+
+    // 直播输出区：常驻、与编辑目标无关
+    el('span', { class: 'small bold', text: '直播输出' }),
+    livePill,
+    hideOutBtn,
+    clearOutBtn,
+    revertBtn,
+    commitBtn,
+
+    el('span', { class: 'divider', style: { width: '1px', height: '22px', margin: '0 4px' } }),
+    el('span', { class: 'small bold', text: '比赛模式' }),
+    compModeSel,
+  );
+
+  function syncCompMode() {
+    const m = ws.state.config?.competition?.mode || 'team';
+    if (compModeSel.value !== m) compModeSel.value = m;
+  }
+
+  function onTargetChanged() {
+    // 切到「直播输出」时给一条醒目的警示，避免误操作
+    liveBanner.style.display = isPreviewMode() ? 'none' : '';
+    // 预览窗跟着切换：编辑预览时显示预览目标；编辑输出时直接显示真实输出
+    pvFrame.src = isPreviewMode()
+      ? '/render/main?target=preview&preview=1&guides=1&fit=1&_t=' + Date.now()
+      : '/render/main?preview=1&guides=1&fit=1&_t=' + Date.now();
+    renderSent();
+    sync();
+  }
+
+  /**
+   * 直播输出的状态徽标。
+   * 「常驻控件」的意义就在这里：不管当前在编辑预览还是输出，
+   * 一眼能看到直播上正在播什么、能不能一键藏掉。
+   */
+  function syncLivePill() {
+    const o = OUT();
+    if (!o.activeTemplate) {
+      livePill.className = 'pill mute';
+      livePill.textContent = '输出：无内容';
+      hideOutBtn.disabled = true;
+      clearOutBtn.disabled = true;
+      return;
+    }
+    const name = (S.templates.find((t) => t.id === o.activeTemplate) || {}).name || o.activeTemplate;
+    if (o.visible) {
+      livePill.className = 'pill err';
+      livePill.textContent = `输出中：${name}`;
+    } else {
+      livePill.className = 'pill mute';
+      livePill.textContent = `已隐藏：${name}`;
+    }
+    hideOutBtn.disabled = !o.visible;
+    clearOutBtn.disabled = false;
+  }
+
+  // ═══════════════════ 组装 ═══════════════════
+  page.append(
+    bar,
+    liveBanner,
+    outputBar,
+    el('div', { class: 'cols two mt16' },
+      el('div', { class: 'cols' }, tplCard, entCard),
+      el('div', { class: 'cols' },
+        el('div', { class: 'cols side-r' }, pvCard, slotsCard),
+      ),
+    ),
+    el('div', { class: 'mt16' }, queueCard),
+    el('div', { class: 'mt16' }, scCard),
+  );
+
+  // ═══════════════════ 初始化 ═══════════════════
+  (async function init() {
+    try {
+      const st = await api('/api/overlay/state');
+      if (Array.isArray(st.templates)) S.templates = st.templates;
+      if (Array.isArray(st.entities)) S.entities = st.entities;
+      S.mediaCount = st.media?.length ?? 0;
+    } catch (e) { console.warn('[overlay] 初始状态拉取失败', e.message); }
+    api('/api/media?limit=1').then((r) => { S.mediaCount = r.total ?? S.mediaCount; sync(); }).catch(() => {});
+    uiPollFallback();
+    renderTplGrid();
+    renderEntGrid();
+    renderQueue();
+    onTargetChanged();      // 设定初始的编辑目标与按钮状态
+    syncCompMode();
+    sync();
+    setInterval(renderSent, 1000);
+  })();
+
+  /** WS 断线兜底：慢速轮询 HTTP（A-REQ-537 的失败静默原则在控制端不适用） */
+  function uiPollFallback() {
+    window.ui.poll(async () => {
+      if (!ws.connected) {
+        try {
+          const [st, media] = await Promise.all([
+            api('/api/overlay/state', { quiet: true }),
+            api('/api/media?limit=1', { quiet: true }),
+          ]);
+          S.templates = st.templates || S.templates;
+          S.entities = st.entities || S.entities;
+          S.mediaCount = media.total ?? S.mediaCount;
+          sync();
+        } catch { /* 静默 */ }
+      }
+    }, 10000);
+  }
+})();
+</script>
+</body>
+</html>

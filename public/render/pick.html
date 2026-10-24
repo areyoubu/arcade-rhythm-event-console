@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>扫码选曲大屏 · 街机音游赛事控制软件</title>
+<!--
+  选曲二维码大屏（OBS 浏览器源）。
+  · 背景透明；1920×1080
+  · 手机扫码进入 /pick，选择 P1/P2 与曲目难度后提交
+  · 提交只排队，由导播在比赛页确认后才写入曲目表
+-->
+<style>
+  :root {
+    --gold: #d9a441;
+    --left: #d0344e;
+    --right: #3d78c9;
+    --panel: rgba(11, 11, 14, .95);
+    --panel-2: rgba(18, 18, 22, .96);
+    --line: #32343a;
+    --line-soft: #26282d;
+    --ink: #ffffff;
+    --ink-dim: #b7bac1;
+    --ink-mute: #7b7f88;
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: transparent !important; overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body.preview { background: repeating-conic-gradient(#191a1d 0% 25%, #121316 0% 50%) 50% / 32px 32px !important; }
+  body.windowed { background: #0b0b0b !important; }
+  #stage { position: fixed; left: 0; top: 0; width: 1920px; height: 1080px; transform-origin: top left; }
+
+  .board {
+    position: absolute; left: 50%; top: 150px; transform: translateX(-50%);
+    width: 1200px; background: var(--panel); border: 1px solid var(--line);
+    filter: drop-shadow(0 18px 48px rgba(0, 0, 0, .55));
+  }
+  .board::before {
+    content: ''; position: absolute; left: 0; right: 0; top: 0; height: 3px;
+    background: linear-gradient(90deg, var(--left), var(--gold) 50%, var(--right));
+  }
+  .head {
+    display: flex; align-items: center; gap: 14px;
+    padding: 20px 30px 16px; border-bottom: 1px solid var(--line-soft);
+  }
+  .mark { width: 4px; height: 30px; background: var(--gold); }
+  .title { font-size: 34px; font-weight: 800; letter-spacing: 1px; }
+  .name { font-size: 22px; font-weight: 600; color: var(--ink-dim); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .spacer { flex: 1; }
+  .status {
+    font-family: var(--mono); font-size: 12px; font-weight: 700; letter-spacing: 2px;
+    padding: 4px 10px; border: 1px solid var(--line); color: var(--ink-mute);
+  }
+  .status.live { color: #8fc7a2; border-color: #345641; }
+  .status.finished { color: var(--gold); border-color: #5a4a22; }
+
+  .main { display: grid; grid-template-columns: 460px minmax(0, 1fr); gap: 28px; padding: 26px 30px 24px; }
+  .qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .qr-frame { background: #fff; padding: 14px; border: 1px solid #3a3c43; }
+  .qr-frame img { display: block; width: 400px; height: 400px; }
+  .qr-url {
+    width: 100%; word-break: break-all; text-align: center;
+    font-family: var(--mono); font-size: 11px; color: var(--ink-mute);
+    background: var(--panel-2); border: 1px solid var(--line-soft); padding: 6px 8px;
+  }
+
+  .steps { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+  .step { display: flex; gap: 14px; align-items: flex-start; }
+  .step .no {
+    width: 34px; height: 34px; flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: center;
+    font-family: var(--mono); font-size: 15px; font-weight: 800;
+    color: var(--gold); border: 1px solid #5a4a22;
+  }
+  .step .txt { font-size: 17px; color: var(--ink-dim); line-height: 1.45; }
+  .step .txt b { color: var(--ink); }
+  .side-note { display: flex; gap: 8px; margin-top: 6px; }
+  .side-note span {
+    font-family: var(--mono); font-size: 12px; font-weight: 800; letter-spacing: 1px;
+    padding: 4px 9px; color: #fff;
+  }
+  .side-note .l { background: var(--left); }
+  .side-note .r { background: var(--right); }
+
+  .picks {
+    margin-top: 4px; border-top: 1px solid var(--line-soft); padding-top: 12px;
+  }
+  .picks-head {
+    display: flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: 2px; color: var(--ink-mute);
+    margin-bottom: 7px;
+  }
+  .pick-list { display: flex; flex-direction: column; gap: 5px; min-height: 42px; }
+  .pick {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 10px; background: var(--panel-2); border: 1px solid var(--line-soft);
+  }
+  .pick .cover {
+    width: 28px; height: 28px; flex: 0 0 auto; object-fit: cover;
+    border-radius: 2px; border: 1px solid var(--line-soft); background: #111;
+  }
+  .pick .side {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 800; letter-spacing: 1px;
+    padding: 2px 6px; color: #fff; flex: 0 0 auto;
+  }
+  .pick .side.left { background: var(--left); }
+  .pick .side.right { background: var(--right); }
+  .pick .t { font-size: 14px; font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick .d { font-family: var(--mono); font-size: 10.5px; color: var(--ink-mute); flex: 0 0 auto; }
+  .pick-empty { font-size: 13px; color: var(--ink-mute); padding: 10px 0; }
+
+  .foot {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 30px; border-top: 1px solid var(--line-soft);
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 1.5px; color: var(--ink-mute);
+  }
+  .foot .gold { color: var(--gold); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="board">
+    <div class="head">
+      <span class="mark"></span>
+      <span class="title">扫码选曲</span>
+      <span class="name" id="matchName"></span>
+      <span class="spacer"></span>
+      <span class="status" id="status">进行中</span>
+    </div>
+
+    <div class="main">
+      <div class="qr-wrap">
+        <div class="qr-frame"><img id="qr" alt="选曲二维码" /></div>
+        <div class="qr-url" id="qrUrl">正在解析选曲地址…</div>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <span class="no">01</span>
+          <span class="txt">手机连上现场 Wi-Fi，<b>扫码打开选曲页</b></span>
+        </div>
+        <div class="step">
+          <span class="no">02</span>
+          <span class="txt">先选择自己是 <b>P1</b> 还是 <b>P2</b></span>
+        </div>
+        <div class="step">
+          <span class="no">03</span>
+          <span class="txt">搜索曲名 / 曲师，点一个<b>难度</b>，再按「提交选曲」</span>
+        </div>
+        <div class="step">
+          <span class="no">04</span>
+          <span class="txt">导播确认后，曲目会进入<b>总比分画面</b></span>
+        </div>
+
+        <div class="side-note">
+          <span class="l">P1 · 左侧</span>
+          <span class="r">P2 · 右侧</span>
+        </div>
+
+        <div class="picks">
+          <div class="picks-head">刚提交的选曲 <span id="pickCount"></span></div>
+          <div class="pick-list" id="pickList"><div class="pick-empty">等待选手扫码提交…</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span>提交后由导播确认 · 重复提交不会重复排队</span>
+      <span class="gold" id="footMode">选曲中</span>
+    </div>
+  </div>
+</div>
+<script src="/shared/ws.js"></script>
+<script src="/render/pick.js"></script>
+</body>
+</html>

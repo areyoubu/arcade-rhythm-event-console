@@ -1,0 +1,20 @@
+{
+  "host": "0.0.0.0",
+  "port": 8790,
+  "tlsCert": "",
+  "tlsKey": "",
+  "agentToken": "CHANGE-ME-TO-A-LONG-RANDOM-STRING",
+  "trustProxy": false,
+  "rateGeneral": 240,
+  "rateJoin": 10,
+  "ratePick": 30,
+  "rateWindowMs": 60000,
+  "maxBodyBytes": 32768,
+  "maxResponseBytes": 2097152,
+  "timeoutMs": 15000,
+  "maxInflight": 64,
+  "maxConnections": 512,
+  "blockIps": [],
+  "heartbeatMs": 20000,
+  "quiet": false
+}

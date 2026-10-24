@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>后台密码设置 · 街机音游赛事控制软件</title>
+<style>
+  :root {
+    --bg: #17181b;
+    --panel: #202226;
+    --panel2: #1b1d21;
+    --line: #34373d;
+    --text: #e3e5e9;
+    --muted: #9aa0a8;
+    --dim: #6f757d;
+    --accent: #4a9eff;
+    --ok: #3ecf8e;
+    --warn: #e6b450;
+    --danger: #e15b5b;
+    --mono: "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+    font: 14px/1.6 "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+    display: flex; align-items: center; justify-content: center; padding: 28px;
+  }
+  .box {
+    width: 100%; max-width: 560px; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 8px; overflow: hidden;
+  }
+  header {
+    padding: 16px 20px; background: var(--panel2); border-bottom: 1px solid var(--line);
+  }
+  header h1 { margin: 0; font-size: 17px; }
+  header p { margin: 4px 0 0; color: var(--muted); font-size: 12.5px; }
+  .body { padding: 20px; }
+  .pill-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .pill {
+    font-family: var(--mono); font-size: 11.5px; padding: 2px 9px;
+    border-radius: 999px; border: 1px solid var(--line); color: var(--muted);
+  }
+  .pill.on { color: #a8e6c8; border-color: #245240; background: #182a22; }
+  .pill.off { color: #f0d49a; border-color: #5c4a22; background: #2e2818; }
+  .field { margin-bottom: 14px; }
+  label { display: block; font-size: 12.5px; color: #cfd3d9; margin-bottom: 5px; }
+  input {
+    width: 100%; font: inherit; color: var(--text); background: #151619;
+    border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  .hint { margin-top: 5px; font-size: 11.5px; color: var(--dim); line-height: 1.6; }
+  .msg { margin: 14px 0 0; padding: 10px 12px; border-radius: 4px; font-size: 12.5px; display: none; white-space: pre-wrap; }
+  .msg.show { display: block; }
+  .msg.err { background: #2e1c1c; border: 1px solid #5c2b2b; color: #ffb3b3; }
+  .msg.ok { background: #182a22; border: 1px solid #245240; color: #a8e6c8; }
+  .msg.warn { background: #2e2818; border: 1px solid #5c4a22; color: #f0d49a; }
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 18px; }
+  button {
+    font: inherit; cursor: pointer; padding: 8px 16px; border-radius: 4px;
+    border: 1px solid var(--line); background: #2a2d33; color: var(--text);
+  }
+  button.primary { background: #2f7fd8; border-color: #2f7fd8; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  .spacer { flex: 1; }
+  .note {
+    margin-top: 18px; padding: 12px 14px; background: #1b1d21;
+    border: 1px dashed var(--line); border-radius: 5px; color: var(--muted);
+    font-size: 12px; line-height: 1.75;
+  }
+  .note strong { color: #c7cbd2; }
+  code { font-family: var(--mono); font-size: 11.5px; color: #b9bec6; }
+  a { color: var(--accent); }
+  .hidden { display: none !important; }
+
+  .section-title {
+    margin: 22px 0 10px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 13px; font-weight: 700; color: #c7cbd2;
+  }
+  .switchline { display: flex; align-items: flex-start; gap: 9px; color: #cfd3d9; font-size: 13px; }
+  .switchline input { width: 16px; height: 16px; margin-top: 2px; accent-color: var(--accent); flex: 0 0 auto; }
+  .row-actions { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .mini { font-size: 11.5px; color: var(--dim); }
+  .table-wrap { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #2a2d32; white-space: nowrap; }
+  th { position: sticky; top: 0; background: #1b1d21; color: var(--dim); font-weight: 600; }
+  td.detail { white-space: normal; word-break: break-all; color: #b9bec6; }
+  .empty { padding: 10px; color: var(--dim); font-size: 11.5px; }
+  .tag { font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); }
+  .tag.lock { color: #ffb3b3; border-color: #5c2b2b; background: #2e1c1c; }
+  .tag.warn { color: #f0d49a; border-color: #5c4a22; background: #2e2818; }
+  .tag.info { color: #9fc6ff; border-color: #2b4162; background: #18222e; }
+  .unblock { padding: 2px 8px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div class="box">
+  <header>
+    <h1>后台密码设置</h1>
+    <p>此页面只允许内网 / 本机访问 · 修改后立即生效</p>
+  </header>
+  <div class="body">
+    <div class="pill-row">
+      <span id="pillSet" class="pill">检测中…</span>
+      <span id="pillEnv" class="pill hidden">环境变量鉴权中</span>
+      <span id="pillIp" class="pill"></span>
+    </div>
+
+    <form id="form" autocomplete="off">
+      <div class="field hidden" id="currentField">
+        <label for="current">当前密码</label>
+        <input id="current" type="password" autocomplete="current-password" placeholder="修改前需要验证当前密码">
+      </div>
+      <div class="field">
+        <label for="next">新密码</label>
+        <input id="next" type="password" autocomplete="new-password" placeholder="至少 8 位，建议 12 位以上">
+        <div class="hint">新密码只以 scrypt 散列保存，明文不落盘、不写日志。</div>
+      </div>
+      <div class="field">
+        <label for="confirm">再输一次</label>
+        <input id="confirm" type="password" autocomplete="new-password" placeholder="重复新密码">
+      </div>
+      <div class="actions">
+        <button class="primary" id="submit" type="submit">保存新密码</button>
+        <span class="spacer"></span>
+        <a id="toConsole" href="/" class="hidden">返回控制台 →</a>
+      </div>
+    </form>
+
+    <div id="msg" class="msg"></div>
+
+    <div class="section-title">外网访问 OBS 输出</div>
+    <label class="switchline">
+      <input type="checkbox" id="allowPublic">
+      <span>
+        允许外网访问 OBS 输出（<code>/render/*</code>、<code>/assets/*</code>、<code>/media/*</code>、
+        <code>/api/render/bootstrap</code>、<code>/api/match/pickUrl</code>）
+      </span>
+    </label>
+    <div class="hint">
+      默认<strong>关闭</strong>：只有内网机器能访问 OBS 渲染源与素材；公网访问会 403 并记入风险日志。
+      现场签到 / 扫码选曲不受影响。修改需要当前密码（未设置密码时直接生效）。
+    </div>
+    <div class="row-actions">
+      <button id="savePublic" type="button">保存外网开关</button>
+      <span id="publicState" class="mini"></span>
+    </div>
+
+    <div class="section-title">安全状态</div>
+    <div class="mini" style="margin-bottom:6px">被拉黑 / 锁定的 IP</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>IP</th><th>失败</th><th>状态</th><th>最近</th><th>操作</th></tr></thead>
+      <tbody id="blocked"></tbody>
+    </table></div>
+
+    <div class="mini" style="margin:12px 0 6px">最近风险操作</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>时间</th><th>类型</th><th>IP</th><th>详情</th></tr></thead>
+      <tbody id="risks"></tbody>
+    </table></div>
+
+    <div class="note">
+      <strong>安全说明</strong><br>
+      · 连续输错 5 次会锁定该 IP 15 分钟，继续错会翻倍，最长 24 小时。<br>
+      · 只接受内网地址：<code>127.0.0.1</code> / <code>10.x</code> / <code>192.168.x</code> /
+      <code>172.16–31.x</code> / <code>fc00::/7</code> 等。<br>
+      · 如果本服务放在反向代理后面，所有请求都会显示为 <code>127.0.0.1</code>，
+        此页面会失去「仅内网」的保护 —— 此时请改用 <code>LP_ADMIN_TOKEN</code> 环境变量，并限制代理来源。<br>
+      · 忘记密码时，在服务器上运行 <code>node tools/set-admin-password.mjs</code> 重置。
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const pillSet = $('pillSet');
+  const pillEnv = $('pillEnv');
+  const pillIp = $('pillIp');
+  const form = $('form');
+  const currentField = $('currentField');
+  const currentIn = $('current');
+  const nextIn = $('next');
+  const confirmIn = $('confirm');
+  const submitBtn = $('submit');
+  const msg = $('msg');
+  const toConsole = $('toConsole');
+
+  const allowPublic = $('allowPublic');
+  const savePublicBtn = $('savePublic');
+  const publicState = $('publicState');
+  const blockedBody = $('blocked');
+  const risksBody = $('risks');
+
+  let status = null;
+  let busy = false;
+  let publicDirty = false;
+
+  function show(text, kind) {
+    msg.className = `msg show ${kind || 'warn'}`;
+    msg.textContent = text;
+  }
+  function hideMsg() { msg.className = 'msg'; msg.textContent = ''; }
+
+  function fmtTime(t) {
+    const n = Number(t);
+    if (!n) return '—';
+    try { return new Date(n).toLocaleString('zh-CN', { hour12: false }); } catch { return '—'; }
+  }
+
+  function cell(text, cls) {
+    const td = document.createElement('td');
+    if (cls) td.className = cls;
+    td.textContent = text == null ? '—' : String(text);
+    return td;
+  }
+
+  function renderBlocked(list) {
+    blockedBody.textContent = '';
+    if (!Array.isArray(list) || !list.length) {
+      const tr = document.createElement('tr');
+      const td = cell('暂无被锁定 / 失败的 IP', 'empty');
+      td.colSpan = 5;
+      tr.append(td);
+      blockedBody.append(tr);
+      return;
+    }
+    for (const b of list) {
+      const tr = document.createElement('tr');
+      tr.append(cell(b.ip));
+      tr.append(cell(b.fails || 0));
+      const state = cell(b.locked
+        ? `锁定中 · 剩 ${Math.ceil((b.retryAfterSec || 0) / 60)} 分钟`
+        : `失败 ${b.fails || 0} 次`);
+      if (b.locked) state.className = 'detail';
+      tr.append(state);
+      tr.append(cell(fmtTime(b.lastAt)));
+      const actions = document.createElement('td');
+      const btn = document.createElement('button');
+      btn.className = 'unblock';
+      btn.type = 'button';
+      btn.textContent = '解除';
+      btn.addEventListener('click', () => unblock(b.ip));
+      actions.append(btn);
+      tr.append(actions);
+      blockedBody.append(tr);
+    }
+  }
+
+  const RISK_LABEL = {
+    'auth-fail': '登录失败',
+    'auth-lock': 'IP 被锁定',
+    'auth-blocked': '锁定期拦截',
+    'admin-api-blocked': '后台接口外网访问',
+    'ws-unauthorized': 'WS 未授权命令',
+    'external-blocked': '外网访问 OBS 输出',
+    'admin-password-change': '修改密码',
+    'public-access-change': '修改外网开关',
+    'unblock-ip': '解除 IP 锁定',
+    upload: '上传失败',
+    http: 'HTTP 错误',
+  };
+
+  function riskDetail(r) {
+    const bits = [];
+    if (r.method) bits.push(r.method);
+    if (r.path) bits.push(r.path);
+    if (r.op) bits.push(`op=${r.op}`);
+    if (r.status) bits.push(`HTTP ${r.status}`);
+    if (r.name) bits.push(r.name);
+    if (r.error) bits.push(r.error);
+    if (r.allow !== undefined) bits.push(r.allow ? '允许' : '禁止');
+    if (r.retryAfterSec) bits.push(`Retry ${r.retryAfterSec}s`);
+    return bits.join(' · ') || '—';
+  }
+
+  function renderRisks(list) {
+    risksBody.textContent = '';
+    if (!Array.isArray(list) || !list.length) {
+      const tr = document.createElement('tr');
+      const td = cell('暂无风险记录', 'empty');
+      td.colSpan = 4;
+      tr.append(td);
+      risksBody.append(tr);
+      return;
+    }
+    for (const r of list) {
+      const tr = document.createElement('tr');
+      tr.append(cell(fmtTime(r.at)));
+      const kind = document.createElement('td');
+      const tag = document.createElement('span');
+      tag.className = `tag ${r.kind === 'auth-lock' || r.kind === 'external-blocked' ? 'lock' : r.kind === 'auth-fail' ? 'warn' : 'info'}`;
+      tag.textContent = RISK_LABEL[r.kind] || r.kind;
+      kind.append(tag);
+      tr.append(kind);
+      tr.append(cell(r.ip));
+      tr.append(cell(riskDetail(r), 'detail'));
+      risksBody.append(tr);
+    }
+  }
+
+  function renderSecurity(data) {
+    if (!publicDirty) allowPublic.checked = data.allowPublicOutputs === true;
+    publicState.textContent = data.allowPublicOutputs ? '当前：允许外网访问' : '当前：仅内网访问';
+    savePublicBtn.disabled = !!data.envToken;
+    renderBlocked(data.blocked);
+    renderRisks(data.risks);
+  }
+
+  async function unblock(ip) {
+    hideMsg();
+    try {
+      const res = await fetch('/api/admin/unblock', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ ip, current: currentIn.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        show(data.nack?.msg || `操作失败（HTTP ${res.status}）`, 'err');
+        if (data.nack?.code === 'bad_current') currentIn.focus();
+        return;
+      }
+      show(data.message || '已解除锁定', 'ok');
+      renderSecurity(data);
+    } catch (e) {
+      show(`操作失败：${e.message}`, 'err');
+    }
+  }
+
+  allowPublic.addEventListener('change', () => { publicDirty = true; });
+
+  savePublicBtn.addEventListener('click', async () => {
+    hideMsg();
+    savePublicBtn.disabled = true;
+    const previous = savePublicBtn.textContent;
+    savePublicBtn.textContent = '保存中…';
+    try {
+      const res = await fetch('/api/admin/public-access', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ allow: allowPublic.checked, current: currentIn.value }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        show(data.nack?.msg || `保存失败（HTTP ${res.status}）`, data.nack?.code === 'too_many_attempts' ? 'warn' : 'err');
+        if (data.nack?.code === 'bad_current' || data.nack?.code === 'unauthorized') {
+          currentIn.focus();
+          currentIn.select();
+        }
+        return;
+      }
+      publicDirty = false;
+      show(data.message || '外网开关已保存', 'ok');
+      renderSecurity(data);
+    } catch (e) {
+      show(`保存失败：${e.message}`, 'err');
+    } finally {
+      savePublicBtn.textContent = previous;
+      savePublicBtn.disabled = !!status?.envToken;
+    }
+  });
+
+  async function loadStatus(silent = false) {
+    try {
+      const res = await fetch('/api/admin/status', { cache: 'no-store' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        pillSet.textContent = '无法访问';
+        pillSet.className = 'pill off';
+        if (!silent) show(data.nack?.msg || `读取状态失败（HTTP ${res.status}）`, 'err');
+        form.classList.add('hidden');
+        return;
+      }
+      status = data;
+      form.classList.remove('hidden');
+      pillSet.textContent = data.passwordSet ? '已设置密码' : '尚未设置密码';
+      pillSet.className = `pill ${data.passwordSet ? 'on' : 'off'}`;
+      pillEnv.classList.toggle('hidden', !data.envToken);
+      pillIp.textContent = data.ip ? `来源 ${data.ip}` : '';
+      if (data.ip) pillIp.classList.remove('hidden');
+
+      // 已设密码才显示「当前密码」
+      currentField.classList.toggle('hidden', !data.passwordSet);
+      if (data.envToken) {
+        if (!silent) show('当前由环境变量 LP_ADMIN_TOKEN 鉴权。请先移除该环境变量并重启服务，才能在这里设置密码。', 'warn');
+        submitBtn.disabled = true;
+      } else {
+        submitBtn.disabled = false;
+      }
+      renderSecurity(data);
+    } catch (e) {
+      pillSet.textContent = '无法访问';
+      pillSet.className = 'pill off';
+      if (!silent) show(`读取状态失败：${e.message}`, 'err');
+      form.classList.add('hidden');
+    }
+  }
+
+  form.addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (busy) return;
+    hideMsg();
+
+    const next = nextIn.value;
+    const confirm = confirmIn.value;
+    if (next.length < 8) return show('新密码至少 8 位（建议 12 位以上）', 'err');
+    if (next !== confirm) return show('两次输入的新密码不一致', 'err');
+
+    busy = true;
+    submitBtn.disabled = true;
+    submitBtn.textContent = '保存中…';
+    try {
+      const res = await fetch('/api/admin/password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ current: currentIn.value, next }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.ok === false) {
+        const code = data.nack?.code || '';
+        const text = data.nack?.msg || data.errors?.__body__ || `保存失败（HTTP ${res.status}）`;
+        show(text, code === 'too_many_attempts' ? 'warn' : 'err');
+        if (code === 'unauthorized' || code === 'bad_current') {
+          currentIn.focus();
+          currentIn.select();
+        }
+        return;
+      }
+      show('密码已更新。其他已登录的浏览器需要重新输入新密码。', 'ok');
+      currentIn.value = '';
+      nextIn.value = '';
+      confirmIn.value = '';
+      toConsole.classList.remove('hidden');
+      await loadStatus();
+    } catch (e) {
+      show(`保存失败：${e.message}`, 'err');
+    } finally {
+      busy = false;
+      if (!status?.envToken) submitBtn.disabled = false;
+      submitBtn.textContent = '保存新密码';
+    }
+  });
+
+  loadStatus();
+  setInterval(() => loadStatus(true), 5000);
+})();
+</script>
+</body>
+</html>

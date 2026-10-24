@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>曲目库 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .music-stats { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .music-stats .spacer { flex: 1; min-width: 20px; }
+
+  .music-toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .music-toolbar input[type=search] { flex: 1; min-width: 220px; max-width: 420px; }
+  .music-toolbar select { width: auto; min-width: 120px; }
+
+  .music-table-wrap { overflow-x: auto; }
+  .music-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 940px; }
+  .music-table th {
+    text-align: left; padding: 8px 9px; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10.5px; letter-spacing: 1.2px;
+    color: var(--text-mute); font-weight: 700; white-space: nowrap;
+  }
+  .music-table td { padding: 8px 9px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  .music-table tr:hover td { background: var(--surface-2); }
+  .music-table .id { font-family: var(--mono); color: var(--text-mute); }
+  .music-table .cover-thumb { width: 38px; height: 38px; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); background: #111; display: block; }
+  .music-table .cover-thumb.ph { display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 14px; }
+  .music-table .title { font-weight: 700; color: var(--text); }
+  .music-table .artist { font-size: 11px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px; }
+  .music-table .lv { font-family: var(--mono); font-weight: 700; text-align: center; white-space: nowrap; }
+  .music-table .lv.missing { color: var(--text-dim); font-weight: 400; }
+  .music-table .actions { text-align: right; white-space: nowrap; }
+  .music-table .actions .btn { min-height: 24px; padding: 1px 7px; font-size: 11px; }
+  .music-table .cn { text-align: center; }
+
+  .pager { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 12px; }
+  .pager .info { font-family: var(--mono); font-size: 11.5px; color: var(--text-mute); }
+  .pager .spacer { flex: 1; }
+
+  .diff-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+  .diff-grid .field { margin: 0; }
+  .diff-grid label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .5px; }
+  .diff-grid input { text-align: center; }
+  .editor-grid { display: grid; gap: 10px; }
+  .editor-grid .field { margin: 0; }
+  .editor-grid .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, clear, api, ok, err, cmdError, modal, confirm, withBusy, mount } = ui;
+  const fmt = window.fmt;
+
+  const page = mount({
+    current: '/music',
+    title: '曲目库',
+    subtitle: '曲目增改删 · 难度定数 · 国服标记 · 上传 xlsx 全量更新',
+  });
+
+  const DIFF_ORDER = ['basic', 'advanced', 'expert', 'master', 'ultima'];
+  const levelText = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '—';
+    return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+  };
+  const S = {
+    meta: null,
+    items: [],
+    total: 0,
+    offset: 0,
+    limit: 50,
+    q: '',
+    genre: '',
+    difficulty: '',
+    cnOnly: false,
+  };
+
+  // ── 概览 ────────────────────────────────────────────────
+  const totalPill = el('span', { class: 'pill mute', text: '曲目 0' });
+  const cnPill = el('span', { class: 'pill mute', text: '国服 0' });
+  const genrePill = el('span', { class: 'pill mute', text: '分类 0' });
+  const coverPill = el('span', { class: 'pill mute', text: '封面 0' });
+  const wePill = el('span', { class: 'pill mute', text: 'WE 0' });
+  const timeText = el('span', { class: 'small muted' });
+  const importBtn = el('button', { class: 'btn primary sm', text: '⇪ 导入 xlsx' });
+  const addBtn = el('button', { class: 'btn sm', text: '＋ 添加曲目' });
+  const reloadBtn = el('button', { class: 'btn ghost sm', text: '⟳ 重新载入' });
+  const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', class: 'hidden' });
+
+  page.append(el('section', { class: 'card mb12' },
+    el('header', null,
+      el('span', { text: '曲目库概览' }),
+      el('span', { class: 'spacer' }),
+      el('a', { class: 'btn ghost sm', href: '/match', text: '去比赛页' }),
+    ),
+    el('div', { class: 'body' },
+      el('div', { class: 'music-stats' },
+        totalPill, cnPill, genrePill, coverPill, wePill, timeText,
+        el('span', { class: 'spacer' }),
+        importBtn, addBtn, reloadBtn,
+      ),
+      fileInput,
+      el('div', { class: 'hint mt8', text: '比赛页 / 手机选曲页读取的是 data/music.json。上传 xlsx 会全量替换曲目库（旧文件备份为 data/music.json.bak），并同步更新 data/source 里的源文件。' }),
+    ),
+  ));
+
+  // ── 筛选 + 列表 ─────────────────────────────────────────
+  const search = el('input', { type: 'search', placeholder: '搜索曲名 / 曲师 / ID…' });
+  const genreSel = el('select', null, el('option', { value: '', text: '全部分类' }));
+  const diffSel = el('select', null,
+    el('option', { value: '', text: '全部难度' }),
+    ...DIFF_ORDER.map((k) => el('option', { value: k, text: k.toUpperCase() })),
+  );
+  const cnChk = el('input', { type: 'checkbox' });
+  const countText = el('span', { class: 'small muted' });
+  const tbody = el('tbody');
+  const pager = el('div', { class: 'pager' });
+
+  let qTimer = null;
+  search.oninput = () => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => { S.q = search.value.trim(); S.offset = 0; loadList(); }, 250);
+  };
+  genreSel.onchange = () => { S.genre = genreSel.value; S.offset = 0; loadList(); };
+  diffSel.onchange = () => { S.difficulty = diffSel.value; S.offset = 0; loadList(); };
+  cnChk.onchange = () => { S.cnOnly = cnChk.checked; S.offset = 0; loadList(); };
+  reloadBtn.onclick = () => reload(true);
+
+  importBtn.onclick = () => fileInput.click();
+  fileInput.onchange = () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = '';
+    if (file) importXlsx(file);
+  };
+  addBtn.onclick = () => openEditor(null);
+
+  const tableCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '曲目列表' }), countText,
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '难度定数按 0.1 步进；留空表示该难度不存在' }),
+    ),
+    el('div', { class: 'body' },
+      el('div', { class: 'music-toolbar mb12' },
+        search, genreSel, diffSel,
+        el('label', { class: 'check' }, cnChk, el('span', { class: 'label', text: '仅国服' })),
+      ),
+      el('div', { class: 'music-table-wrap' },
+        el('table', { class: 'music-table' },
+          el('thead', null, el('tr', null,
+            el('th', { text: '封面' }),
+            el('th', { text: 'ID' }),
+            el('th', { text: '曲名 / 曲师' }),
+            el('th', { text: '分类' }),
+            el('th', { text: '国服' }),
+            ...DIFF_ORDER.map((k) => el('th', { text: k.toUpperCase(), style: { textAlign: 'center' } })),
+            el('th', { text: 'WE', style: { textAlign: 'center' } }),
+            el('th', { text: '操作', style: { textAlign: 'right' } }),
+          )),
+          tbody,
+        ),
+      ),
+      pager,
+    ),
+  );
+
+  page.append(tableCard);
+
+  // ── 数据 ────────────────────────────────────────────────
+  function fillGenres(meta) {
+    const cur = genreSel.value;
+    clear(genreSel);
+    genreSel.append(el('option', { value: '', text: '全部分类' }));
+    for (const g of meta?.genres || []) {
+      genreSel.append(el('option', { value: g.name, text: `${g.label || g.name}（${g.count}）` }));
+    }
+    genreSel.value = cur || '';
+    S.genre = genreSel.value;
+  }
+
+  function renderMeta() {
+    const m = S.meta || {};
+    totalPill.textContent = `曲目 ${m.counts?.songs ?? 0}`;
+    cnPill.textContent = `国服 ${m.counts?.cn ?? 0}`;
+    genrePill.textContent = `分类 ${m.genres?.length ?? 0}`;
+    coverPill.textContent = `封面 ${m.counts?.covers ?? 0}`;
+    wePill.textContent = `WE ${m.counts?.we ?? 0}`;
+    const time = m.updatedAt || m.generatedAt;
+    timeText.textContent = time
+      ? `${m.updatedAt ? '最后修改' : '导入'} ${fmt.datetime(time)}${m.sourceSheet ? ` · ${m.sourceSheet}` : ''}`
+      : '尚未导入曲目';
+    totalPill.className = `pill ${m.counts?.songs ? 'ok' : 'mute'}`;
+    fillGenres(m);
+  }
+
+  async function loadMeta() {
+    const m = await api('/api/music/meta');
+    S.meta = m;
+    renderMeta();
+  }
+
+  async function loadList() {
+    const q = new URLSearchParams({
+      q: S.q,
+      genre: S.genre,
+      difficulty: S.difficulty,
+      cnOnly: S.cnOnly ? '1' : '',
+      limit: String(S.limit),
+      offset: String(S.offset),
+    });
+    const r = await api(`/api/music?${q}`);
+    S.items = r.items || [];
+    S.total = r.total || 0;
+    if (r.meta) { S.meta = r.meta; renderMeta(); }
+    renderRows();
+  }
+
+  function reload(showToast = false) {
+    Promise.all([loadMeta(), loadList()])
+      .then(() => { if (showToast) ok('曲目库已重新载入'); })
+      .catch((e) => cmdError(e, '读取曲目库'));
+  }
+
+  function renderRows() {
+    clear(tbody);
+    countText.textContent = S.total ? `共 ${S.total} 首` : '';
+    if (!S.items.length) {
+      tbody.append(el('tr', null, el('td', { colspan: '12' },
+        el('div', { class: 'dim small', style: { padding: '22px 6px' },
+          text: S.q || S.genre || S.difficulty || S.cnOnly
+            ? '没有匹配的曲目'
+            : '曲目库是空的：点右上角「导入 xlsx」或「添加曲目」。' }))));
+      renderPager();
+      return;
+    }
+
+    for (const song of S.items) {
+      const tr = el('tr', null,
+        el('td', null,
+          song.cover
+            ? el('img', { class: 'cover-thumb', src: song.cover, alt: '', loading: 'lazy' })
+            : el('span', { class: 'cover-thumb ph', text: '♪' }),
+        ),
+        el('td', { class: 'id', text: String(song.id) }),
+        el('td', null,
+          el('div', { class: 'title', text: song.name }),
+          el('div', { class: 'artist', text: song.artist || '—' }),
+        ),
+        el('td', { text: song.genreLabel || song.genre || '—' }),
+        el('td', { class: 'cn' },
+          el('span', { class: `pill ${song.cn ? 'ok' : 'mute'}`, text: song.cn ? '国服' : '日服' })),
+        ...DIFF_ORDER.map((k) => {
+          const lv = song.difficulties?.[k];
+          return el('td', { class: `lv${lv ? '' : ' missing'}`, text: lv ? levelText(lv) : '—' });
+        }),
+        el('td', { class: `lv${song.we ? '' : ' missing'}`, style: { color: song.we ? '#c98bff' : '' }, text: song.we ? `${song.we.kanji}★${song.we.star}` : '—' }),
+        el('td', { class: 'actions' },
+          el('button', { class: 'btn ghost', text: '编辑', onclick: () => openEditor(song) }),
+          el('button', { class: 'btn ghost', text: '删除', onclick: () => removeSong(song) }),
+        ),
+      );
+      tbody.append(tr);
+    }
+    renderPager();
+  }
+
+  function renderPager() {
+    clear(pager);
+    const pages = Math.max(1, Math.ceil(S.total / S.limit));
+    const cur = Math.floor(S.offset / S.limit) + 1;
+    pager.append(
+      el('span', { class: 'info', text: `显示 ${S.total ? S.offset + 1 : 0}–${Math.min(S.offset + S.items.length, S.total)} / ${S.total}` }),
+      el('span', { class: 'spacer' }),
+      el('button', {
+        class: 'btn ghost sm', text: '‹ 上一页', disabled: cur <= 1,
+        onclick: () => { if (cur > 1) { S.offset = Math.max(0, S.offset - S.limit); loadList(); } },
+      }),
+      el('span', { class: 'info', text: `${cur} / ${pages}` }),
+      el('button', {
+        class: 'btn ghost sm', text: '下一页 ›', disabled: cur >= pages,
+        onclick: () => { if (cur < pages) { S.offset += S.limit; loadList(); } },
+      }),
+    );
+  }
+
+  // ── 编辑 / 新增 ─────────────────────────────────────────
+  function field(label, input) {
+    return el('div', { class: 'field' }, el('label', { text: label }), input);
+  }
+
+  function openEditor(song) {
+    const isEdit = !!song;
+    const idIn = el('input', {
+      type: 'number', min: 1, step: 1,
+      value: song?.id ?? '',
+      placeholder: isEdit ? '' : '留空自动分配',
+      disabled: isEdit,
+    });
+    const nameIn = el('input', { type: 'text', maxLength: 120, value: song?.name || '', placeholder: '曲名（必填）' });
+    const artistIn = el('input', { type: 'text', maxLength: 120, value: song?.artist || '', placeholder: '曲师' });
+    const genreIn = el('input', { type: 'text', maxLength: 40, value: song?.genre || '', placeholder: '分类，例如 ORIGINAL', list: 'genre-list' });
+    const coverIn = el('input', { type: 'text', maxLength: 500, value: song?.cover || '', placeholder: '/covers/123.webp（留空则没有封面）' });
+    const weKanjiIn = el('input', { type: 'text', maxLength: 8, value: song?.we?.kanji || '', placeholder: 'WE 汉字，如 止（留空=无）' });
+    const weStarIn = el('input', { type: 'number', min: 1, max: 10, step: 1, value: song?.we?.star ?? '', placeholder: '1–10' });
+    const coverPreview = el('img', { src: song?.cover || '', alt: '', style: { width: '64px', height: '64px', objectFit: 'cover', borderRadius: '4px', border: '1px solid var(--border)', background: '#111', display: song?.cover ? 'block' : 'none' } });
+    coverIn.oninput = () => {
+      const src = coverIn.value.trim();
+      if (src) { coverPreview.src = src; coverPreview.style.display = 'block'; }
+      else { coverPreview.removeAttribute('src'); coverPreview.style.display = 'none'; }
+    };
+    const cnIn = el('input', { type: 'checkbox', checked: song ? song.cn !== false : true });
+    const diffIns = {};
+    for (const k of DIFF_ORDER) {
+      diffIns[k] = el('input', {
+        type: 'number', min: 0, max: 20, step: 0.1,
+        value: song?.difficulties?.[k] ?? '',
+        placeholder: '—',
+      });
+    }
+
+    const datalist = el('datalist', { id: 'genre-list' });
+    for (const g of S.meta?.genres || []) datalist.append(el('option', { value: g.name }));
+
+    const m = modal({
+      title: isEdit ? `编辑曲目 #${song.id}` : '添加曲目',
+      wide: true,
+      body: el('div', { class: 'editor-grid' },
+        el('div', { class: 'row2' },
+          field('ID', idIn),
+          field('曲名', nameIn),
+        ),
+        el('div', { class: 'row2' },
+          field('曲师', artistIn),
+          field('分类', genreIn),
+        ),
+        el('div', { class: 'row2' },
+          field('封面地址', coverIn),
+          el('div', { class: 'field' }, el('label', { text: '封面预览' }), coverPreview),
+        ),
+        el('div', { class: 'row2' },
+          field('WE 汉字', weKanjiIn),
+          field('WE 星数', weStarIn),
+        ),
+        el('label', { class: 'check' }, cnIn, el('span', { class: 'label', text: '国服可用' })),
+        el('div', null,
+          el('div', { class: 'small muted mb8', text: '难度定数' }),
+          el('div', { class: 'diff-grid' },
+            ...DIFF_ORDER.map((k) => field(k.toUpperCase(), diffIns[k])),
+          ),
+        ),
+        datalist,
+        el('div', { class: 'hint', text: '定数支持 0.1 步进（例如 13.7）。至少填一个难度；留空的难度不会出现在选曲 / 比赛页。' }),
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', text: isEdit ? '保存修改' : '添加曲目',
+          onclick: (e) => withBusy(e.target, async () => {
+            const difficulties = {};
+            for (const k of DIFF_ORDER) {
+              const v = Number(diffIns[k].value);
+              if (Number.isFinite(v) && v > 0) difficulties[k] = Math.round(v * 100) / 100;
+            }
+            const body = {
+              name: nameIn.value,
+              artist: artistIn.value,
+              genre: genreIn.value,
+              cn: cnIn.checked,
+              cover: coverIn.value,
+              we: weKanjiIn.value.trim() && weStarIn.value !== ''
+                ? { kanji: weKanjiIn.value.trim(), star: Number(weStarIn.value) }
+                : null,
+              difficulties,
+            };
+            if (!isEdit && String(idIn.value).trim() !== '') body.id = Number(idIn.value);
+            try {
+              const r = isEdit
+                ? await api(`/api/music/songs/${encodeURIComponent(song.id)}`, { method: 'PUT', body })
+                : await api('/api/music/songs', { method: 'POST', body });
+              m.close();
+              ok(isEdit ? `已更新：${body.name.trim()}` : `已添加：${body.name.trim()}${r.song ? ` · #${r.song.id}` : ''}`);
+              await reload();
+            } catch (ex) { cmdError(ex, isEdit ? '保存曲目' : '添加曲目'); }
+          }),
+        }),
+      ],
+    });
+    setTimeout(() => nameIn.focus(), 40);
+  }
+
+  async function removeSong(song) {
+    const yes = await confirm({
+      title: '删除曲目',
+      message: `从曲目库删除「${song.name}」？比赛页 / 选曲页将不再显示这首。xlsx 源文件不会被修改。`,
+      danger: true, confirmText: '删除',
+    });
+    if (!yes) return;
+    try {
+      await api(`/api/music/songs/${encodeURIComponent(song.id)}`, { method: 'DELETE', body: {} });
+      ok(`已删除：${song.name}`);
+      if (S.items.length === 1 && S.offset > 0) S.offset = Math.max(0, S.offset - S.limit);
+      await reload();
+    } catch (ex) { cmdError(ex, '删除曲目'); }
+  }
+
+  // ── xlsx 导入 ───────────────────────────────────────────
+  async function importXlsx(file) {
+    const yes = await confirm({
+      title: '导入 xlsx',
+      message: `用「${file.name}」全量替换当前曲目库？现有 data/music.json 会先备份为 .bak。`,
+      danger: true, confirmText: '导入并替换',
+    });
+    if (!yes) return;
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      const { res, data } = await ui.uploadFetch('/api/music/import', fd);
+      if (!res.ok || data.ok === false) {
+        throw new Error(data.errors?.file || data.nack?.msg || `导入失败（HTTP ${res.status}）`);
+      }
+      S.offset = 0;
+      await reload();
+      ok(`导入完成：${data.counts?.songs ?? 0} 首（国服 ${data.counts?.cn ?? 0}）`);
+      if (data.sourceWarning) err(data.sourceWarning);
+    } catch (e) {
+      err(e.message);
+    }
+  }
+
+  reload();
+})();
+</script>
+</body>
+</html>

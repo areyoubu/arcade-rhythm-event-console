@@ -1,0 +1,538 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>比分条 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .score-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+  @media (max-width: 1000px) { .score-layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .side-card > header .side-tag { font-weight: 700; letter-spacing: .04em; }
+  .side-card.left  { border-top: 3px solid var(--left-color, #d0344e); }
+  .side-card.right { border-top: 3px solid var(--right-color, #3d78c9); }
+
+  .score-row { display: grid; grid-template-columns: 64px minmax(0, 1fr) 64px; align-items: center; gap: 10px; margin-bottom: 6px; }
+  .score-big {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 56px; font-weight: 800; line-height: 1; text-align: center;
+    color: var(--text);
+  }
+  .score-btn { min-height: 56px; font-size: 22px; font-weight: 800; padding: 0; }
+  .pending-line { min-height: 22px; text-align: center; font-size: 12.5px; color: var(--warn); font-weight: 700; }
+  .pending-line:empty { visibility: hidden; }
+
+  .team-color { width: 52px; height: 30px; }
+  .side-fields { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; }
+  @media (max-width: 620px) { .side-fields { grid-template-columns: minmax(0,1fr); } }
+
+  .confirm-bar {
+    position: sticky; bottom: 0; z-index: 20;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px; margin-top: 12px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  }
+  .confirm-bar .spacer { flex: 1; }
+  .confirm-bar.pending { border-color: #7a6522; }
+
+  .preview-frame {
+    width: 100%; aspect-ratio: 16 / 9; border: 0; display: block;
+    background: #0b0b0b; border-radius: var(--radius); pointer-events: auto;
+  }
+
+  .out-row {
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+    padding: 8px 0; border-bottom: 1px solid var(--border);
+  }
+  .out-row:last-child { border-bottom: none; }
+  .out-name { font-weight: 700; min-width: 96px; }
+  .out-row label { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--text-dim); }
+  .out-row input[type=number] { width: 78px; padding: 4px 7px; }
+  .out-url {
+    flex: 1; min-width: 220px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-mute); background: #17181b; border: 1px solid var(--border);
+    border-radius: 3px; padding: 4px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  .oplog { max-height: 260px; overflow-y: auto; font-size: 12px; }
+  .oplog .row { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px solid var(--border); }
+  .oplog .row:last-child { border-bottom: none; }
+  .oplog .at { color: var(--text-mute); font-family: var(--mono); flex: 0 0 auto; }
+  .oplog .txt { color: var(--text-dim); }
+
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, clear, api, ok, warn, cmdError, withBusy, mount } = ui;
+
+  const page = mount({
+    current: '/scoreboard',
+    title: '比分条',
+    subtitle: '常驻叠加组件 · 可合成一路输出，也可拆成比分条 / P1 / P2 三路在 OBS 里自行编排 · 加一减一只暂存，按确认才生效',
+  });
+
+  let S = { state: null, players: [], teams: [] };
+
+  // ═══════════════════ 比分面板 ═══════════════════
+  function makeSide(key, letter, label) {
+    const scoreBig = el('div', { class: 'score-big', text: '0' });
+    const pendingLine = el('div', { class: 'pending-line' });
+
+    const minus = el('button', { class: 'btn score-btn', type: 'button', text: '−', title: '减一（暂存，需确认）' });
+    const plus = el('button', { class: 'btn score-btn', type: 'button', text: '+', title: '加一（暂存，需确认）' });
+    minus.onclick = (e) => withBusy(e.target, () => stage(key, -1));
+    plus.onclick = (e) => withBusy(e.target, () => stage(key, 1));
+
+    // 选手：用带搜索的弹窗选择（选手可能有几十个，原生下拉不好翻）
+    const playerBtn = el('button', { class: 'btn grow truncate', type: 'button', text: '选择选手' });
+    const clearSideBtn = el('button', { class: 'btn ghost sm', type: 'button', text: '清空' });
+    playerBtn.onclick = () => openPlayerPicker(key);
+    clearSideBtn.onclick = () => setPlayer(key, null);
+
+    const teamSel = el('select', null, el('option', { value: '', text: '跟随选手' }));
+    const color = el('input', { type: 'color', class: 'team-color', value: '#d0344e' });
+
+    teamSel.onchange = () => { const v = teamSel.value; withBusy(teamSel, () => setTeam(key, v)); };
+    color.onchange = () => { const v = color.value; withBusy(color, () => setColor(key, v)); };
+
+    const card = el('section', { class: `card side-card ${key}` },
+      el('header', null,
+        el('span', { class: 'side-tag', text: `${letter} · ${label}` }),
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'small muted', text: '加一 / 减一只暂存' }),
+      ),
+      el('div', { class: 'body' },
+        el('div', { class: 'score-row' }, minus, scoreBig, plus),
+        pendingLine,
+        el('div', { class: 'side-fields mt12' },
+          el('div', { class: 'field' }, el('label', { text: '选手' }),
+            el('div', { class: 'inline' }, playerBtn, clearSideBtn)),
+          el('div', { class: 'field' }, el('label', { text: '队伍' }), teamSel),
+        ),
+        el('div', { class: 'inline' },
+          el('label', { text: '队伍色' }), color,
+          el('span', { class: 'small muted', text: '用于比分条与选手牌的侧边条' }),
+        ),
+      ),
+    );
+    return { key, card, scoreBig, pendingLine, playerBtn, teamSel, color, minus, plus };
+  }
+
+  /** 选手选择：使用共享的 ui.playerPicker（比赛页同一套） */
+  function openPlayerPicker(sideKey) {
+    const side = sideKey === 'left' ? S.state?.left : S.state?.right;
+    ui.playerPicker({
+      title: sideKey === 'left' ? '选择 P1 选手' : '选择 P2 选手',
+      players: S.players,
+      teams: S.teams,
+      selectedId: side?.playerId || null,
+      onPick: (entityId) => setPlayer(sideKey, entityId),
+    });
+  }
+
+  const left = makeSide('left', 'P1', '左 / A 侧');
+  const right = makeSide('right', 'P2', '右 / B 侧');
+  page.append(el('div', { class: 'score-layout' }, left.card, right.card));
+
+  // ═══════════════════ 待确认 + 标签 + 显隐 ═══════════════════
+  const pendingText = el('span', { class: 'small dim', text: '没有待确认的比分变化' });
+  const confirmBtn = el('button', { class: 'btn primary', text: '确认比分', disabled: true });
+  const cancelBtn = el('button', { class: 'btn ghost', text: '取消', disabled: true });
+
+  confirmBtn.onclick = (e) => withBusy(e.target, async () => {
+    try {
+      const r = await api('/api/score/confirm', { method: 'POST', body: {} });
+      applyState(r.state);
+      ok('比分已确认并写入日志');
+    } catch (ex) { cmdError(ex, '确认比分'); }
+  });
+  cancelBtn.onclick = (e) => withBusy(e.target, async () => {
+    try {
+      const r = await api('/api/score/cancel', { method: 'POST', body: {} });
+      applyState(r.state);
+      ok('已取消待确认的比分变化');
+    } catch (ex) { cmdError(ex, '取消比分'); }
+  });
+
+  const srcChk = el('input', { type: 'checkbox' });
+  const srcHint = el('span', { class: 'small muted' });
+  srcChk.onchange = async () => {
+    const source = srcChk.checked ? 'match' : 'manual';
+    try {
+      const r = await api('/api/score/source', { method: 'POST', body: { source } });
+      applyState(r.state);
+      ok(source === 'match' ? '比分条已改为跟随比赛计分' : '比分条已改回手动比分');
+    } catch (ex) { cmdError(ex, '切换比分来源'); srcChk.checked = !srcChk.checked; }
+  };
+
+  const labelInput = el('input', { type: 'text', placeholder: '如：第 1 局 / 胜者组决赛', maxLength: 40, style: { maxWidth: '280px' } });
+  const labelBtn = el('button', { class: 'btn', text: '应用标签' });
+  labelBtn.onclick = (e) => withBusy(e.target, async () => {
+    try { const r = await api('/api/score/label', { method: 'POST', body: { label: labelInput.value } }); applyState(r.state); ok('标签已更新'); }
+    catch (ex) { cmdError(ex, '设置标签'); }
+  });
+
+  const chkBar = el('input', { type: 'checkbox', checked: true });
+  const chkPlates = el('input', { type: 'checkbox', checked: true });
+  const chkAll = el('input', { type: 'checkbox', checked: true });
+  const pushVisible = (patch) => api('/api/score/visible', { method: 'POST', body: patch })
+    .then((r) => applyState(r.state)).catch((ex) => cmdError(ex, '显隐'));
+  chkBar.onchange = () => pushVisible({ bar: chkBar.checked });
+  chkPlates.onchange = () => pushVisible({ plates: chkPlates.checked });
+  chkAll.onchange = () => pushVisible({ all: chkAll.checked });
+
+  const resetBtn = el('button', { class: 'btn danger', text: '比分归零' });
+  resetBtn.onclick = async () => {
+    if (!(await ui.confirm({ title: '比分归零', message: '把左右比分都归零？此操作会写入日志。', danger: true, confirmText: '归零' }))) return;
+    try { const r = await api('/api/score/reset', { method: 'POST', body: {} }); applyState(r.state); ok('比分已归零'); }
+    catch (ex) { cmdError(ex, '比分归零'); }
+  };
+
+  const confirmBar = el('div', { class: 'confirm-bar', id: 'confirmBar' },
+    el('span', { class: 'bold small', text: '待确认' }), pendingText,
+    el('span', { class: 'spacer' }),
+    confirmBtn, cancelBtn,
+  );
+  page.append(confirmBar);
+
+  // ═══════════════════ 预览 + 显示选项 + 日志 ═══════════════════
+  const preview = el('iframe', {
+    class: 'preview-frame', src: '/render/score?preview=1&edit=1',
+    title: '比分条预览', loading: 'lazy',
+  });
+
+  const oplog = el('div', { class: 'oplog' });
+
+  page.append(el('div', { class: 'cols two mt12' },
+    el('section', { class: 'card' },
+      el('header', null, el('span', { text: '预览' }), el('span', { class: 'spacer' }),
+        el('span', { class: 'sub', text: '/render/score（与 OBS 里的是同一个页面）' }),
+        el('button', {
+          class: 'btn ghost sm', text: '打开输出窗口',
+          title: '在新窗口打开独立比分输出（可拖到副屏 / HDMI 输出）',
+          onclick: () => window.open('/render/score?window=1', 'scoreOutput', 'width=1280,height=720'),
+        })),
+      el('div', { class: 'body' }, preview,
+        el('div', { class: 'note info mt12', text: '预览是合并画面，可以直接拖动元件调整位置。OBS 里可以只用合并的 /render/score 一路，也可以用下面的三路分件自己编排。' }),
+        el('div', { class: 'note mt8', text: '要用独立窗口/副屏输出时点右上角「打开输出窗口」——普通浏览器窗口没有透明通道，会自动铺深色底并等比缩放。' }),
+      ),
+    ),
+    el('section', { class: 'card' },
+      el('header', null, el('span', { text: '显示与标签' })),
+      el('div', { class: 'body' },
+        el('div', { class: 'note info mb8' },
+          el('label', { class: 'check' }, srcChk,
+            el('span', { class: 'label', text: '比分条跟随比赛计分（/match）' })),
+          el('div', { class: 'small muted mt8' }, srcHint,
+            el('a', { href: '/match', text: ' 打开比赛页 →' })),
+        ),
+        el('div', { class: 'field' }, el('label', { text: '中间标签（仅手动比分时显示）' }),
+          el('div', { class: 'inline' }, labelInput, labelBtn)),
+        el('div', { class: 'inline mb8' },
+          el('label', { class: 'check' }, chkAll, el('span', { class: 'label', text: '整体显示' })),
+          el('label', { class: 'check' }, chkBar, el('span', { class: 'label', text: '比分条' })),
+          el('label', { class: 'check' }, chkPlates, el('span', { class: 'label', text: '选手牌' })),
+        ),
+        el('div', { class: 'btn-row mt12' },
+          el('button', { class: 'btn', text: '清空选手（保留选手条）', onclick: clearAllPlayers }),
+          resetBtn,
+        ),
+      ),
+    ),
+  ));
+
+  // ═══════════════════ OBS 分件输出源 ═══════════════════
+  /**
+   * 布局 + 三路独立输出。
+   *
+   * 位置（X/Y）只影响合并输出；缩放（scale）同时决定合并里的大小和分件源的像素尺寸，
+   * 所以「分件源按输出尺寸放进 OBS」和「预览/合并输出」里看起来完全一样大。
+   */
+  const LAYER_LABEL = { bar: '比分条', left: 'P1 选手牌', right: 'P2 选手牌' };
+  const FALLBACK_BASE = { bar: { w: 1180, h: 104 }, left: { w: 470, h: 116 }, right: { w: 470, h: 116 } };
+  const FALLBACK_LAYOUT = {
+    bar: { x: 370, y: 44, scale: 1 },
+    left: { x: 64, y: 172, scale: 1 },
+    right: { x: 1386, y: 172, scale: 1 },
+  };
+  const layoutRefs = {};
+
+  function baseOf(part) { return S.state?.base?.[part] || FALLBACK_BASE[part]; }
+  function layoutOf(part) { return S.state?.layout?.[part] || FALLBACK_LAYOUT[part]; }
+  function outputOf(part) {
+    const b = baseOf(part);
+    const l = layoutOf(part);
+    return { w: Math.round(b.w * l.scale), h: Math.round(b.h * l.scale) };
+  }
+  function partUrl(part) {
+    const o = outputOf(part);
+    return `${location.origin}/render/score?part=${part}&w=${o.w}&h=${o.h}`;
+  }
+
+  async function saveLayout(part, patch) {
+    try {
+      const r = await api('/api/score/layout', { method: 'POST', body: { part, ...patch } });
+      applyState(r.state);
+    } catch (ex) { cmdError(ex, '调整布局'); }
+  }
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); ok('已复制到剪贴板'); }
+    catch {
+      // 非安全上下文（http + 局域网 IP）下 clipboard API 不可用，退回 textarea
+      const ta = el('textarea', { style: { position: 'fixed', left: '-9999px' } });
+      ta.value = text; document.body.append(ta); ta.select();
+      try { document.execCommand('copy'); ok('已复制到剪贴板'); } catch { warn('复制失败，请手动选中地址复制'); }
+      ta.remove();
+    }
+  }
+
+  const outCard = el('section', { class: 'card mt12' },
+    el('header', null, el('span', { text: '布局与 OBS 输出源' }), el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '合并里可拖 / 改坐标；缩放同时决定分件源的像素尺寸' }),
+      el('button', {
+        class: 'btn ghost sm', text: '恢复默认布局',
+        onclick: async () => {
+          try {
+            const r = await api('/api/score/layout/reset', { method: 'POST', body: {} });
+            applyState(r.state);
+            ok('布局已恢复默认');
+          } catch (ex) { cmdError(ex, '恢复布局'); }
+        },
+      })),
+    el('div', { class: 'body' },
+      el('div', { class: 'note info mb8', text: '在左侧预览里直接拖动元件，或改下面的 X / Y / 缩放。分件输出按「设计尺寸 × 缩放」渲染，和合并输出一样大；OBS 源宽高用这里显示的输出尺寸。' }),
+      el('div', { class: 'note warn mb8', html: '合并输出与三路分件请<strong>二选一</strong>：同时加到 OBS 会看到双份画面（截图里的重影就是这个原因）。用分件时先把合并的 /render/score 源删掉或隐藏。' }),
+    ),
+  );
+
+  for (const part of ['bar', 'left', 'right']) {
+    const l = layoutOf(part);
+    const xIn = el('input', { type: 'number', step: '1', value: String(l.x), title: '合并输出中的 X 坐标' });
+    const yIn = el('input', { type: 'number', step: '1', value: String(l.y), title: '合并输出中的 Y 坐标' });
+    const scaleIn = el('input', { type: 'number', min: '0.3', max: '4', step: '0.05', value: String(l.scale), title: '缩放（同时决定分件输出尺寸）' });
+    const sizeText = el('span', { class: 'small bold nowrap' });
+    const urlBox = el('code', { class: 'out-url' });
+    const sync = () => {
+      const o = outputOf(part);
+      sizeText.textContent = `${o.w} × ${o.h}`;
+      urlBox.textContent = partUrl(part);
+    };
+    const commit = () => saveLayout(part, { x: Number(xIn.value), y: Number(yIn.value), scale: Number(scaleIn.value) });
+    xIn.onchange = commit;
+    yIn.onchange = commit;
+    scaleIn.onchange = commit;
+
+    const row = el('div', { class: 'out-row' },
+      el('span', { class: 'out-name', text: LAYER_LABEL[part] }),
+      el('label', null, 'X', xIn),
+      el('label', null, 'Y', yIn),
+      el('label', null, '缩放', scaleIn),
+      el('span', { class: 'small muted', text: '输出' }), sizeText,
+      urlBox,
+      el('button', { class: 'btn sm', text: '复制地址', onclick: () => copyText(partUrl(part)) }),
+      el('button', {
+        class: 'btn sm ghost', text: '打开窗口',
+        onclick: () => {
+          const o = outputOf(part);
+          // 多留一点给浏览器窗口边框，保证视口能完整容纳输出尺寸
+          window.open(`${partUrl(part)}&window=1`, `score-${part}`, `width=${o.w + 24},height=${o.h + 96}`);
+        },
+      }),
+    );
+    outCard.querySelector('.body').append(row);
+    layoutRefs[part] = { xIn, yIn, scaleIn, sizeText, urlBox, sync };
+    sync();
+  }
+
+  // 合并输出（单路源）也列出来，方便复制
+  outCard.querySelector('.body').append(el('div', { class: 'out-row' },
+    el('span', { class: 'out-name', text: '合并输出' }),
+    el('span', { class: 'small muted', text: '1920 × 1080（比分条 + 两块选手牌）' }),
+    el('code', { class: 'out-url', text: `${location.origin}/render/score` }),
+    el('button', { class: 'btn sm', text: '复制地址', onclick: () => copyText(`${location.origin}/render/score`) }),
+  ));
+  page.append(outCard);
+
+  // 从预览 iframe 拖拽回传的位置
+  window.addEventListener('message', (e) => {
+    if (e.origin !== location.origin) return;
+    const d = e.data;
+    if (!d || d.type !== 'score-layout' || !LAYER_LABEL[d.part]) return;
+    saveLayout(d.part, { x: d.x, y: d.y });
+  });
+
+  page.append(el('section', { class: 'card mt12' },
+    el('header', null, el('span', { text: '操作日志' }), el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '最近 30 条 · 同时写入审计日志' })),
+    el('div', { class: 'body' }, oplog),
+  ));
+
+  // ═══════════════════ 数据与渲染 ═══════════════════
+  function fillSelect(sel, items, selected, emptyLabel) {
+    clear(sel);
+    sel.append(el('option', { value: '', text: emptyLabel }));
+    for (const it of items) sel.append(el('option', { value: it.id, text: it.name, selected: it.id === selected }));
+    sel.value = selected || '';
+  }
+
+  function renderSide(ui2, side) {
+    const followMatch = S.state?.source === 'match';
+    ui2.scoreBig.textContent = String(side?.score ?? 0);
+    // 总分制下会是 7 位数，控制页也按位数缩一点
+    ui2.scoreBig.style.fontSize = String(side?.score ?? 0).length >= 6 ? '38px' : '';
+    const d = side?.pending || 0;
+    if (followMatch) {
+      const m = S.state?.match || {};
+      ui2.pendingLine.textContent = side?.isWinner
+        ? '本局获胜'
+        : (m.finished ? '本局已结束' : `跟随比赛 · ${side?.wins ?? 0} 胜局 / 总分 ${side?.totalScore ?? 0}`);
+      ui2.minus.disabled = true;
+      ui2.plus.disabled = true;
+    } else if (d) {
+      const target = Math.max(0, (side.score || 0) + d);
+      ui2.pendingLine.textContent = `待确认：${d > 0 ? '+' : ''}${d} → ${target}`;
+      ui2.minus.disabled = false;
+      ui2.plus.disabled = false;
+    } else {
+      ui2.pendingLine.textContent = '';
+      ui2.minus.disabled = false;
+      ui2.plus.disabled = false;
+    }
+    // 选手按钮显示当前人选；没有时提示去选择
+    if (side?.playerName) {
+      ui2.playerBtn.textContent = side.teamName ? `${side.playerName} · ${side.teamName}` : side.playerName;
+      ui2.playerBtn.classList.remove('primary');
+    } else {
+      ui2.playerBtn.textContent = '选择选手';
+      ui2.playerBtn.classList.add('primary');
+    }
+    fillSelect(ui2.teamSel, S.teams, side?.teamId || '', '跟随选手');
+    ui2.color.value = side?.color || (ui2.key === 'left' ? '#d0344e' : '#3d78c9');
+    document.documentElement.style.setProperty(
+      ui2.key === 'left' ? '--left-color' : '--right-color',
+      side?.color || (ui2.key === 'left' ? '#d0344e' : '#3d78c9'),
+    );
+  }
+
+  function renderLog(log) {
+    clear(oplog);
+    const items = (log || []).slice().reverse();
+    if (!items.length) { oplog.append(el('div', { class: 'dim small', text: '还没有操作记录。' })); return; }
+    for (const it of items) {
+      oplog.append(el('div', { class: 'row' },
+        el('span', { class: 'at', text: fmt.clock(it.at) }),
+        el('span', { class: 'txt', text: it.text || it.action }),
+      ));
+    }
+  }
+
+  function applyState(s) {
+    if (!s) return;
+    S.state = s;
+    renderSide(left, s.left);
+    renderSide(right, s.right);
+    renderLog(s.log);
+
+    const followMatch = s.source === 'match';
+    srcChk.checked = followMatch;
+    srcHint.textContent = followMatch
+      ? `当前显示本局聚合分（${s.match?.modeLabel || '总分制'}）；手动 ±1 已停用。`
+      : '当前显示手动比分；勾选后改由比赛页的曲目分数驱动。';
+    if (typeof resetBtn !== 'undefined' && resetBtn) resetBtn.disabled = followMatch;
+    labelInput.disabled = followMatch;
+    labelBtn.disabled = followMatch;
+    if (document.activeElement !== labelInput) {
+      labelInput.value = followMatch ? (s.match?.name || '') : (s.label || '');
+    }
+
+    // 布局输入框 / 输出尺寸 / URL
+    for (const part of ['bar', 'left', 'right']) {
+      const ref = layoutRefs[part];
+      if (!ref) continue;
+      const l = layoutOf(part);
+      if (document.activeElement !== ref.xIn) ref.xIn.value = String(l.x);
+      if (document.activeElement !== ref.yIn) ref.yIn.value = String(l.y);
+      if (document.activeElement !== ref.scaleIn) ref.scaleIn.value = String(l.scale);
+      ref.sync();
+    }
+
+    chkBar.checked = s.barVisible !== false;
+    chkPlates.checked = s.platesVisible !== false;
+    chkAll.checked = s.visible !== false;
+
+    const dL = s.left?.pending || 0;
+    const dR = s.right?.pending || 0;
+    const has = !followMatch && (dL !== 0 || dR !== 0);
+    confirmBtn.disabled = !has;
+    cancelBtn.disabled = !has;
+    confirmBar.classList.toggle('pending', has);
+    if (followMatch) {
+      pendingText.textContent = `比分条跟随比赛：${s.match?.name || '本局'} · ${s.match?.modeLabel || '总分制'}`;
+      confirmBtn.textContent = '确认比分';
+    } else if (has) {
+      const parts = [];
+      if (dL) parts.push(`左 ${s.left.score} → ${Math.max(0, s.left.score + dL)}`);
+      if (dR) parts.push(`右 ${s.right.score} → ${Math.max(0, s.right.score + dR)}`);
+      pendingText.textContent = parts.join(' · ');
+      confirmBtn.textContent = '确认比分';
+    } else {
+      pendingText.textContent = '没有待确认的比分变化';
+    }
+  }
+
+  async function stage(side, delta) {
+    try {
+      const r = await api('/api/score/stage', { method: 'POST', body: { side, delta } });
+      applyState(r.state);
+    } catch (ex) { cmdError(ex, `比分 ${delta > 0 ? '+1' : '-1'}`); }
+  }
+  async function setPlayer(side, entityId) {
+    try { const r = await api('/api/score/player', { method: 'POST', body: { side, entityId } }); applyState(r.state); ok(entityId ? '选手已更新（叠加预览同步）' : '已清空该侧选手'); }
+    catch (ex) { cmdError(ex, '选择选手'); }
+  }
+
+  async function clearAllPlayers() {
+    try {
+      const r = await api('/api/score/players/clear', { method: 'POST', body: {} });
+      applyState(r.state);
+      ok('已清空选手；1P / 2P 选手条仍保持显示');
+    } catch (ex) { cmdError(ex, '清空选手'); }
+  }
+  async function setTeam(side, teamId) {
+    try { const r = await api('/api/score/team', { method: 'POST', body: { side, teamId } }); applyState(r.state); }
+    catch (ex) { cmdError(ex, '选择队伍'); }
+  }
+  async function setColor(side, color) {
+    try { const r = await api('/api/score/color', { method: 'POST', body: { side, color } }); applyState(r.state); }
+    catch (ex) { cmdError(ex, '设置颜色'); }
+  }
+
+  async function load() {
+    try {
+      const [scoreRes, entRes, teamRes] = await Promise.all([
+        api('/api/score/state'),
+        api('/api/entities?kind=player'),
+        api('/api/entities/teams'),
+      ]);
+      S.players = entRes.items || [];
+      S.teams = teamRes.items || [];
+      applyState(scoreRes.state);
+    } catch (e) { cmdError(e, '读取比分状态'); }
+  }
+
+  arcadeWS.watch('score.state', (v) => { if (v) applyState(v); });
+  // 人物库改动后刷新选手 / 队伍下拉
+  arcadeWS.on('entities:changed', load);
+  load();
+})();
+</script>
+</body>
+</html>

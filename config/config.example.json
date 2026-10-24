@@ -1,0 +1,278 @@
+{
+  "version": 3,
+  "server": {
+    "host": "0.0.0.0",
+    "overlayPort": 3000,
+    "controlPort": 3001,
+    "identity": "",
+    "adminPasswordHash": "scrypt:d49b867dc4dd03514e7f4559a03e9f69:cd66c6e6fb2eb160d205e7f3a10286586e7f695f0b05532db1025c3d110887d69b0ce6e5fce53b5ae4a7458bf6626ac84e18c284d20a28b00d357914ef74af13",
+    "allowPublicOutputs": false
+  },
+  "features": {
+    "replay": false,
+    "vmix": false,
+    "obs": false,
+    "transitions": false
+  },
+  "obs": {
+    "host": "127.0.0.1",
+    "port": 4444,
+    "password": ""
+  },
+  "vmix": {
+    "host": "127.0.0.1",
+    "port": 8088
+  },
+  "scenes": {
+    "live": "LIVE",
+    "replay": "REPLAY",
+    "clean": "CLEAN"
+  },
+  "sources": {
+    "replayNdi": "vMix 回放",
+    "gameAudio": "游戏采集"
+  },
+  "competition": {
+    "mode": "team"
+  },
+  "match": {
+    "pickBaseUrl": "",
+    "publicPickBaseUrl": "",
+    "defaultDifficulty": "master"
+  },
+  "clip": {
+    "defaultLookbackMs": 12000,
+    "minLookbackMs": 1000,
+    "maxLookbackMs": 45000,
+    "stepMs": 500,
+    "presets": [
+      5000,
+      8000,
+      12000,
+      20000,
+      30000,
+      45000
+    ],
+    "defaultOutPointMode": "follow-now",
+    "fixedLengthMs": 8000,
+    "fineTuneFrames": 10,
+    "frameRate": 60,
+    "warnThreshold": 0.8,
+    "markVariant": "ReplayMarkInOut"
+  },
+  "replay": {
+    "channel": "A",
+    "eventList": 1,
+    "speed": 1,
+    "holdFirstFrame": true,
+    "markDelayMs": 200,
+    "transitionTimeoutMs": 2500,
+    "pollIntervalMs": 150,
+    "stableSamples": 3,
+    "slowMotionMute": false,
+    "slowMotionThreshold": 0.95,
+    "reportProgress": true,
+    "progressIntervalMs": 500,
+    "endingThresholdMs": 3000,
+    "preflightCacheMs": 3000,
+    "hwHeartbeatMs": 2000,
+    "vmixTimeoutMs": 4000,
+    "faultTimeoutMs": 4000
+  },
+  "transitions": {
+    "replayEnter": {
+      "transitionName": "REPLAY-IN",
+      "durationMs": 600
+    },
+    "replayExit": {
+      "transitionName": "Cut",
+      "durationMs": 0
+    },
+    "sceneOverrides": {
+      "LIVE": {
+        "transitionName": "Cut",
+        "transitionDuration": 0
+      },
+      "REPLAY": {
+        "transitionName": "REPLAY-IN",
+        "transitionDuration": 600
+      }
+    },
+    "pollOverrideIntervalMs": 60000
+  },
+  "logging": {
+    "level": "info",
+    "retainDays": 30
+  },
+  "render": {
+    "defaultTarget": "main",
+    "canvas": {
+      "width": 1920,
+      "height": 1080
+    },
+    "autoReconnectMs": 1000,
+    "autoReconnectMaxMs": 10000,
+    "keepLastFrameOnDisconnect": true,
+    "preloadImages": true
+  },
+  "templates": {
+    "builtinDir": "./templates/builtin",
+    "customDir": "./templates/custom",
+    "hotReload": true,
+    "validateOnLoad": true
+  },
+  "media": {
+    "dir": "./media",
+    "maxFileSizeMB": 20,
+    "allowedTypes": [
+      "png",
+      "jpg",
+      "jpeg",
+      "webp",
+      "gif"
+    ],
+    "generateThumbnails": true,
+    "thumbnailWidth": 320,
+    "derivatives": [
+      {
+        "name": "1x",
+        "width": 480
+      },
+      {
+        "name": "2x",
+        "width": 960
+      }
+    ],
+    "scanOnBoot": true,
+    "watchDir": true
+  },
+  "entities": {
+    "file": "./data/entities.json",
+    "autoBackup": true
+  },
+  "animations": {
+    "defaultIn": "fadeUp",
+    "defaultOut": "fadeDown",
+    "defaultDurationMs": 400
+  },
+  "credits": {
+    "defaultSpeedPxPerSec": 40,
+    "defaultMode": "loop"
+  },
+  "cue": {
+    "channels": [
+      "director",
+      "cast"
+    ],
+    "maxVisible": {
+      "P0": 1,
+      "P1": 1,
+      "P2": 2,
+      "P3": 5
+    },
+    "defaultTtlMs": {
+      "P0": null,
+      "P1": 8000,
+      "P2": 6000,
+      "P3": null
+    },
+    "sound": {
+      "enabled": true,
+      "volume": 0.7,
+      "blockIfLocked": false
+    },
+    "ack": {
+      "required": [
+        "P0"
+      ],
+      "repeatMs": 5000,
+      "maxRepeats": 6
+    },
+    "history": {
+      "retainHours": 4
+    },
+    "templates": {}
+  },
+  "countdown": {
+    "leadPresetsMs": [
+      60000,
+      30000,
+      15000,
+      10000,
+      5000,
+      3000
+    ],
+    "defaultLeadMs": 15000,
+    "escalation": [
+      {
+        "atMs": 15000,
+        "priority": "P3",
+        "sound": "none"
+      },
+      {
+        "atMs": 10000,
+        "priority": "P2",
+        "sound": "none"
+      },
+      {
+        "atMs": 5000,
+        "priority": "P1",
+        "sound": "beep"
+      },
+      {
+        "atMs": 3000,
+        "priority": "P0",
+        "sound": "triple"
+      }
+    ],
+    "tickAdaptive": true,
+    "autoExecuteDefault": false,
+    "allowAutoExecute": false
+  },
+  "orchestration": {
+    "enable": true,
+    "preflightOnStart": true,
+    "dryRun": false
+  },
+  "lottery": {
+    "joinBaseUrl": "",
+    "publicJoinUrl": "",
+    "spinMs": 2800,
+    "relayUrl": "",
+    "relayToken": "",
+    "relayPollMs": 15000
+  },
+  "integration": {
+    "replayEndingThresholdMs": 3000,
+    "autoCueOnAirStart": true,
+    "autoCueOnAirEnding": true,
+    "autoCueOnAirEnded": true,
+    "autoCueOnError": true
+  },
+  "obsEvents": {
+    "subscribe": [
+      "SceneTransitionStarted",
+      "SceneTransitionEnded",
+      "CurrentProgramSceneChanged",
+      "InputMuteStateChanged"
+    ],
+    "transitionAlerts": [
+      {
+        "scene": "REPLAY",
+        "title": "进入回放",
+        "priority": "P1",
+        "sound": "beep",
+        "durationMs": 8000,
+        "requiresAck": false
+      },
+      {
+        "scene": "LIVE",
+        "title": "已回直播",
+        "priority": "P2",
+        "sound": "none",
+        "durationMs": 6000,
+        "requiresAck": false
+      }
+    ]
+  }
+}

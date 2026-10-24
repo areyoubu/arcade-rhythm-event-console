@@ -1,0 +1,622 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抽奖 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .lottery-stage { width: 100%; aspect-ratio: 16 / 9; border: 0; display: block; background: #0b0b0c; border-radius: var(--radius); }
+  .draw-btn { min-height: 64px; font-size: 20px; font-weight: 800; letter-spacing: 2px; }
+
+  .pool-list { max-height: 340px; overflow-y: auto; overscroll-behavior: contain; }
+  .pool-row { display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .pool-row:last-child { border-bottom: none; }
+  .pool-row .nm { font-weight: 700; }
+  .pool-row .tm { color: var(--text-mute); font-size: 11.5px; }
+  .pool-row .grow { flex: 1; min-width: 0; }
+
+  .guest-mini { max-height: 320px; overflow-y: auto; overscroll-behavior: contain; }
+  .guest-mini-row { display: flex; align-items: center; gap: 8px; padding: 6px 2px; border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .guest-mini-row:last-child { border-bottom: none; }
+  .guest-mini-row .tk { font-family: var(--mono); color: var(--text-mute); width: 52px; flex: 0 0 auto; font-size: 11.5px; }
+  .guest-mini-row .who { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+  .guest-mini-row .nmline { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .guest-mini-row .nm { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .guest-mini-row .win { color: var(--gold, #d9a441); font-size: 10.5px; flex: 0 0 auto; }
+  .guest-mini-row .meta { color: var(--text-mute); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .guest-mini-row .btn { min-height: 24px; padding: 1px 7px; font-size: 11px; }
+
+  .prize-box { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+  .prize-preview {
+    width: 260px; height: 158px; flex: 0 0 auto;
+    border: 1px solid var(--border); border-radius: 6px; background: #111214;
+    display: flex; align-items: center; justify-content: center; overflow: hidden;
+  }
+  .prize-preview img { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  .prize-preview .empty { color: var(--text-dim); font-size: 12px; letter-spacing: 1px; }
+  .prize-info { flex: 1; min-width: 220px; }
+  .prize-name-preview { font-size: 22px; font-weight: 800; line-height: 1.2; }
+  .prize-note-preview { margin-top: 5px; font-size: 12px; color: var(--text-mute); }
+  .prize-note-preview:empty { display: none; }
+  .prize-upload-preview { max-width: 100%; max-height: 180px; object-fit: contain; display: block; margin-top: 8px; border-radius: 4px; background: #0d0d0d; }
+  .prize-upload-preview.hidden { display: none; }
+
+  .qr-box { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  .qr-img { width: 210px; height: 210px; background: #fff; border-radius: 6px; padding: 8px; flex: 0 0 auto; }
+  .qr-meta { min-width: 220px; flex: 1; }
+  .qr-url { word-break: break-all; font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); background: #17181b; border: 1px solid var(--border); border-radius: 3px; padding: 6px 8px; }
+
+  .win-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+  .win-row:last-child { border-bottom: none; }
+  .win-row .idx { font-family: var(--mono); color: var(--gold, #d9a441); font-weight: 700; width: 34px; flex: 0 0 auto; }
+  .win-row .nm { font-weight: 700; }
+  .win-row .tm { color: var(--text-mute); font-size: 11.5px; }
+
+  .kind-row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .kind-row .check { padding: 2px 0; }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, clear, api, ok, err, warn, cmdError, withBusy, mount, modal, guestEditor, deleteGuest } = ui;
+
+  const page = mount({
+    current: '/lottery',
+    title: '抽奖',
+    subtitle: '现场扫码签到 · 按类型/标签组建抽奖池 · 大屏动画由 /render/lottery 提供',
+  });
+
+  const S = { state: null, search: '', join: null, guestQ: '' };
+
+  // ═══════════════════ 抽奖台 ═══════════════════
+  const phasePill = el('span', { class: 'pill mute', text: '待机' });
+  const poolPill = el('span', { class: 'pill mute', text: '池子 0' });
+  const preview = el('iframe', {
+    class: 'lottery-stage', src: '/render/lottery?preview=1&fit=1',
+    title: '抽奖大屏预览', loading: 'lazy',
+  });
+  const drawBtn = el('button', { class: 'btn primary block draw-btn', text: '开始抽奖', disabled: true });
+  const resetRoundBtn = el('button', { class: 'btn ghost sm', text: '重置本轮画面' });
+  const resetAllBtn = el('button', { class: 'btn danger sm', text: '清空中奖记录' });
+  const winnerNote = el('div', { class: 'small dim mt8' });
+
+  // 不用 withBusy：按钮的禁用/文案由抽奖状态驱动，忙碌动画会把它覆盖回去
+  drawBtn.onclick = () => draw();
+  resetRoundBtn.onclick = () => reset('round');
+  resetAllBtn.onclick = async () => {
+    if (!(await ui.confirm({ title: '清空中奖记录', message: '清空所有中奖记录与抽奖历史？签到名单不会受影响。', danger: true, confirmText: '清空' }))) return;
+    reset('all');
+  };
+
+  const stageCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '抽奖台' }), phasePill, poolPill,
+      el('span', { class: 'spacer' }),
+      el('button', {
+        class: 'btn ghost sm', text: '打开大屏窗口',
+        title: '在新窗口打开 /render/lottery（可拖到副屏）',
+        onclick: () => window.open('/render/lottery?window=1', 'lotteryDisplay', 'width=1280,height=720'),
+      }),
+    ),
+    el('div', { class: 'body' },
+      preview,
+      el('div', { class: 'btn-row mt12' }, drawBtn),
+      winnerNote,
+      el('div', { class: 'btn-row mt12' }, resetRoundBtn, resetAllBtn,
+        el('span', { class: 'small muted', text: '重置画面不会清掉中奖记录' })),
+    ),
+  );
+
+  // ═══════════════════ 现场签到 ═══════════════════
+  const qrImg = el('img', { class: 'qr-img', alt: '签到二维码' });
+  const qrUrl = el('div', { class: 'qr-url', text: '读取中…' });
+  const qrNote = el('div');
+  const guestPill = el('span', { class: 'pill mute', text: '签到 0' });
+  const importBtn = el('button', { class: 'btn sm', text: '导入在线表格' });
+  const clearGuestsBtn = el('button', { class: 'btn ghost sm', text: '清空签到池' });
+  const copyJoinBtn = el('button', { class: 'btn sm', text: '复制链接' });
+  const refreshQrBtn = el('button', { class: 'btn ghost sm', text: '刷新二维码' });
+
+  copyJoinBtn.onclick = () => {
+    const url = S.join?.url || qrUrl.textContent;
+    copyText(url);
+  };
+  refreshQrBtn.onclick = () => loadJoin(true);
+  importBtn.onclick = openImport;
+  clearGuestsBtn.onclick = async () => {
+    if (!(await ui.confirm({ title: '清空签到池', message: '删除所有扫码签到的人？中奖记录不受影响。', danger: true, confirmText: '清空' }))) return;
+    try { const r = await api('/api/lottery/guests/clear', { method: 'POST', body: {} }); applyState(r.state); ok('签到池已清空'); }
+    catch (ex) { cmdError(ex, '清空签到池'); }
+  };
+
+  const joinCard = el('section', { class: 'card' },
+    el('header', null, el('span', { text: '现场签到' }), guestPill, el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '手机扫码加入抽奖池' })),
+    el('div', { class: 'body' },
+      el('div', { class: 'qr-box' },
+        qrImg,
+        el('div', { class: 'qr-meta' },
+          qrUrl,
+          el('div', { class: 'btn-row mt8' }, copyJoinBtn, refreshQrBtn),
+          qrNote,
+        ),
+      ),
+      el('div', { class: 'btn-row mt12' }, importBtn, clearGuestsBtn,
+        el('a', { class: 'btn ghost sm', href: '/guests', text: '管理签到名单' })),
+      el('div', { class: 'note info mt12', text: '在线表格收集：把导出的 CSV 内容点「导入在线表格」粘贴进来；或在设置 → 抽奖里配置「第三方中继 URL」，由服务端定时拉取。' }),
+    ),
+  );
+
+  // ═══════════════════ 签到名单管理 ═══════════════════
+  const GUEST_SOURCE_LABEL = { join: '扫码', import: '导入', manual: '手动', relay: '中继' };
+  const guestSearch = el('input', { type: 'search', placeholder: '搜索姓名 / 昵称 / 队伍 / 编号…' });
+  const guestMini = el('div', { class: 'guest-mini' });
+  const guestCount = el('span', { class: 'small muted' });
+  const addGuestBtn = el('button', { class: 'btn sm', text: '添加人员' });
+
+  guestSearch.oninput = () => { S.guestQ = guestSearch.value; renderGuests(); };
+  addGuestBtn.onclick = () => guestEditor(null, { onSaved: (r) => applyState(r.state) });
+
+  const guestCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '签到名单' }), guestCount, el('span', { class: 'spacer' }),
+      el('a', { class: 'btn ghost sm', href: '/guests', text: '完整管理 / 导出' })),
+    el('div', { class: 'body' },
+      el('div', { class: 'inline' }, guestSearch, addGuestBtn),
+      guestMini,
+      el('div', { class: 'note info mt12', text: '扫码进来的人可以直接在这里改名 / 改队伍 / 删除；重复提交会按「姓名 + 昵称」去重。' }),
+    ),
+  );
+
+  // ═══════════════════ 本轮奖品 ═══════════════════
+  const prizePreview = el('div', { class: 'prize-preview' });
+  const prizeNamePreview = el('div', { class: 'prize-name-preview', text: '未设置奖品' });
+  const prizeNotePreview = el('div', { class: 'prize-note-preview' });
+  const prizeMetaPreview = el('div', { class: 'prize-note-preview' });
+  const editPrizeBtn = el('button', { class: 'btn sm', text: '编辑奖品' });
+  const clearPrizeBtn = el('button', { class: 'btn ghost sm', text: '清除奖品' });
+  const openPrizeBtn = el('button', { class: 'btn ghost sm', text: '打开奖品大屏' });
+
+  editPrizeBtn.onclick = openPrizeEditor;
+  openPrizeBtn.onclick = () => window.open('/render/prize?window=1', 'prizeDisplay', 'width=1280,height=720');
+  clearPrizeBtn.onclick = async () => {
+    if (!(await ui.confirm({ title: '清除奖品', message: '奖品大屏会恢复成「奖品待公布」。', danger: true, confirmText: '清除' }))) return;
+    try {
+      const r = await api('/api/lottery/settings', { method: 'POST', body: { prize: { name: '', image: '', note: '' } } });
+      applyState(r.state);
+      ok('奖品已清除');
+    } catch (ex) { cmdError(ex, '清除奖品'); }
+  };
+
+  const prizeCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '本轮奖品' }),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '奖品大屏：整屏场景 · 复用动态背景' })),
+    el('div', { class: 'body' },
+      el('div', { class: 'prize-box' },
+        prizePreview,
+        el('div', { class: 'prize-info' },
+          prizeNamePreview,
+          prizeNotePreview,
+          prizeMetaPreview,
+          el('div', { class: 'btn-row mt12' }, editPrizeBtn, openPrizeBtn, clearPrizeBtn),
+        ),
+      ),
+      el('div', { class: 'note info mt12', text: '图片完整显示（contain），背后用同图模糊铺满屏幕；名称以大号字体居中展示。抽奖中 / 揭晓后奖品大屏会同步更新。' }),
+    ),
+  );
+
+  let lastPrizeKey = '';
+  function renderPrize() {
+    const p = S.state?.settings?.prize || {};
+    const meta = p.meta || {};
+    const key = `${p.name || ''}|${p.image || ''}|${p.note || ''}|${meta.at || 0}|${meta.ip || ''}`;
+    if (key === lastPrizeKey) return;
+    lastPrizeKey = key;
+    clear(prizePreview);
+    if (p.image) {
+      prizePreview.append(el('img', { src: p.image, alt: '', onerror: () => { clear(prizePreview); prizePreview.append(el('span', { class: 'empty', text: '图片无法加载' })); } }));
+    } else {
+      prizePreview.append(el('span', { class: 'empty', text: '暂无图片' }));
+    }
+    prizeNamePreview.textContent = p.name || '未设置奖品';
+    prizeNotePreview.textContent = p.note || '';
+    prizeMetaPreview.textContent = meta.at
+      ? `上传：${fmt.datetime(meta.at)} · IP ${meta.ip || '—'}`
+      : '';
+  }
+
+  function openPrizeEditor() {
+    const cur = S.state?.settings?.prize || {};
+    let image = String(cur.image || '');
+    let imageMeta = cur.meta && cur.meta.at ? { ...cur.meta } : null;
+
+    const nameIn = el('input', { type: 'text', maxLength: 80, value: cur.name || '', placeholder: '奖品名称（会以大号字体显示）' });
+    const noteIn = el('input', { type: 'text', maxLength: 160, value: cur.note || '', placeholder: '副标题 / 规格（可选）' });
+    const imageIn = el('input', { type: 'text', maxLength: 800, value: image, placeholder: '/media/… 或 https://…' });
+    const preview = el('img', { class: 'prize-upload-preview' + (image ? '' : ' hidden'), alt: '' });
+    if (image) preview.src = image;
+
+    const fileInput = el('input', {
+      type: 'file',
+      accept: 'image/png,image/jpeg,image/webp,image/gif',
+      class: 'hidden',
+    });
+    const uploadBtn = el('button', { class: 'btn sm', text: '上传图片' });
+    const uploadNote = el('span', { class: 'small muted' });
+    if (imageMeta) uploadNote.textContent = `上传：${fmt.datetime(imageMeta.at)} · IP ${imageMeta.ip || '—'}`;
+
+    function setImage(next, meta = null) {
+      image = next || '';
+      imageMeta = image ? meta : null;
+      imageIn.value = image;
+      if (image) {
+        preview.src = image;
+        preview.classList.remove('hidden');
+      } else {
+        preview.removeAttribute('src');
+        preview.classList.add('hidden');
+      }
+    }
+
+    imageIn.oninput = () => {
+      setImage(imageIn.value.trim());
+      uploadNote.textContent = '手工填写的地址没有上传 IP / 时间记录';
+    };
+    uploadBtn.onclick = () => fileInput.click();
+    fileInput.onchange = async () => {
+      const file = fileInput.files?.[0];
+      fileInput.value = '';
+      if (!file) return;
+      if (!/^image\/(png|jpeg|webp|gif)$/i.test(file.type || '')) {
+        uploadNote.textContent = '只允许 PNG / JPG / WebP / GIF';
+        return;
+      }
+      uploadNote.textContent = '上传中…';
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const { res, data } = await ui.uploadFetch('/api/lottery/prize/image', fd);
+        if (!res.ok || data.ok === false) {
+          throw new Error(data.nack?.msg || data.errors?.file || `上传失败（HTTP ${res.status}）`);
+        }
+        const asset = data.asset || {};
+        setImage(asset.url, data.meta || {});
+        const size = asset.width && asset.height ? `${asset.width}×${asset.height} · ` : '';
+        uploadNote.textContent = `已上传：${size}IP ${data.meta?.ip || '—'} · ${fmt.datetime(data.meta?.at)}`;
+      } catch (e) {
+        uploadNote.textContent = e.message;
+        err(e.message, { title: '图片上传失败' });
+      }
+    };
+
+    const m = modal({
+      title: '编辑本轮奖品',
+      wide: true,
+      body: el('div', { class: 'editor-grid' },
+        el('div', { class: 'field' }, el('label', { text: '奖品名称' }), nameIn),
+        el('div', { class: 'field' }, el('label', { text: '副标题 / 规格' }), noteIn),
+        el('div', { class: 'field' },
+          el('label', { text: '奖品图片' }),
+          el('div', { class: 'inline' }, imageIn, uploadBtn),
+          el('div', { class: 'btn-row mt8' }, uploadNote),
+          preview,
+          fileInput,
+        ),
+        el('div', { class: 'small muted', text: '每次只允许上传一张 PNG / JPG / WebP / GIF；服务端会按文件内容校验，扩展名与实际类型不一致会被拒绝，SVG / 脚本一律不收。上传成功后会记录来源 IP 和时间。' }),
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', text: '保存奖品',
+          onclick: (e) => withBusy(e.target, async () => {
+            try {
+              const r = await api('/api/lottery/settings', {
+                method: 'POST',
+                body: { prize: { name: nameIn.value, image, note: noteIn.value, meta: imageMeta || {} } },
+              });
+              m.close();
+              applyState(r.state);
+              ok('奖品已更新，奖品大屏会同步刷新');
+            } catch (ex) { cmdError(ex, '保存奖品'); }
+          }),
+        }),
+      ],
+    });
+    setTimeout(() => nameIn.focus(), 40);
+  }
+
+  // ═══════════════════ 抽奖池 ═══════════════════
+  const KIND_LABEL = { player: '选手', talent: '解说/导播/主持', sponsor: '赞助商', team: '队伍', guest: '签到' };
+  const SOURCE_LABEL = { entity: '实体', guest: '签到', relay: '中继', import: '导入', manual: '手动' };
+
+  const kindChecks = {};
+  const kindRow = el('div', { class: 'kind-row' },
+    ['player', 'talent', 'sponsor', 'team'].map((k) => {
+      const cb = el('input', { type: 'checkbox' });
+      kindChecks[k] = cb;
+      cb.onchange = saveSettings;
+      return el('label', { class: 'check' }, cb, el('span', { class: 'label', text: KIND_LABEL[k] }));
+    }),
+  );
+
+  const tagsInput = el('input', { type: 'text', placeholder: '按标签过滤，逗号分隔（留空=全部）' });
+  const applyTagsBtn = el('button', { class: 'btn sm', text: '应用标签' });
+  const includeGuestsChk = el('input', { type: 'checkbox' });
+  const removeWinnersChk = el('input', { type: 'checkbox' });
+  const poolSearch = el('input', { type: 'search', placeholder: '搜索抽奖池…' });
+  const poolList = el('div', { class: 'pool-list' });
+  const poolCountText = el('span', { class: 'small muted' });
+
+  includeGuestsChk.onchange = saveSettings;
+  removeWinnersChk.onchange = saveSettings;
+  applyTagsBtn.onclick = saveSettings;
+  poolSearch.oninput = () => { S.search = poolSearch.value; renderPool(); };
+
+  function saveSettings() {
+    const kinds = Object.entries(kindChecks).filter(([, cb]) => cb.checked).map(([k]) => k);
+    const tags = tagsInput.value.split(/[,，]/).map((t) => t.trim()).filter(Boolean);
+    return api('/api/lottery/settings', {
+      method: 'POST',
+      body: { kinds, tags, includeGuests: includeGuestsChk.checked, removeWinners: removeWinnersChk.checked },
+    }).then((r) => applyState(r.state)).catch((ex) => cmdError(ex, '保存抽奖设置'));
+  }
+
+  const poolCard = el('section', { class: 'card' },
+    el('header', null, el('span', { text: '抽奖池' }), poolCountText, el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '勾选类型 / 标签，或让现场扫码加入' })),
+    el('div', { class: 'body' },
+      kindRow,
+      el('div', { class: 'inline mt12' }, tagsInput, applyTagsBtn),
+      el('div', { class: 'inline mt8' },
+        el('label', { class: 'check' }, includeGuestsChk, el('span', { class: 'label', text: '包含现场签到' })),
+        el('label', { class: 'check' }, removeWinnersChk, el('span', { class: 'label', text: '中奖后移出池子' })),
+      ),
+      el('div', { class: 'mt12' }, poolSearch),
+      poolList,
+    ),
+  );
+
+  // ═══════════════════ 中奖记录 ═══════════════════
+  const winList = el('div');
+  const winCard = el('section', { class: 'card' },
+    el('header', null, el('span', { text: '中奖记录' }), el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '最近 100 位' })),
+    el('div', { class: 'body' }, winList),
+  );
+
+  page.append(el('div', { class: 'cols two' },
+    el('div', { class: 'cols' }, stageCard, prizeCard),
+    el('div', { class: 'cols' }, joinCard, guestCard, winCard)));
+  page.append(poolCard);
+
+  // ═══════════════════ 交互 ═══════════════════
+  async function draw() {
+    if (S.state?.phase === 'spinning') return;
+    try {
+      const r = await api('/api/lottery/draw', { method: 'POST', body: {} });
+      applyState(r.state);
+    } catch (ex) { cmdError(ex, '抽奖'); }
+  }
+
+  async function reset(scope) {
+    try {
+      const r = await api('/api/lottery/reset', { method: 'POST', body: { scope } });
+      applyState(r.state);
+      ok(scope === 'all' ? '中奖记录已清空' : '已重置本轮画面');
+    } catch (ex) { cmdError(ex, '重置抽奖'); }
+  }
+
+  function copyText(text) {
+    (async () => {
+      try { await navigator.clipboard.writeText(text); ok('已复制签到链接'); }
+      catch {
+        const ta = el('textarea', { style: { position: 'fixed', left: '-9999px' } });
+        ta.value = text; document.body.append(ta); ta.select();
+        try { document.execCommand('copy'); ok('已复制签到链接'); } catch { warn('复制失败，请手动复制'); }
+        ta.remove();
+      }
+    })();
+  }
+
+  function openImport() {
+    const ta = el('textarea', { rows: '10', placeholder: '姓名,队伍,昵称\n张三,红队,小张\n李四,蓝队,' });
+    const m = ui.modal({
+      title: '导入在线表格',
+      wide: true,
+      body: el('div', null,
+        el('div', { class: 'note info mb12', text: '从腾讯文档 / 金山文档 / 问卷星等导出 CSV，或直接复制「姓名 / 队伍 / 昵称」几列粘贴进来。首行含「姓名」会自动当表头跳过；同一个人重复导入会被忽略。' }),
+        ta,
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+        el('button', { class: 'btn primary', text: '导入', onclick: (e) => withBusy(e.target, async () => {
+          try {
+            const r = await api('/api/lottery/import', { method: 'POST', body: { text: ta.value } });
+            m.close();
+            ok(`导入完成：新增 ${r.added} 人，跳过 ${r.skipped} 行`);
+            const st = await api('/api/lottery/state');
+            applyState(st.state);
+          } catch (ex) { cmdError(ex, '导入签到'); }
+        }) }),
+      ],
+    });
+    setTimeout(() => ta.focus(), 40);
+  }
+
+  // ═══════════════════ 渲染 ═══════════════════
+  function guestWinnerIds() {
+    return new Set((S.state?.winners || []).map((w) => w.id));
+  }
+
+  function renderGuests() {
+    const s = S.state;
+    if (!s) return;
+    const q = S.guestQ.trim().toLowerCase();
+    const all = (s.guests || []).slice().sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+    guestCount.textContent = all.length ? `${all.length} 人` : '';
+
+    const list = all.filter((g) => {
+      if (!q) return true;
+      return `${g.name || ''} ${g.handle || ''} ${g.team || ''} #${g.ticket || ''}`.toLowerCase().includes(q);
+    });
+
+    clear(guestMini);
+    if (!all.length) {
+      guestMini.append(el('div', { class: 'dim small', style: { padding: '14px 4px' }, text: '还没有人扫码签到。把二维码放到现场，或点「添加人员」手动加入。' }));
+      return;
+    }
+    if (!list.length) {
+      guestMini.append(el('div', { class: 'dim small', style: { padding: '14px 4px' }, text: '没有匹配的签到记录' }));
+      return;
+    }
+
+    const wins = guestWinnerIds();
+    const LIMIT = 120;
+    for (const g of list.slice(0, LIMIT)) {
+      const isWinner = wins.has(g.id);
+      const meta = [
+        g.team,
+        g.handle ? `@${g.handle}` : '',
+        GUEST_SOURCE_LABEL[g.source] || g.source || '',
+      ].filter(Boolean).join(' · ');
+
+      guestMini.append(el('div', { class: 'guest-mini-row' },
+        el('span', { class: 'tk', text: `#${String(g.ticket || '?').padStart(4, '0')}` }),
+        el('span', { class: 'who' },
+          el('span', { class: 'nmline' },
+            el('span', { class: 'nm', text: g.name || '（未命名）' }),
+            isWinner ? el('span', { class: 'win', text: '已中奖' }) : null,
+          ),
+          el('span', { class: 'meta', text: meta }),
+        ),
+        el('button', {
+          class: 'btn ghost', text: '编辑',
+          onclick: () => guestEditor(g, {
+            sourceLabels: GUEST_SOURCE_LABEL,
+            onSaved: (r) => applyState(r.state),
+          }),
+        }),
+        el('button', {
+          class: 'btn ghost', text: '删除',
+          onclick: () => deleteGuest(g, {
+            isWinner,
+            onDeleted: (r) => applyState(r.state),
+          }),
+        }),
+      ));
+    }
+
+    if (list.length > LIMIT) {
+      guestMini.append(el('div', { class: 'small muted', style: { padding: '8px 4px' }, text: `还有 ${list.length - LIMIT} 人，去「完整管理」里查看` }));
+    }
+  }
+
+  function renderPool() {
+    const s = S.state;
+    if (!s) return;
+    const q = S.search.trim().toLowerCase();
+    const items = (s.pool || []).filter((c) => {
+      if (!q) return true;
+      return `${c.name} ${c.team || ''} ${c.kind || ''}`.toLowerCase().includes(q);
+    });
+    clear(poolList);
+    if (!items.length) {
+      poolList.append(el('div', { class: 'dim small', style: { padding: '12px' }, text: '抽奖池是空的：勾选类型、让人扫码，或导入表格' }));
+      return;
+    }
+    for (const c of items) {
+      poolList.append(el('div', { class: 'pool-row' },
+        el('span', { class: 'tag', text: KIND_LABEL[c.kind] || c.kind }),
+        el('span', { class: 'nm', text: c.name }),
+        el('span', { class: 'tm', text: c.team || '' }),
+        el('span', { class: 'grow' }),
+        el('span', { class: 'tiny muted', text: SOURCE_LABEL[c.source] || c.source }),
+      ));
+    }
+    if (s.poolTruncated) {
+      poolList.append(el('div', { class: 'small muted', style: { padding: '8px' }, text: `仅显示前 ${items.length} 人（池子共 ${s.poolSize} 人）` }));
+    }
+  }
+
+  function renderWinners() {
+    const s = S.state;
+    clear(winList);
+    const rows = (s?.winners || []).slice().reverse();
+    if (!rows.length) {
+      winList.append(el('div', { class: 'dim small', text: '还没有中奖记录。' }));
+      return;
+    }
+    for (const w of rows) {
+      winList.append(el('div', { class: 'win-row' },
+        el('span', { class: 'idx', text: `#${w.index}` }),
+        el('span', { class: 'nm', text: w.name }),
+        el('span', { class: 'tm', text: w.team || '' }),
+        el('span', { class: 'grow' }),
+        el('span', { class: 'tiny muted', text: fmt.clock(w.at) }),
+      ));
+    }
+  }
+
+  function applyState(s) {
+    if (!s) return;
+    S.state = s;
+
+    phasePill.className = `pill ${s.phase === 'spinning' ? 'warn' : s.phase === 'revealed' ? 'ok' : 'mute'}`;
+    phasePill.textContent = s.phase === 'spinning' ? '抽奖中…' : s.phase === 'revealed' ? '已揭晓' : '待机';
+    poolPill.textContent = `池子 ${s.poolSize}`;
+    guestPill.textContent = `签到 ${s.guests?.length || 0}`;
+    poolCountText.textContent = `${s.poolSize} 人可抽`;
+
+    drawBtn.disabled = s.phase === 'spinning' || s.poolSize === 0;
+    drawBtn.textContent = s.phase === 'spinning' ? '抽奖中…' : s.phase === 'revealed' ? '再抽一次' : '开始抽奖';
+
+    winnerNote.textContent = s.phase === 'revealed' && s.winner
+      ? `本轮抽中：${s.winner.name}${s.winner.team ? ' · ' + s.winner.team : ''}（第 ${s.winner.index} 位）`
+      : '';
+
+    const set = s.settings || {};
+    for (const [k, cb] of Object.entries(kindChecks)) cb.checked = (set.kinds || []).includes(k);
+    if (document.activeElement !== tagsInput) tagsInput.value = (set.tags || []).join(', ');
+    includeGuestsChk.checked = set.includeGuests !== false;
+    removeWinnersChk.checked = set.removeWinners !== false;
+
+    renderPrize();
+    renderGuests();
+    renderPool();
+    renderWinners();
+  }
+
+  async function loadJoin(bust = false) {
+    try {
+      const info = await api(`/api/lottery/joinUrl?origin=${encodeURIComponent(location.origin)}`);
+      S.join = info;
+      qrUrl.textContent = info.url;
+      qrImg.src = `/api/lottery/qr?size=512&origin=${encodeURIComponent(location.origin)}&t=${Date.now()}`;
+      clear(qrNote);
+      if (info.warning) qrNote.append(el('div', { class: 'note warn mt8', text: info.warning }));
+      if (bust) ok('二维码已刷新');
+    } catch (e) { qrUrl.textContent = '二维码生成失败'; cmdError(e, '读取签到地址'); }
+  }
+
+  async function load() {
+    try {
+      const r = await api('/api/lottery/state');
+      applyState(r.state);
+      await loadJoin();
+    } catch (e) { cmdError(e, '读取抽奖状态'); }
+  }
+
+  arcadeWS.watch('lottery.state', (v) => { if (v) applyState(v); });
+  load();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+{
+  "id": "talentTwin",
+  "name": "双人解说名牌",
+  "category": "talent",
+  "family": "talentTwin",
+  "style": "broadcast",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "aName",
+      "label": "解说 A 姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 20,
+      "entitySource": "talent"
+    },
+    {
+      "key": "aAvatar",
+      "label": "解说 A 头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "talent"
+    },
+    {
+      "key": "aRole",
+      "label": "解说 A 角色",
+      "type": "text",
+      "required": false,
+      "maxLength": 12,
+      "placeholder": "解说"
+    },
+    {
+      "key": "bName",
+      "label": "解说 B 姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 20,
+      "entitySource": "talent"
+    },
+    {
+      "key": "bAvatar",
+      "label": "解说 B 头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "talent"
+    },
+    {
+      "key": "bRole",
+      "label": "解说 B 角色",
+      "type": "text",
+      "required": false,
+      "maxLength": 12,
+      "placeholder": "解说"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#d9d9d9"
+    }
+  ],
+  "defaultAnim": {
+    "in": "slideUp",
+    "out": "fadeOut",
+    "durationMs": 420
+  },
+  "cssVars": {
+    "--tt-accent": "#d9d9d9",
+    "--tt-name-size": "36px",
+    "--tt-role-size": "15px",
+    "--tt-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--tt-avatar-size": "84px",
+    "--tt-gap": "18px"
+  },
+  "html": "<div class=\"tt-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--tt-accent\">\n  <div class=\"tt-card\">\n    <div class=\"tt-avatar\"><img data-slot=\"aAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"tt-fallback\">A</span></div>\n    <div class=\"tt-meta\">\n      <div class=\"tt-role\" data-slot=\"aRole\"></div>\n      <div class=\"tt-name\" data-slot=\"aName\"></div>\n    </div>\n  </div>\n  <div class=\"tt-card\">\n    <div class=\"tt-avatar\"><img data-slot=\"bAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"tt-fallback\">B</span></div>\n    <div class=\"tt-meta\">\n      <div class=\"tt-role\" data-slot=\"bRole\"></div>\n      <div class=\"tt-name\" data-slot=\"bName\"></div>\n    </div>\n  </div>\n</div>",
+  "css": ".tt-root{position:absolute;left:50%;bottom:64px;transform:translateX(-50%);display:flex;align-items:center;gap:var(--tt-gap);font-family:var(--tt-font);}\n.tt-card{display:flex;align-items:center;gap:16px;background:linear-gradient(180deg,rgba(16,16,16,.95),rgba(12,12,12,.88));border:1px solid #2e2e2e;border-bottom:3px solid var(--tt-accent);border-radius:10px;padding:14px 34px 14px 16px;min-width:320px;box-shadow:0 6px 20px rgba(0,0,0,.35);}\n.tt-avatar{width:var(--tt-avatar-size);height:var(--tt-avatar-size);overflow:hidden;background:#0d0d0d;border:1px solid rgba(255,255,255,.18);border-radius:50%;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}\n.tt-avatar img{width:100%;height:100%;object-fit:cover;display:none;}\n.tt-avatar img.is-ready{display:block;}\n.tt-fallback{color:#6a6a6a;font-size:30px;font-weight:700;}\n.tt-avatar:has(img.is-ready) .tt-fallback{display:none;}\n.tt-meta{display:flex;flex-direction:column;gap:4px;min-width:0;}\n.tt-role{display:flex;align-items:center;gap:8px;font-size:var(--tt-role-size);font-weight:600;color:var(--tt-accent);letter-spacing:2.5px;line-height:1;}\n.tt-role:before{content:'';width:14px;height:2px;background:var(--tt-accent);flex:0 0 auto;}\n.tt-role:empty{display:none;}\n.tt-name{font-size:var(--tt-name-size);font-weight:700;color:#f2f2f2;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}"
+}

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>抽奖 · 街机音游赛事控制软件</title>
+<!--
+  抽奖大屏（OBS 浏览器源，透明背景）。
+
+  · 待机：什么都不画（保持透明）
+  · 抽奖中：名字高速滚动
+  · 揭晓：中奖卡 + 彩带
+
+  URL：?preview=1 棋盘格 / ?fit=1 等比缩放 / ?window=1 深色底（独立窗口）
+-->
+<style>
+  :root {
+    --gold: #d9a441;
+    --ink: #ffffff;
+    --dim: #a8a8a8;
+    --mute: #6f6f6f;
+    --card: rgba(10, 10, 12, .93);
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    background: transparent !important; overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body.preview { background: repeating-conic-gradient(#191a1d 0% 25%, #121316 0% 50%) 50% / 32px 32px !important; }
+  body.windowed { background: #0b0b0c !important; }
+
+  #stage {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  #stage .idleHint {
+    display: none;
+    font-family: var(--mono); font-size: 14px; letter-spacing: 3px; color: #4a4e56;
+  }
+  /* 只在控制台预览的待机画面显示提示；OBS 里待机保持完全透明 */
+  body.preview #stage.empty .idleHint { display: block; }
+
+  .card {
+    min-width: 980px; padding: 56px 90px 52px;
+    background: var(--card);
+    border: 1px solid #33343a;
+    border-top: 6px solid var(--gold);
+    border-radius: 12px;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, .6);
+    text-align: center;
+    box-sizing: border-box;
+  }
+  .hidden { display: none !important; }
+
+  .eyebrow {
+    font-family: var(--mono); font-size: 22px; font-weight: 700;
+    letter-spacing: 10px; color: var(--gold);
+  }
+  .spinName {
+    margin-top: 26px;
+    font-size: 128px; font-weight: 900; line-height: 1.05;
+    color: var(--ink);
+    letter-spacing: 2px;
+    white-space: nowrap;
+    text-shadow: 0 6px 30px rgba(0, 0, 0, .6);
+  }
+  .hintline {
+    margin-top: 26px;
+    font-family: var(--mono); font-size: 15px; letter-spacing: 4px; color: var(--mute);
+  }
+
+  .winRow {
+    display: flex; align-items: center; justify-content: center;
+    gap: 44px; margin-top: 30px;
+  }
+  .winAvatar {
+    width: 190px; height: 190px; flex: 0 0 auto;
+    border: 3px solid var(--gold); border-radius: 50%;
+    background: #15161a; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .winAvatar img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .winAvatar img.is-ready { display: block; }
+  .winAvatar .fb { font-size: 64px; font-weight: 800; color: var(--gold); }
+  .winAvatar img.is-ready + .fb { display: none; }
+  .winMeta { text-align: left; min-width: 0; }
+  .winName {
+    font-size: 96px; font-weight: 900; line-height: 1.05; color: var(--ink);
+    max-width: 1100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .winTeam { margin-top: 10px; font-size: 34px; color: var(--dim); letter-spacing: 1px; }
+  .winTeam:empty { display: none; }
+
+  #confetti {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<div id="stage" class="empty">
+  <div id="spinCard" class="card hidden">
+    <div class="eyebrow">抽奖中</div>
+    <div class="spinName" id="spinName">？？？</div>
+    <div class="hintline">LOTTERY · GOOD LUCK</div>
+  </div>
+
+  <div id="winCard" class="card hidden">
+    <div class="eyebrow">恭喜 · 第 <span id="winIndex">1</span> 位</div>
+    <div class="winRow">
+      <div class="winAvatar"><img id="winAvatar" alt="" /><span class="fb" id="winFb">?</span></div>
+      <div class="winMeta">
+        <div class="winName" id="winName"></div>
+        <div class="winTeam" id="winTeam"></div>
+      </div>
+    </div>
+    <div class="hintline">CONGRATULATIONS</div>
+  </div>
+
+  <div class="idleHint">LOTTERY · STANDBY</div>
+</div>
+<canvas id="confetti"></canvas>
+<script src="/shared/ws.js"></script>
+<script src="/render/lottery.js"></script>
+</body>
+</html>

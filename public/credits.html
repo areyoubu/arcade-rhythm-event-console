@@ -1,0 +1,547 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>感谢列表编辑 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+  'use strict';
+  const { el, $, clear, ok, warn, err, toast, confirm, prompt, modal, withBusy, sortable, api, esc, cmdError } = window.ui;
+  const ws = window.arcadeWS;
+  const fmt = window.fmt;
+
+  const page = window.ui.mount({
+    current: '/credits',
+    title: '感谢列表编辑',
+    subtitle: '滚动致谢（thanksRoll）与网格致谢（thanksGrid）· 拖拽排序（A-REQ-730）· 标签批量导入（A-REQ-520）· 实时时长预估（A-REQ-523）',
+  });
+  ws.start();
+
+  const S = {
+    tab: 'roll',
+    roll: null,     // { heading, lines:[{group,text}], logoRow:[{src,alt}], accentColor, speed, mode }
+    grid: null,     // { heading, items:[{src,name,tier}], columns, accentColor }
+    sponsors: [],
+    selTags: new Set(),
+    estimate: null,
+  };
+  const TPL_DEFS = {};
+  let hotTimer = null;
+  let estTimer = null;
+
+  /** 致谢渲染端目标状态（浮窗-致谢 / /render/credits） */
+  const C = () => (ws.state.overlay?.all && ws.state.overlay.all.credits) || {};
+  const tabTplId = () => (S.tab === 'roll' ? 'thanksRoll' : 'thanksGrid');
+
+  // ═══════════════════ 标签页 ═══════════════════
+  const tabsEl = el('div', { class: 'tabs' },
+    el('button', { class: 'active', text: '滚动致谢（thanksRoll）', onclick: () => switchTab('roll') }),
+    el('button', { text: '网格致谢（thanksGrid）', onclick: () => switchTab('grid') }),
+  );
+
+  function switchTab(tab) {
+    S.tab = tab;
+    for (const [i, b] of [...tabsEl.children].entries()) b.classList.toggle('active', (tab === 'roll' ? 0 : 1) === i);
+    ctlCard.classList.toggle('hidden', tab !== 'roll');
+    renderEditor();
+    renderStatus();
+  }
+
+  // ═══════════════════ 编辑器 ═══════════════════
+  const editorBox = el('div');
+  const editorCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '内容编辑' }), el('span', { class: 'sub', id: 'edSub' })),
+    el('div', { class: 'body' }, editorBox),
+  );
+
+  const estSpan = el('span', { class: 'pill mute' });
+  const statusSpan = el('span', { class: 'small muted' });
+
+  function normLines(raw) {
+    return (Array.isArray(raw) ? raw : []).map((it) => typeof it === 'string' ? { group: '', text: it } : { group: it.group ?? '', text: it.text ?? '' });
+  }
+  function normImgs(raw) {
+    return (Array.isArray(raw) ? raw : []).map((it) => typeof it === 'string' ? { src: it, alt: '' } : { ...it, src: it.src || '' });
+  }
+  function normItems(raw) {
+    return (Array.isArray(raw) ? raw : []).map((it) => typeof it === 'string' ? { src: it, name: '', tier: '' } : { ...it, src: it.src || it.image || '' });
+  }
+
+  function renderEditor() {
+    clear(editorBox);
+    const roll = S.tab === 'roll';
+    const d = roll ? S.roll : S.grid;
+    if (!d) { editorBox.append(el('div', { class: 'muted small', text: '正在加载模板定义…' })); return; }
+    editorBox.append(
+      el('div', { class: 'field' },
+        el('label', { text: '标题' }),
+        el('input', {
+          type: 'text', maxlength: '36', value: d.heading || '',
+          oninput: (e) => { d.heading = e.target.value; scheduleHot(); },
+        }),
+      ),
+    );
+    if (roll) editorBox.append(rollLinesEditor(d));
+    else editorBox.append(gridItemsEditor(d));
+
+    if (roll) {
+      editorBox.append(
+        el('div', { class: 'field' },
+          el('label', { text: 'Logo 行（多图）' }),
+          el('div', { class: 'note info small mb8', text: '不同尺寸的 Logo 会自动等高对齐（A-REQ-525）；透明 PNG 效果最佳。' }),
+          logoRowEditor(d),
+        ),
+        el('div', { class: 'cols two' },
+          el('div', { class: 'field' },
+            el('label', { text: '滚动速度（px/s）' }),
+            el('input', {
+              type: 'number', min: '1', value: d.speed ?? 40,
+              oninput: (e) => { d.speed = Number(e.target.value) || 40; scheduleHot(); scheduleEstimate(); },
+            }),
+          ),
+          el('div', { class: 'field' },
+            el('label', { text: '模式（A-REQ-522）' }),
+            el('select', { onchange: (e) => { d.mode = e.target.value; scheduleHot(); } },
+              ['loop', 'once'].map((o) => el('option', { value: o, text: o === 'loop' ? 'loop 循环' : 'once 单次', selected: (d.mode || 'loop') === o })),
+            ),
+          ),
+        ),
+      );
+    } else {
+      editorBox.append(el('div', { class: 'field' },
+        el('label', { text: '列数' }),
+        el('input', {
+          type: 'number', min: '1', max: '8', value: d.columns ?? 4,
+          oninput: (e) => { d.columns = Number(e.target.value) || 4; scheduleHot(); },
+        }),
+      ));
+    }
+    estSpan.classList.toggle('hidden', !roll);
+
+    editorBox.append(
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn primary to-output', text: '▶ 上屏', onclick: (e) => withBusy(e.target, doShow) }),
+        el('button', { class: 'btn', text: '⏹ 隐藏', onclick: (e) => withBusy(e.target, doHide) }),
+        estSpan,
+        el('span', { class: 'spacer' }),
+        statusSpan,
+      ),
+      el('div', { class: 'help mt8', text: '编辑中自动热改已上屏内容（A-REQ-505）；上屏目标为「浮窗-致谢」渲染端（/render/credits）。' }),
+    );
+  }
+
+  /** 滚动致谢 lines：拖拽排序 + 分组标题（A-REQ-730 / A-REQ-524） */
+  function rollLinesEditor(d) {
+    const items = normLines(d.lines);
+    const list = el('div', { class: 'list mb8' });
+    const save = () => { d.lines = items; scheduleHot(); scheduleEstimate(); };
+    const render = () => {
+      clear(list);
+      items.forEach((it, i) => {
+        list.append(el('div', { class: 'list-row', draggable: 'true', dataset: { id: String(i) }, style: { cursor: 'grab' } },
+          el('input', {
+            type: 'text', placeholder: '分组标题（A-REQ-524）', value: it.group,
+            style: { width: '170px', flex: '0 0 auto' },
+            oninput: (e) => { it.group = e.target.value; save(); },
+          }),
+          el('input', {
+            type: 'text', placeholder: '致谢条目文本', value: it.text, class: 'grow',
+            oninput: (e) => { it.text = e.target.value; save(); },
+          }),
+          el('button', { class: 'btn ghost sm', text: '✕', onclick: () => { items.splice(i, 1); render(); save(); } }),
+        ));
+      });
+      if (!items.length) list.append(el('div', { class: 'muted small', text: '还没有条目 —— 手动添加，或用下方「导入赞助商」。' }));
+    };
+    sortable(list, {
+      selector: '[data-id]',
+      onEnd: (ids) => { const next = ids.map((id) => items[Number(id)]); items.splice(0, items.length, ...next); save(); },
+    });
+    render();
+    return el('div', null,
+      list,
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn sm ghost', text: '＋ 添加条目', onclick: () => { items.push({ group: '', text: '' }); render(); save(); } }),
+        el('button', { class: 'btn sm ghost', text: '＋ 添加分组标题', onclick: () => { items.push({ group: '新分组', text: '' }); render(); save(); } }),
+      ),
+    );
+  }
+
+  function logoRowEditor(d) {
+    const items = normImgs(d.logoRow);
+    const list = el('div', { class: 'list mb8' });
+    const save = () => { d.logoRow = items; scheduleHot(); };
+    const render = () => {
+      clear(list);
+      items.forEach((it, i) => {
+        list.append(el('div', { class: 'list-row', draggable: 'true', dataset: { id: String(i) }, style: { cursor: 'grab' } },
+          el('img', { src: it.src || '', alt: '', style: { width: '40px', height: '40px', objectFit: 'contain', background: '#0d0d0d', borderRadius: '6px', flex: '0 0 auto' } }),
+          el('div', { class: 'grow', style: { minWidth: '100px' } },
+            el('div', { class: 'sub truncate mono', text: it.src || '（未选图）' })),
+          el('input', { type: 'text', placeholder: 'alt（留空不显示）', value: it.alt || '', style: { width: '150px', flex: '0 0 auto' }, oninput: (e) => { it.alt = e.target.value; save(); } }),
+          el('button', { class: 'btn ghost sm', text: '✕', onclick: () => { items.splice(i, 1); render(); save(); } }),
+        ));
+      });
+      if (!items.length) list.append(el('div', { class: 'muted small', text: '尚无 Logo —— 「多选添加」从媒体库批量选入。' }));
+    };
+    sortable(list, {
+      selector: '[data-id]',
+      onEnd: (ids) => { const next = ids.map((id) => items[Number(id)]); items.splice(0, items.length, ...next); save(); },
+    });
+    render();
+    return el('div', null,
+      list,
+      el('button', {
+        class: 'btn sm', text: '＋ 多选添加（媒体库）',
+        onclick: () => openMediaPicker({
+          multi: true,
+          onPick: (assets) => {
+            for (const a of assets) items.push({ src: a.url, alt: a.originalName || '' });
+            render(); save();
+          },
+        }),
+      }),
+    );
+  }
+
+  function gridItemsEditor(d) {
+    const items = normItems(d.items);
+    const list = el('div', { class: 'list mb8' });
+    const save = () => { d.items = items; scheduleHot(); };
+    const render = () => {
+      clear(list);
+      items.forEach((it, i) => {
+        list.append(el('div', { class: 'list-row', draggable: 'true', dataset: { id: String(i) }, style: { cursor: 'grab' } },
+          el('img', { src: it.src || '', alt: '', style: { width: '40px', height: '40px', objectFit: 'contain', background: '#0d0d0d', borderRadius: '6px', flex: '0 0 auto' } }),
+          el('div', { class: 'grow', style: { minWidth: '90px' } },
+            el('div', { class: 'sub truncate mono', text: it.src || '（未选图）' })),
+          el('input', { type: 'text', placeholder: '名称', value: it.name || '', style: { width: '140px', flex: '0 0 auto' }, oninput: (e) => { it.name = e.target.value; save(); } }),
+          el('input', { type: 'text', placeholder: '层级（冠名/金牌/银牌/合作）', value: it.tier || '', style: { width: '170px', flex: '0 0 auto' }, oninput: (e) => { it.tier = e.target.value; save(); } }),
+          el('button', { class: 'btn ghost sm', text: '✕', onclick: () => { items.splice(i, 1); render(); save(); } }),
+        ));
+      });
+      if (!items.length) list.append(el('div', { class: 'muted small', text: '还没有条目 —— 手动添加，或用「导入赞助商」。' }));
+    };
+    sortable(list, {
+      selector: '[data-id]',
+      onEnd: (ids) => { const next = ids.map((id) => items[Number(id)]); items.splice(0, items.length, ...next); save(); },
+    });
+    render();
+    return el('div', null,
+      list,
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn sm ghost', text: '＋ 添加条目', onclick: () => { items.push({ src: '', name: '', tier: '' }); render(); save(); } }),
+        el('button', {
+          class: 'btn sm', text: '＋ 从媒体库添加',
+          onclick: () => openMediaPicker({
+            multi: true,
+            onPick: (assets) => {
+              for (const a of assets) items.push({ src: a.url, name: a.originalName || '', tier: '' });
+              render(); save();
+            },
+          }),
+        }),
+      ),
+    );
+  }
+
+  // ── 热改 / 时长预估 ──
+  function scheduleHot() {
+    clearTimeout(hotTimer);
+    hotTimer = setTimeout(async () => {
+      const c = C();
+      if (c.activeTemplate !== tabTplId()) return;
+      const values = S.tab === 'roll' ? S.roll : S.grid;
+      try { await ws.cmd('overlay.updateMany', { values, target: 'credits' }); } catch (e) { console.warn('[credits] 热改失败', e.message); }
+    }, 400);
+  }
+
+  function scheduleEstimate() {
+    clearTimeout(estTimer);
+    estTimer = setTimeout(runEstimate, 300);
+  }
+
+  async function runEstimate() {
+    try {
+      const r = await api('/api/overlay/credits/estimate', {
+        method: 'POST',
+        body: { lines: S.roll.lines || [], speed: Number(S.roll.speed) || 40, viewportHeight: 1080 },
+        quiet: true,
+      });
+      S.estimate = r;
+      estSpan.className = 'pill info';
+      estSpan.textContent = `预估约 ${r.seconds}s（速度 ${r.speed}px/s）`;
+    } catch (e) { if (e?.data?.ok !== false) console.warn('[credits] 时长预估失败', e.message); }
+  }
+
+  // ── 上屏 / 隐藏 ──
+  async function doShow() {
+    const tplId = tabTplId();
+    const values = S.tab === 'roll' ? S.roll : S.grid;
+    try {
+      await ws.cmd('overlay.show', { template: tplId, values, target: 'credits' });
+      ok(`已上屏：${TPL_DEFS[tplId]?.name || tplId} → 浮窗-致谢`);
+    } catch (e) { cmdError(e, '上屏'); }
+  }
+  async function doHide() {
+    try { await ws.cmd('overlay.hide', { target: 'credits' }); ok('已隐藏（浮窗-致谢）'); } catch (e) { cmdError(e, '隐藏'); }
+  }
+
+  // ═══════════════════ 赞助商导入（A-REQ-520 / A-REQ-521 / A-REQ-731） ═══════════════════
+  const sponsorBox = el('div');
+  const sponsorCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '从实体库导入赞助商' }), el('span', { class: 'sub', text: '按标签批量选取 · 按层级排序' })),
+    el('div', { class: 'body' }, sponsorBox),
+  );
+
+  function renderSponsorCard() {
+    clear(sponsorBox);
+    if (!S.sponsors.length) {
+      sponsorBox.append(
+        el('div', { class: 'muted small', text: '实体库暂无赞助商（kind=sponsor）。可手动添加条目，或先通过实体库 API 创建赞助商实体再批量导入。' }),
+      );
+      return;
+    }
+    const tags = [...new Set(S.sponsors.flatMap((s) => s.tags || []))].sort();
+    sponsorBox.append(
+      el('div', { class: 'muted small mb8', text: `共 ${S.sponsors.length} 个赞助商实体。点选标签后「导入所选」或「按层级排序」（冠名→金牌→银牌→合作）。` }),
+      tags.length ? el('div', { class: 'inline mb12' }, tags.map((t) => el('button', {
+        class: `btn sm ${S.selTags.has(t) ? 'on' : 'ghost'}`,
+        text: t,
+        onclick: (e) => { S.selTags.has(t) ? S.selTags.delete(t) : S.selTags.add(t); renderSponsorCard(); },
+      }))) : null,
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn primary sm', text: `导入所选标签${S.selTags.size ? '（' + S.selTags.size + '）' : ''}`, onclick: (e) => withBusy(e.target, async () => importSponsors([...S.selTags])) }),
+        el('button', { class: 'btn sm', text: '导入全部赞助商', onclick: (e) => withBusy(e.target, async () => importSponsors([])) }),
+        el('button', { class: 'btn sm', text: '按层级排序', onclick: (e) => withBusy(e.target, sortByTier) }),
+        el('a', { class: 'btn ghost sm', href: '/people?kind=sponsor', text: '管理赞助商 →' }),
+      ),
+      el('div', { class: 'help', text: '导入会追加到当前标签页的条目末尾；滚动致谢按层级自动带分组标题（冠名 / 金牌 / 银牌 / 合作）。' }),
+    );
+  }
+
+  async function importSponsors(tags) {
+    const qs = tags.length ? '?tags=' + encodeURIComponent(tags.join(',')) : '';
+    let r;
+    try { r = await api(`/api/entities/sponsors/byTier${qs}`); } catch (e) { err(e.message); return; }
+    const items = r.items || [];
+    if (!items.length) { warn('所选标签下没有赞助商'); return; }
+    if (S.tab === 'roll') {
+      S.roll.lines.push(...items.map((s) => ({ group: s.tier || '', text: s.name })));
+      renderEditor(); scheduleHot(); scheduleEstimate();
+    } else {
+      S.grid.items.push(...items.map((s) => ({ src: s.image || '', name: s.name, tier: s.tier || '' })));
+      renderEditor(); scheduleHot();
+    }
+    ok(`已导入 ${items.length} 个赞助商`);
+  }
+
+  async function sortByTier() {
+    const tags = [...S.selTags];
+    const qs = tags.length ? '?tags=' + encodeURIComponent(tags.join(',')) : '';
+    let r;
+    try { r = await api(`/api/entities/sponsors/byTier${qs}`); } catch (e) { err(e.message); return; }
+    const rank = new Map((r.items || []).map((s, i) => [s.name, i]));
+    if (S.tab === 'roll') {
+      S.roll.lines = normLines(S.roll.lines).sort((a, b) => {
+        const ra = rank.get(a.text), rb = rank.get(b.text);
+        if (ra != null && rb != null) return ra - rb;
+        if (ra != null) return -1;
+        if (rb != null) return 1;
+        return 0;
+      });
+      renderEditor(); scheduleHot(); scheduleEstimate();
+    } else {
+      S.grid.items = normItems(S.grid.items).sort((a, b) => {
+        const ra = rank.get(a.name), rb = rank.get(b.name);
+        if (ra != null && rb != null) return ra - rb;
+        if (ra != null) return -1;
+        if (rb != null) return 1;
+        return 0;
+      });
+      renderEditor(); scheduleHot();
+    }
+    ok('已按层级排序：冠名 → 金牌 → 银牌 → 合作（A-REQ-521）');
+  }
+
+  // ═══════════════════ 滚动控制（A-REQ-526） ═══════════════════
+  const jumpSel = el('select', null, el('option', { value: '', text: '（选择分组）' }));
+  const ctlStatus = el('div', { class: 'small muted mb8' });
+  const ctlCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '滚动控制' }), el('span', { class: 'sub', text: '作用于「浮窗-致谢」渲染端' })),
+    el('div', { class: 'body' },
+      ctlStatus,
+      el('div', { class: 'btn-row' },
+        el('button', { class: 'btn sm', text: '⏸ 暂停', onclick: (e) => withBusy(e.target, async () => control('pause')) }),
+        el('button', { class: 'btn sm', text: '▶ 继续', onclick: (e) => withBusy(e.target, async () => control('resume')) }),
+        el('button', { class: 'btn sm', text: '⏮ 重播', onclick: (e) => withBusy(e.target, async () => control('restart')) }),
+      ),
+      el('div', { class: 'inline mt12' },
+        el('label', { text: '跳到分组 ▾' }),
+        jumpSel,
+        el('button', { class: 'btn sm', text: '跳转', onclick: (e) => withBusy(e.target, async () => {
+          if (!jumpSel.value) { warn('请先选择分组'); return; }
+          await control('jumpTo', jumpSel.value);
+        }) }),
+      ),
+      el('div', { class: 'help mt8', text: '控制指令走 overlay.credits.control（A-REQ-526）：滚动过程中可随时暂停 / 继续 / 跳到任意分组。' }),
+    ),
+  );
+
+  async function control(action, group) {
+    try {
+      await ws.cmd('overlay.credits.control', { action, ...(group ? { group } : {}) });
+      ok({ pause: '已暂停滚动', resume: '已继续滚动', restart: '已从头重播', jumpTo: `已跳到分组「${group}」` }[action] || '已发送控制指令');
+    } catch (e) { cmdError(e, '致谢滚动控制'); }
+  }
+
+  function updateJumpSel() {
+    const groups = [...new Set(normLines(S.roll.lines).map((l) => l.group).filter(Boolean))];
+    const cur = jumpSel.value;
+    jumpSel.replaceChildren(el('option', { value: '', text: '（选择分组）' }), ...groups.map((g) => el('option', { value: g, text: g })));
+    if (groups.includes(cur)) jumpSel.value = cur;
+  }
+
+  // ═══════════════════ 预览（A-REQ-734） ═══════════════════
+  const pvCard = el('div', { class: 'card' },
+    el('header', null,
+      el('span', { text: '独立预览' }),
+      el('span', { class: 'sub', text: '含滚动动画 · 与 OBS 中同一渲染端' }),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'btn ghost sm', text: '新窗口打开', onclick: () => window.open('/render/credits?preview=1', 'arcade-credits-preview') }),
+    ),
+    el('div', { class: 'body tight' },
+      el('div', { style: { aspectRatio: '16/9', background: '#05070d', borderRadius: '8px', overflow: 'hidden' } },
+        el('iframe', { src: '/render/credits?preview=1&fit=1', title: '致谢渲染端预览', style: { width: '100%', height: '100%', border: '0', display: 'block', background: '#05070d' } }),
+      ),
+      el('div', { class: 'help mt8', text: '上屏后这里实时联动（A-REQ-734）。' }),
+    ),
+  );
+
+  // ═══════════════════ 媒体选择器 ═══════════════════
+  function openMediaPicker(opts) {
+    const { multi = false, onPick, title = '从媒体库选择' } = opts;
+    let assets = [];
+    const picked = [];
+    const grid = el('div', { class: 'grid-cards media scroll yl' });
+    const search = el('input', { type: 'search', placeholder: '搜索文件名 / 标签…', class: 'grow' });
+    const okBtn = multi
+      ? el('button', { class: 'btn primary', text: '确认加入', disabled: true, onclick: () => { onPick(picked.map((p) => p.asset)); m.close(); } })
+      : null;
+    const m = modal({
+      title, wide: true,
+      body: el('div', null, el('div', { class: 'inline mb12' }, search), grid),
+      footer: [el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }), okBtn],
+    });
+    const render = () => {
+      const q = search.value.trim().toLowerCase();
+      const list = assets.filter((a) => !q || `${a.originalName || ''} ${a.filename} ${(a.tags || []).join(' ')}`.toLowerCase().includes(q));
+      clear(grid);
+      if (!list.length) { grid.append(el('div', { class: 'muted small', text: '没有匹配的资源（可把图片直接拷进 media/ 目录，服务端会自动索引）' })); return; }
+      for (const a of list) {
+        const isSel = multi && picked.some((p) => p.hash === a.hash);
+        grid.append(el('div', { class: `tile${isSel ? ' selected' : ''}`, onclick: () => {
+          if (!multi) { onPick(a); m.close(); return; }
+          const i = picked.findIndex((p) => p.hash === a.hash);
+          if (i >= 0) picked.splice(i, 1); else picked.push({ hash: a.hash, asset: a });
+          render();
+          okBtn.disabled = !picked.length;
+          okBtn.textContent = `确认加入 ${picked.length} 张`;
+        } },
+          el('div', { class: 'tile-thumb' }, el('img', { src: a.thumbnail, alt: '', loading: 'lazy' })),
+          el('div', { class: 'tile-title truncate', text: a.originalName || a.filename }),
+          el('div', { class: 'tile-sub truncate', text: `${a.width && a.height ? a.width + '×' + a.height + ' · ' : ''}${fmt.bytes(a.size)}` }),
+        ));
+      }
+    };
+    search.oninput = render;
+    api('/api/media?limit=500').then((r) => { assets = r.items || []; render(); }).catch(() => render());
+    return m;
+  }
+
+  // ═══════════════════ 状态同步 ═══════════════════
+  function renderStatus() {
+    const c = C();
+    const tplId = tabTplId();
+    const name = TPL_DEFS[tplId]?.name || tplId;
+    if (c.activeTemplate === tplId) {
+      statusSpan.textContent = c.visible ? `「${name}」上屏中` : `「${name}」已加载（未显示）`;
+      statusSpan.style.color = c.visible ? 'var(--ok)' : 'var(--text-dim)';
+    } else {
+      statusSpan.textContent = '未上屏';
+      statusSpan.style.color = 'var(--text-mute)';
+    }
+    ctlStatus.textContent = c.activeTemplate === 'thanksRoll'
+      ? `浮窗-致谢当前：${c.visible ? '滚动致谢 上屏中' : '滚动致谢 已加载（未显示）'}`
+      : '浮窗-致谢当前：未上屏滚动致谢';
+    $('#edSub').textContent = `编辑：${TPL_DEFS[tplId]?.name || tplId}`;
+  }
+
+  function applyState() {
+    const c = C();
+    const tplId = tabTplId();
+    const draft = S.tab === 'roll' ? S.roll : S.grid;
+    if (!draft) { renderStatus(); return; }
+    if (c.activeTemplate === tplId && c.slotValues) {
+      const changed = Object.keys(c.slotValues).some((k) => JSON.stringify(c.slotValues[k]) !== JSON.stringify(draft[k]));
+      if (changed && !editorBox.contains(document.activeElement)) {
+        if (S.tab === 'roll') S.roll = { ...S.roll, ...c.slotValues };
+        else S.grid = { ...S.grid, ...c.slotValues };
+        renderEditor();
+        if (S.tab === 'roll') scheduleEstimate();
+      }
+    }
+    renderStatus();
+    updateJumpSel();
+  }
+
+  ws.on('hello', applyState);
+  ws.on('patch', applyState);
+
+  // ═══════════════════ 组装 ═══════════════════
+  page.append(
+    tabsEl,
+    el('div', { class: 'cols side-r' },
+      el('div', { class: 'cols' }, editorCard, sponsorCard),
+      el('div', { class: 'cols' }, pvCard, ctlCard),
+    ),
+  );
+
+  // ═══════════════════ 初始化 ═══════════════════
+  (async function init() {
+    try {
+      const r = await api('/api/templates');
+      for (const t of r.items || []) TPL_DEFS[t.id] = t;
+    } catch (e) { console.warn('[credits] 模板定义拉取失败', e.message); }
+    const defDraft = (id) => {
+      const t = TPL_DEFS[id];
+      const d = {};
+      for (const s of t?.slots || []) d[s.key] = s.default !== undefined ? s.default : (s.multi ? [] : '');
+      return d;
+    };
+    S.roll = defDraft('thanksRoll');
+    S.grid = defDraft('thanksGrid');
+    const c = C();
+    if (c.activeTemplate === 'thanksRoll' && c.slotValues) S.roll = { ...S.roll, ...c.slotValues };
+    if (c.activeTemplate === 'thanksGrid' && c.slotValues) S.grid = { ...S.grid, ...c.slotValues };
+    renderEditor();
+    renderStatus();
+    updateJumpSel();
+    scheduleEstimate();
+    try {
+      const r = await api('/api/entities?kind=sponsor');
+      S.sponsors = r.items || [];
+      renderSponsorCard();
+    } catch (e) { console.warn('[credits] 赞助商拉取失败', e.message); }
+  })();
+})();
+</script>
+</body>
+</html>

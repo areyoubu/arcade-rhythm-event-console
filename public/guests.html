@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>签到管理 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .stat-row { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+  .stat-row .pill { font-family: var(--mono); }
+  .stat-row .spacer { flex: 1; min-width: 20px; }
+
+  .filter-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .filter-row input[type=search] { min-width: 220px; flex: 1; max-width: 360px; }
+  .filter-row select { width: auto; min-width: 110px; }
+
+  .guest-head, .guest-row {
+    display: grid;
+    grid-template-columns: 86px minmax(0, 1fr) 90px 168px 126px;
+    gap: 10px; align-items: center;
+  }
+  .guest-head {
+    padding: 7px 10px; border-bottom: 1px solid var(--border);
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 1.5px; color: var(--text-mute);
+  }
+  .guest-list { max-height: 620px; overflow-y: auto; }
+  .guest-row {
+    padding: 9px 10px; border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .guest-row:last-child { border-bottom: none; }
+  .guest-row:hover { background: var(--surface-2); }
+  .g-ticket {
+    font-family: var(--mono); font-size: 12px; font-weight: 800;
+    color: var(--text-mute); letter-spacing: .5px;
+  }
+  .g-main { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .g-name { font-weight: 700; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .g-meta { font-size: 11.5px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .g-meta:empty { display: none; }
+  .g-time { font-family: var(--mono); font-size: 11px; color: var(--text-mute); white-space: nowrap; }
+  .g-actions { display: flex; justify-content: flex-end; gap: 4px; }
+  .g-actions .btn { min-height: 26px; padding: 2px 7px; font-size: 11px; }
+  .winner-tag { color: #d9a441; font-weight: 700; }
+  .winner-tag .dot { display: inline-block; width: 6px; height: 6px; background: #d9a441; margin-right: 4px; vertical-align: 1px; }
+
+  .pager { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 10px; }
+  .pager .info { font-family: var(--mono); font-size: 11.5px; color: var(--text-mute); }
+  .pager .spacer { flex: 1; }
+
+  .qr-card .qr-img { width: 100%; max-width: 240px; aspect-ratio: 1; background: #fff; border-radius: 5px; padding: 8px; display: block; margin: 0 auto; }
+  .qr-card .qr-url {
+    margin-top: 10px; word-break: break-all; text-align: center;
+    font-family: var(--mono); font-size: 11px; color: var(--text-mute);
+    background: #17181b; border: 1px solid var(--border); border-radius: 3px; padding: 6px 8px;
+  }
+  .qr-card .btn-row { justify-content: center; }
+
+  .editor-grid { display: grid; gap: 10px; }
+  .editor-grid .field { margin: 0; }
+  .editor-grid input { width: 100%; }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, clear, api, ok, warn, err, cmdError, modal, confirm, withBusy, mount, guestEditor, deleteGuest } = ui;
+
+  const page = mount({
+    current: '/guests',
+    title: '签到管理',
+    subtitle: '现场签到名单 · 添加 / 编辑 / 删除 · 导入在线表格 · 签到二维码',
+  });
+
+  const PAGE_SIZE = 40;
+  const SOURCE_LABEL = { join: '扫码', import: '导入', manual: '手动', relay: '中继' };
+  const S = {
+    state: null,
+    guests: [],
+    q: '',
+    source: 'all',
+    sort: 'new',
+    page: 1,
+    join: null,
+  };
+
+  // ── 顶部统计 + 操作 ──────────────────────────────────────
+  const statTotal = el('span', { class: 'pill mute', text: '签到 0' });
+  const statJoin = el('span', { class: 'pill mute', text: '扫码 0' });
+  const statImport = el('span', { class: 'pill mute', text: '导入 0' });
+  const statManual = el('span', { class: 'pill mute', text: '手动 0' });
+  const statRelay = el('span', { class: 'pill mute', text: '中继 0' });
+  const statWinner = el('span', { class: 'pill warn', text: '已中奖 0' });
+
+  const addBtn = el('button', { class: 'btn primary sm', text: '添加人员' });
+  const importBtn = el('button', { class: 'btn sm', text: '导入在线表格' });
+  const exportBtn = el('button', { class: 'btn ghost sm', text: '导出 CSV' });
+  const clearBtn = el('button', { class: 'btn danger sm', text: '清空签到池' });
+
+  addBtn.onclick = () => openEditor(null);
+  importBtn.onclick = openImport;
+  exportBtn.onclick = exportCsv;
+  clearBtn.onclick = clearAll;
+
+  page.append(el('section', { class: 'card mb12' },
+    el('header', null,
+      el('span', { text: '签到概览' }),
+      el('span', { class: 'spacer' }),
+      el('a', { class: 'btn ghost sm', href: '/lottery', text: '去抽奖页' }),
+    ),
+    el('div', { class: 'body' },
+      el('div', { class: 'stat-row' },
+        statTotal, statJoin, statImport, statManual, statRelay, statWinner,
+        el('span', { class: 'spacer' }),
+        addBtn, importBtn, exportBtn, clearBtn,
+      ),
+    ),
+  ));
+
+  // ── 名单 + 二维码 ────────────────────────────────────────
+  const searchInput = el('input', { type: 'search', placeholder: '搜索姓名 / 昵称 / 队伍 / 编号…' });
+  const sourceSel = el('select', null,
+    el('option', { value: 'all', text: '全部来源' }),
+    el('option', { value: 'join', text: '扫码' }),
+    el('option', { value: 'import', text: '导入' }),
+    el('option', { value: 'manual', text: '手动' }),
+    el('option', { value: 'relay', text: '中继' }),
+  );
+  const sortSel = el('select', null,
+    el('option', { value: 'new', text: '最新签到在前' }),
+    el('option', { value: 'old', text: '最早签到在前' }),
+  );
+  const countText = el('span', { class: 'small muted' });
+  const listBody = el('div', { class: 'guest-list' });
+  const pager = el('div', { class: 'pager' });
+
+  searchInput.oninput = () => { S.q = searchInput.value; S.page = 1; renderList(); };
+  sourceSel.onchange = () => { S.source = sourceSel.value; S.page = 1; renderList(); };
+  sortSel.onchange = () => { S.sort = sortSel.value; S.page = 1; renderList(); };
+
+  const listCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '签到名单' }),
+      countText,
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '扫码 / 导入 / 手动添加的人都在这里' }),
+    ),
+    el('div', { class: 'body' },
+      el('div', { class: 'filter-row' }, searchInput, sourceSel, sortSel),
+      el('div', { class: 'guest-head' },
+        el('span', { text: '编号' }),
+        el('span', { text: '姓名 / 队伍' }),
+        el('span', { text: '来源' }),
+        el('span', { text: '签到时间' }),
+        el('span', { style: { textAlign: 'right' }, text: '操作' }),
+      ),
+      listBody,
+      pager,
+    ),
+  );
+
+  const qrImg = el('img', { class: 'qr-img', alt: '签到二维码' });
+  const qrUrl = el('div', { class: 'qr-url', text: '读取中…' });
+  const qrNote = el('div');
+  const copyBtn = el('button', { class: 'btn sm', text: '复制链接' });
+  const openJoinBtn = el('a', { class: 'btn ghost sm', href: '/join', target: '_blank', text: '打开签到页' });
+  const refreshQrBtn = el('button', { class: 'btn ghost sm', text: '刷新二维码' });
+  copyBtn.onclick = () => copyText(S.join?.url || qrUrl.textContent, '签到链接');
+  refreshQrBtn.onclick = () => loadJoin(true);
+
+  const qrCard = el('section', { class: 'card qr-card' },
+    el('header', null, el('span', { text: '扫码签到' }), el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '手机扫码加入' })),
+    el('div', { class: 'body' },
+      qrImg,
+      qrUrl,
+      el('div', { class: 'btn-row mt8' }, copyBtn, openJoinBtn, refreshQrBtn),
+      qrNote,
+      el('div', { class: 'note info mt12', text: '如果启用了公网远端，在设置里填写公网签到地址后，这里和抽奖页的二维码都会自动指向公网入口。' }),
+    ),
+  );
+
+  page.append(el('div', { class: 'cols side-r' }, listCard, qrCard));
+
+  // ── 状态 / 列表 ─────────────────────────────────────────
+  function winnerIds() {
+    return new Set((S.state?.winners || []).map((w) => w.id));
+  }
+
+  function applyState(state) {
+    if (!state) return;
+    S.state = state;
+    S.guests = (state.guests || []).map((g, i) => ({ ...g, _fallbackTicket: i + 1 }));
+    renderStats();
+    renderList();
+  }
+
+  function renderStats() {
+    const gs = S.guests;
+    const wins = winnerIds();
+    const count = (src) => gs.filter((g) => g.source === src).length;
+    statTotal.textContent = `签到 ${gs.length}`;
+    statJoin.textContent = `扫码 ${count('join')}`;
+    statImport.textContent = `导入 ${count('import')}`;
+    statManual.textContent = `手动 ${count('manual')}`;
+    statRelay.textContent = `中继 ${count('relay')}`;
+    statWinner.textContent = `已中奖 ${gs.filter((g) => wins.has(g.id)).length}`;
+  }
+
+  function filtered() {
+    const q = S.q.trim().toLowerCase();
+    let list = S.guests.filter((g) => {
+      if (S.source !== 'all' && g.source !== S.source) return false;
+      if (!q) return true;
+      const ticket = g.ticket || g._fallbackTicket;
+      return `${g.name || ''} ${g.handle || ''} ${g.team || ''} #${ticket} ${g.id || ''}`.toLowerCase().includes(q);
+    });
+    list = list.slice().sort((a, b) => {
+      const ta = Number(a.at) || 0;
+      const tb = Number(b.at) || 0;
+      if (ta !== tb) return S.sort === 'new' ? tb - ta : ta - tb;
+      const ia = Number(a.ticket || a._fallbackTicket) || 0;
+      const ib = Number(b.ticket || b._fallbackTicket) || 0;
+      return S.sort === 'new' ? ib - ia : ia - ib;
+    });
+    return list;
+  }
+
+  function renderList() {
+    clear(listBody);
+    clear(pager);
+    const list = filtered();
+    const total = list.length;
+    const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+    if (S.page > pages) S.page = pages;
+    if (S.page < 1) S.page = 1;
+    const start = (S.page - 1) * PAGE_SIZE;
+    const rows = list.slice(start, start + PAGE_SIZE);
+    countText.textContent = total ? `${total} 人` : '';
+    if (!total) {
+      listBody.append(el('div', { class: 'dim small', style: { padding: '18px 10px' },
+        text: S.guests.length ? '没有匹配的签到记录' : '还没有人签到。可以让人扫码，或点「添加人员」手动加入。' }));
+      return;
+    }
+    const wins = winnerIds();
+    for (const g of rows) {
+      const ticket = g.ticket || g._fallbackTicket;
+      const isWinner = wins.has(g.id);
+      const meta = [g.team, g.handle ? `@${g.handle}` : ''].filter(Boolean).join(' · ');
+      listBody.append(el('div', { class: 'guest-row' },
+        el('span', { class: 'g-ticket', text: `#${String(ticket).padStart(4, '0')}` }),
+        el('span', { class: 'g-main' },
+          el('span', { class: 'g-name' },
+            g.name || '（未命名）',
+            isWinner ? el('span', { class: 'winner-tag', style: { marginLeft: '8px' } }, el('span', { class: 'dot' }), '已中奖') : null,
+          ),
+          el('span', { class: 'g-meta', text: meta }),
+        ),
+        el('span', null, el('span', { class: 'pill mute', text: SOURCE_LABEL[g.source] || g.source || '—' })),
+        el('span', { class: 'g-time', text: g.at ? fmt.datetime(g.at) : '—' }),
+        el('div', { class: 'g-actions' },
+          el('button', { class: 'btn ghost', type: 'button', text: '编辑', onclick: () => openEditor(g) }),
+          el('button', {
+            class: 'btn ghost', type: 'button', text: '删除',
+            onclick: () => deleteGuest(g, { isWinner, onDeleted: (r) => applyState(r.state) }),
+          }),
+        ),
+      ));
+    }
+    pager.append(
+      el('span', { class: 'info', text: `显示 ${start + 1}–${start + rows.length} / ${total}` }),
+      el('span', { class: 'spacer' }),
+      el('button', {
+        class: 'btn ghost sm', text: '‹ 上一页', disabled: S.page <= 1,
+        onclick: () => { S.page--; renderList(); },
+      }),
+      el('span', { class: 'info', text: `${S.page} / ${pages}` }),
+      el('button', {
+        class: 'btn ghost sm', text: '下一页 ›', disabled: S.page >= pages,
+        onclick: () => { S.page++; renderList(); },
+      }),
+    );
+  }
+
+  // ── 添加 / 编辑（共用组件，抽奖页也用同一套）────────────────
+  function openEditor(guest) {
+    guestEditor(guest, {
+      sourceLabels: SOURCE_LABEL,
+      onSaved: (r) => { if (r.state) applyState(r.state); else refresh(); },
+    });
+  }
+
+  async function clearAll() {
+    const yes = await confirm({
+      title: '清空签到池',
+      message: `删除全部 ${S.guests.length} 条签到记录？中奖记录不受影响。`,
+      danger: true, confirmText: '清空签到池',
+    });
+    if (!yes) return;
+    try {
+      const r = await api('/api/lottery/guests/clear', { method: 'POST', body: {} });
+      applyState(r.state);
+      ok('签到池已清空');
+    } catch (ex) { cmdError(ex, '清空签到池'); }
+  }
+
+  // ── 导入 ────────────────────────────────────────────────
+  function openImport() {
+    const ta = el('textarea', { rows: 10, placeholder: '姓名,队伍,昵称\n张三,红队,小张\n李四,蓝队,\n…' });
+    const m = modal({
+      title: '导入在线表格',
+      body: el('div', null,
+        el('div', { class: 'note info mb12', text: '从腾讯文档 / 金山文档 / 问卷星等导出 CSV，或直接粘贴「姓名 / 队伍 / 昵称」几列。首行含「姓名」会自动跳过；同名 + 同昵称会跳过。' }),
+        ta,
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', text: '导入',
+          onclick: (e) => withBusy(e.target, async () => {
+            try {
+              const r = await api('/api/lottery/import', { method: 'POST', body: { text: ta.value } });
+              await refresh();
+              m.close();
+              ok(`导入完成：新增 ${r.added} 人，跳过 ${r.skipped} 行`);
+            } catch (ex) { cmdError(ex, '导入签到'); }
+          }),
+        }),
+      ],
+    });
+    setTimeout(() => ta.focus(), 40);
+  }
+
+  // ── 导出 / 二维码 / 工具 ────────────────────────────────
+  function csvCell(v) {
+    const s = String(v ?? '');
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  function exportCsv() {
+    const list = S.guests.slice().sort((a, b) => {
+      const ia = Number(a.ticket || a._fallbackTicket) || 0;
+      const ib = Number(b.ticket || b._fallbackTicket) || 0;
+      return ia - ib;
+    });
+    const wins = winnerIds();
+    const lines = ['签到序号,姓名,昵称,队伍,来源,签到时间,是否中奖'];
+    for (const g of list) {
+      lines.push([
+        g.ticket || g._fallbackTicket,
+        g.name || '',
+        g.handle || '',
+        g.team || '',
+        SOURCE_LABEL[g.source] || g.source || '',
+        g.at ? fmt.datetime(g.at) : '',
+        wins.has(g.id) ? '是' : '',
+      ].map(csvCell).join(','));
+    }
+    const blob = new Blob([`﻿${lines.join('\r\n')}\r\n`], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: `签到名单-${new Date().toISOString().slice(0, 10)}.csv` });
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    ok(`已导出 ${list.length} 条签到`);
+  }
+
+  async function loadJoin(refresh = false) {
+    try {
+      const origin = encodeURIComponent(location.origin);
+      const info = await api(`/api/lottery/joinUrl?origin=${origin}`);
+      S.join = info;
+      qrImg.src = `/api/lottery/qr?size=260&origin=${origin}${refresh ? `&t=${Date.now()}` : ''}`;
+      qrUrl.textContent = info.url;
+      clear(qrNote);
+      if (info.warning) qrNote.append(el('div', { class: 'note warn mt8', text: info.warning }));
+    } catch (e) {
+      qrUrl.textContent = '读取签到地址失败';
+      cmdError(e, '读取签到地址');
+    }
+  }
+
+  async function copyText(text, label = '链接') {
+    try {
+      await navigator.clipboard.writeText(text);
+      ok(`已复制${label}`);
+    } catch {
+      const ta = el('textarea', { style: { position: 'fixed', left: '-9999px' } });
+      ta.value = text;
+      document.body.append(ta);
+      ta.select();
+      try { document.execCommand('copy'); ok(`已复制${label}`); } catch { warn('复制失败，请手动选中复制'); }
+      ta.remove();
+    }
+  }
+
+  async function refresh() {
+    try {
+      const r = await api('/api/lottery/state');
+      applyState(r.state);
+    } catch (e) { cmdError(e, '刷新签到名单'); }
+  }
+
+  async function load() {
+    try {
+      const r = await api('/api/lottery/state');
+      applyState(r.state);
+      await loadJoin(false);
+    } catch (e) { cmdError(e, '读取签到名单'); }
+  }
+
+  arcadeWS.watch('lottery.state', (v) => { if (v) applyState(v); });
+  load();
+})();
+</script>
+</body>
+</html>

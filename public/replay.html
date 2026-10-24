@@ -1,0 +1,1228 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>回放控制器 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+'use strict';
+const ui = window.ui;
+const { el, $, $$, clear, esc, ok, warn, err, cmdError, confirm, prompt, modal, withBusy, api, linkStatusBar } = ui;
+const fmt = window.fmt;
+const ws = window.arcadeWS;
+
+/* ─────────────────────────────────────────────────────────────
+   状态缓存
+   ───────────────────────────────────────────────────────────── */
+const st = {
+  zones: [], byFn: new Map(), totalFns: 0,
+  cfg: null,              // GET /api/replay/state 的 config 段（clip/replay/scenes/…）
+  snap: null,             // GET /api/replay/state 的 snapshot 段
+  view: {},               // 合并后的实时视图（WS 优先，HTTP 兜底）
+  xx: 12000, mode: 'follow-now', fixedLen: 8000,
+  recordingSince: null,   // recording 变 true 的时刻（页面内观察）
+  usedFns: new Set(),
+  preflightTimer: null, clipSaveTimer: null, preflightAt: 0,
+  panelMode: localStorage.getItem('replay.panelMode') === 'simple' ? 'simple' : 'full',
+  devMode: localStorage.getItem('replay.devMode') === '1',
+};
+
+const page = ui.mount({
+  current: '/replay',
+  title: '回放控制器',
+  subtitle: 'vMix 回放控制台 · §5.12.1 全部 13 个功能区 / 151 个函数 · 简易/完整两档（B-REQ-2011） · 全部操作记入审计日志',
+});
+page.append(ui.linkStatusBar());
+page.append(ui.featureBanner('replay', '回放功能', { requires: 'vmix', requiresLabel: 'vMix 控制' }));
+
+/* ── 小工具 ─────────────────────────────────────────────────── */
+function card(title, sub, cls) {
+  const c = el('div', { class: 'card' + (cls ? ' ' + cls : '') });
+  c.append(el('header', null, el('span', { text: title }), sub ? el('span', { class: 'sub', text: sub }) : null));
+  c.body = el('div', { class: 'body' });
+  c.append(c.body);
+  return c;
+}
+const zoneCards = {};   // key -> card 元素（供简易/完整切换）
+
+function markUsed(fn) { st.usedFns.add(fn); }
+
+/* ─────────────────────────────────────────────────────────────
+   通用函数按钮（B-REQ-2003 / 2005 / 2006 / 2009）
+   ───────────────────────────────────────────────────────────── */
+async function resolveArgs(def, overrides) {
+  const params = { ...(overrides || {}) };
+  for (const a of def.args || []) {
+    if (params[a.name] !== undefined && params[a.name] !== null) continue;
+    if (a.type === 'channel') { params[a.name] = st.view.channel || 'A'; continue; }
+    if (!a.required) continue;
+    const range = (a.min !== undefined && a.max !== undefined) ? `（${a.min}–${a.max}）` : '';
+    let defVal = '';
+    if (a.unit === 'sec') defVal = (st.xx / 1000).toFixed(1);
+    else if (a.unit === 'frame') defVal = '10';
+    else if (a.min !== undefined) defVal = String(a.min);
+    const v = await prompt({
+      title: `参数：${def.fn}`,
+      label: `${a.name} ${range}${a.unit === 'sec' ? '（单位：秒）' : a.unit === 'frame' ? '（单位：帧）' : ''}`,
+      value: defVal,
+      placeholder: a.placeholder || `输入 ${a.name}`,
+    });
+    if (v === null) return null;
+    const s = String(v).trim();
+    if (a.type === 'number') {
+      const n = Number(s);
+      if (!Number.isFinite(n)) { warn('请输入数字'); return null; }
+      if (a.min !== undefined && n < a.min) { warn(`${a.name} 不能小于 ${a.min}`); return null; }
+      if (a.max !== undefined && n > a.max) { warn(`${a.name} 不能大于 ${a.max}`); return null; }
+      params[a.name] = n;
+    } else params[a.name] = s;
+  }
+  return params;
+}
+
+function fnButton(def, opts = {}) {
+  const btn = el('button', { class: 'btn sm', type: 'button', text: opts.label || def.label });
+  btn.title = `${def.fn}${def.hint ? '\n' + def.hint : ''}`;                    // B-REQ-2005
+  if (def.target === 'output') btn.classList.add('to-output');                  // B-REQ-2003 上屏=红色边框
+  if (def.destructive) btn.classList.add('danger');
+  if (def.dangerous) btn.classList.add('warn');
+  if (def.future) btn.classList.add('ghost');
+  btn.addEventListener('click', () => withBusy(btn, async () => {
+    try {
+      let confirmed = false;
+      if (def.destructive || def.dangerous || def.future) {
+        const yes = await confirm({
+          title: `二次确认：${def.fn}`,
+          message: def.destructive ? `${def.label} 不可撤销，确定执行？`
+            : def.dangerous ? `${def.label} 属高危操作，确定执行？`
+            : `${def.label} —— 该函数创建的事件在 N 秒后才完整，不可用于即时上屏（陷阱 #21）`,
+          detail: def.hint || null,
+          danger: true,
+          confirmText: '确认执行',
+        });
+        if (!yes) return;
+        confirmed = true;
+      }
+      const baseParams = typeof opts.params === 'function' ? opts.params() : (opts.params || {});
+      const params = await resolveArgs(def, baseParams);
+      if (params === null) return;
+      const args = { fn: def.fn, params, confirmed };
+      if (opts.speed !== undefined) args.speed = opts.speed;
+      await ws.cmd('replay.call', args);
+      ok(`${def.label} 已执行`);
+      if (opts.onOk) opts.onOk();
+    } catch (e) { cmdError(e, def.label); }
+  }));
+  st.usedFns.add(def.fn);
+  return btn;
+}
+
+/** 每个功能区预留一个「其余函数」容器，catalog 加载后由 fillZoneRest() 填充 */
+const restContainers = {};
+function zoneRest(zoneKey, label) {
+  const wrap = el('div', { class: 'mt8 hidden' });
+  const row = el('div', { class: 'btn-row' });
+  wrap.append(el('div', { class: 'tiny muted', text: label || '其余函数（自动生成）' }), row);
+  restContainers[zoneKey] = row;
+  return wrap;
+}
+function fillZoneRest() {
+  for (const [key, row] of Object.entries(restContainers)) {
+    const defs = (st.zones.find((z) => z.key === key) || { functions: [] }).functions
+      .filter((f) => !st.usedFns.has(f.fn));
+    for (const d of defs) row.append(fnButton(d));
+    if (row.parentElement && row.children.length) row.parentElement.classList.remove('hidden');
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────
+   顶部：简易/完整切换 + 开发模式（B-REQ-2011 / B-REQ-2006）
+   ───────────────────────────────────────────────────────────── */
+const modeRow = el('div', { class: 'btn-row mb16 items-center' });
+const btnSimple = el('button', { class: 'btn sm' + (st.panelMode === 'simple' ? ' on' : ''), type: 'button', text: '简易' });
+const btnFull = el('button', { class: 'btn sm' + (st.panelMode === 'full' ? ' on' : ''), type: 'button', text: '完整' });
+const devToggle = el('button', {
+  class: 'btn sm' + (st.devMode ? ' on' : ''), type: 'button',
+  text: st.devMode ? '开发模式：开' : '开发模式：关',
+  title: 'B-REQ-2006：开启后显示「函数直调」调试面板（状态存 localStorage）',
+});
+btnSimple.title = '简易：只显示功能区 1/5/6/7/9（B-REQ-2011）';
+btnFull.title = '完整：显示全部 13 个功能区';
+function applyMode() {
+  btnSimple.className = 'btn sm' + (st.panelMode === 'simple' ? ' on' : '');
+  btnFull.className = 'btn sm' + (st.panelMode === 'full' ? ' on' : '');
+  for (const [key, c] of Object.entries(zoneCards)) {
+    const visible = st.panelMode === 'full' || ['record', 'mark', 'play', 'speed', 'mode'].includes(key);
+    c.classList.toggle('hidden', !visible);
+  }
+}
+btnSimple.addEventListener('click', () => { st.panelMode = 'simple'; localStorage.setItem('replay.panelMode', 'simple'); applyMode(); });
+btnFull.addEventListener('click', () => { st.panelMode = 'full'; localStorage.setItem('replay.panelMode', 'full'); applyMode(); });
+devToggle.addEventListener('click', () => {
+  st.devMode = !st.devMode;
+  localStorage.setItem('replay.devMode', st.devMode ? '1' : '0');
+  devToggle.textContent = st.devMode ? '开发模式：开' : '开发模式：关';
+  devToggle.className = 'btn sm' + (st.devMode ? ' on' : '');
+  devCard.classList.toggle('hidden', !st.devMode);
+});
+modeRow.append(el('span', { class: 'bold small dim', text: '面板档位：' }), btnSimple, btnFull, el('span', { class: 'spacer grow' }), devToggle);
+page.append(modeRow);
+
+/* ─────────────────────────────────────────────────────────────
+   ① 录制区
+   ───────────────────────────────────────────────────────────── */
+const recCard = card('① 录制区', '状态来自 vMix XML 回读，不依赖指令响应（B-REQ-404）');
+zoneCards.record = recCard;
+const recBtns = el('div', { class: 'btn-row' });
+const recLed = el('span', { class: 'pill mute' }, el('span', { class: 'dot-led' }), el('span', { class: 'mono-num', text: '--:--:--' }));
+const recTcodeEl = $('span.mono-num', recLed);
+const recBtnsSpec = [
+  ['● 开始录制', 'ReplayStartRecording', 'start', null],
+  ['■ 停止录制', 'ReplayStopRecording', 'stop', null],
+  ['⇄ 启停切换', 'ReplayStartStopRecording', 'toggle', null],
+];
+for (const [label, fn, mode, cls] of recBtnsSpec) {
+  const b = el('button', { class: 'btn' + (cls ? ' ' + cls : ''), type: 'button', text: label, title: `${fn}（replay.record ${mode}）` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.record', { mode }); ok(`${label} 已下发，状态以回读为准`); }
+    catch (e) { cmdError(e, '录制'); }
+  }));
+  recBtns.append(b);
+  markUsed(fn);
+}
+recBtns.append(recLed);
+recCard.body.append(recBtns,
+  el('div', { class: 'tiny muted mt8', text: '录制时长自「recording 变为 true」起算（fmt.timecode）。录制未启动时，其余区域整体禁用（B-REQ-2002）。' }));
+
+/* ─────────────────────────────────────────────────────────────
+   ② 通道区
+   ───────────────────────────────────────────────────────────── */
+const chCard = card('② 通道区', '当前选中通道高亮 · 状态回读 <replay channelMode>');
+zoneCards.channel = chCard;
+const chRow = el('div', { class: 'btn-row' });
+const chBtns = {};
+for (const [label, fn, val] of [
+  ['A', 'ReplaySelectChannelA', 'A'], ['B', 'ReplaySelectChannelB', 'B'],
+  ['A+B', 'ReplaySelectChannelAB', 'AB'], ['⇄ 交换', 'ReplaySwapChannels', null],
+]) {
+  const b = el('button', { class: 'btn', type: 'button', text: label, title: fn });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try {
+      await ws.cmd('replay.call', { fn, params: {} });
+      if (val === 'A' || val === 'B') { try { await ws.cmd('replay.channel', { channel: val }); } catch { /* 引擎状态同步失败不阻断 */ } }
+      ok(`${label} 已执行`);
+    } catch (e) { cmdError(e, '通道'); }
+  }));
+  chBtns[val || fn] = b;
+  chRow.append(b);
+  markUsed(fn);
+}
+const chNote = el('div', { class: 'note info mt8' });
+chNote.textContent =
+  '陷阱 #18（B-REQ-523）：官方参数为 None 的函数（ReplayMarkIn / ReplayMarkOut / ReplayMarkCancel 等）作用于「当前选中通道」。本系统已强制先选通道再调用（callOnChannel），此处手动切换通道用于找片段等场景。';
+chCard.body.append(chRow, chNote);
+const chTimecodeRow = el('div', { class: 'btn-row mt8' });
+for (const [label, fn] of [['A→B 时间码', 'ReplaySetChannelAToBTimecode'], ['B→A 时间码', 'ReplaySetChannelBToATimecode']]) {
+  const d = st.byFn.get(fn);
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title: fn });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn, params: { Channel: st.view.channel || 'A' } }); ok(`${label} 已执行`); }
+    catch (e) { cmdError(e, label); }
+  }));
+  chTimecodeRow.append(b);
+  markUsed(fn);
+}
+chCard.body.append(chTimecodeRow);
+
+/* ─────────────────────────────────────────────────────────────
+   相位与状态条（B-REQ-807 时间轴可视化）
+   ───────────────────────────────────────────────────────────── */
+const statCard = card('相位与状态条', 'MARKING / RETURNING 瞬态期间整页锁定（B-REQ-202）');
+const statBar = el('div', { class: 'statusbar' });
+const phasePill = el('span', { class: 'pill mute', text: '相位 —' });
+const busyPill = el('span', { class: 'pill mute', text: 'busy 锁' });
+const chanPill = el('span', { class: 'pill mute', text: '通道 A' });
+const listPill = el('span', { class: 'pill mute', text: '事件库 1' });
+const speedPill = el('span', { class: 'pill mute mono-num', text: '1.00×' });
+const posPill = el('span', { class: 'pill mute mono-num', text: '00:00:00 / 00:00:00' });
+const statRecLed = el('span', { class: 'pill mute' }, el('span', { class: 'dot-led' }), el('span', { class: 'mono-num', text: '--:--:--' }));
+const statRecTcode = $('span.mono-num', statRecLed);
+statBar.append(phasePill, busyPill, statRecLed, chanPill, listPill, speedPill, posPill, el('span', { class: 'spacer' }));
+statCard.body.append(statBar);
+const progWrap = el('div', { class: 'mt8', style: { position: 'relative', height: '10px', background: '#0d0d0d', border: '1px solid var(--border)', borderRadius: '6px', overflow: 'hidden' } });
+const progBar = el('div', { style: { position: 'absolute', left: '0', top: '0', bottom: '0', width: '0%', background: 'var(--accent)', transition: 'width .2s linear' } });
+progWrap.append(progBar);
+const progLabel = el('div', { class: 'tiny muted mt8', text: 'position / duration（vMix XML 回读，B-REQ-807）· AIR 相位下实时推进' });
+statCard.body.append(progWrap, progLabel);
+
+/* ① 录制区 + ② 通道区 并排置于顶部 */
+const topGrid = el('div', { class: 'cols two mt16' });
+topGrid.append(recCard, chCard);
+page.append(topGrid);
+page.append(statCard);
+
+/* ── FAULT 告警条（B-REQ-203 / B-REQ-508） ── */
+const faultBar = el('div', { class: 'note danger mt12 hidden', style: { fontSize: '13.5px' } });
+const faultText = el('span', { class: 'grow' });
+const faultReset = el('button', { class: 'btn sm danger', type: 'button', text: '复位', title: 'replay.reset —— 复位后回到 ARMED/IDLE' });
+faultReset.addEventListener('click', () => withBusy(faultReset, async () => {
+  try { await ws.cmd('replay.reset'); ok('已复位'); } catch (e) { cmdError(e, '复位'); }
+}));
+faultBar.append(el('span', { class: 'bold', text: '回放引擎处于 FAULT 故障态：' }), faultText, faultReset);
+page.append(faultBar);
+
+/* ── 外部变化提示（B-REQ-806） ── */
+const extBar = el('div', { class: 'note warn mt12 hidden' });
+const extText = el('span', { class: 'grow' });
+const extAck = el('button', { class: 'btn sm', type: 'button', text: '知道了' });
+extAck.addEventListener('click', () => withBusy(extAck, async () => {
+  try { await api('/api/replay/externalChange/clear', { method: 'POST', body: {} }); extBar.classList.add('hidden'); }
+  catch (e) { cmdError(e, '清除外部变化提示'); }
+}));
+extBar.append(el('span', { class: 'bold', text: '检测到外部操作：' }), extText, extAck);
+page.append(extBar);
+
+/* ─────────────────────────────────────────────────────────────
+   预检面板（B-REQ-5102：导播一眼看到「现在为什么不能按」）
+   ───────────────────────────────────────────────────────────── */
+const pfCard = card('预检', '只读 preflight() · 页面加载与切换 XX 时自动执行 · 缓存 ≤3s（B-REQ-5101/5103）');
+const pfBody = el('div');
+pfCard.body.append(pfBody);
+page.append(pfCard);
+
+async function runPreflight() {
+  const purpose = st.view.phase === 'CUED' ? 'air' : 'clipAndAir';
+  try {
+    const r = await ws.cmd('replay.preflight', { for: purpose, lookbackMs: st.xx });
+    renderPreflight(r && (r.preflight || r), purpose);
+  } catch (e) {
+    renderPreflight({ blockers: [`预检请求失败：${e.message}`], warn: [] }, purpose);
+  }
+}
+function schedulePreflight() {
+  clearTimeout(st.preflightTimer);
+  st.preflightTimer = setTimeout(runPreflight, 350);
+}
+function renderPreflight(pf, purpose) {
+  clear(pfBody);
+  if (!pf) return;
+  const list = el('div', null);
+  if (pf.blockers && pf.blockers.length) {
+    list.append(el('div', { class: 'note danger mb8', text: `现在不能按 —— ${pf.blockers.join('；')}` }));
+  }
+  if (pf.warn && pf.warn.length) {
+    for (const wMsg of pf.warn) list.append(el('div', { class: 'note warn mb8', text: wMsg }));
+  }
+  if ((!pf.blockers || !pf.blockers.length) && (!pf.warn || !pf.warn.length)) {
+    list.append(el('div', { class: 'note ok', text: `预检通过 —— ${purpose === 'air' ? '上屏' : '裁切并上屏'} 现在可以执行` }));
+  }
+  pfBody.append(list,
+    el('div', { class: 'tiny muted', text: `预检目标：${purpose === 'air' ? '上屏（air）' : '裁切并上屏（clipAndAir）'} · 回溯量 ${fmt.secs(st.xx)} · 相位 ${fmt.phaseLabel(pf.detail && pf.detail.phase || st.view.phase)}${pf.cached ? ' · 缓存结果' : ''}` }));
+}
+
+/* ─────────────────────────────────────────────────────────────
+   常驻高危陷阱说明（B-REQ-2002 等编号与 §8 陷阱总表一致）
+   ───────────────────────────────────────────────────────────── */
+const traps = [
+  ['陷阱 #4', '回程用 ReplayLive → 下次硬切画面倒退 ~200ms（B-REQ-602），回程请用「回直播」按钮'],
+  ['陷阱 #6', '误用 ReplayStop（该函数不存在）→ 指令静默失败；停止播放用 ReplayStopEvents（B-REQ-405）'],
+  ['陷阱 #17', 'XX 被限制成 vMix 界面的 5/10/20 → 长段落无法完整回放；本页 XX 支持 1–120s 自由配置（B-REQ-520）'],
+  ['陷阱 #18', '未选通道就调 None 参数函数 → 砍掉别的通道的事件；本系统已强制 callOnChannel（B-REQ-523/1006）'],
+  ['陷阱 #19', '秒/帧混淆 → 错位数个数量级；本页所有帧级微调均用 fmt.framesLabel 标注等价值秒（B-REQ-526）'],
+  ['陷阱 #20', '入/出点核对后忘记回位 → 后续所有裁切起点错位；用「跳回直播点」回位（B-REQ-527）'],
+  ['陷阱 #21', 'ReplayMarkInOutLiveFuture 创建的事件 N 秒后才完整，不可即时上屏（B-REQ-535）'],
+  ['陷阱 #22', 'CUED 分「持久/瞬态」：clip() 进入的持久 CUED 不受 4s 超时约束，不要当 FAULT 处理（B-REQ-204）'],
+];
+const trapCard = card('高危陷阱速查', '常驻显示 —— 本页所有对应控件都做了防呆');
+const trapList = el('div', { class: 'flex-col' });
+for (const [tag, txt] of traps) {
+  trapList.append(el('div', { class: 'note danger mb8', style: { fontSize: '12px' } },
+    el('span', { class: 'bold', text: tag + '：' }), el('span', { text: txt })));
+}
+trapCard.body.append(trapList);
+page.append(trapCard);
+
+/* ─────────────────────────────────────────────────────────────
+   主网格：左 = 事件库/选择，右 = 播放/速度/逐帧/模式
+   ───────────────────────────────────────────────────────────── */
+const grid1 = el('div', { class: 'cols side mt16' });
+const colLeft = el('div', { class: 'flex-col' });
+const colRight = el('div', { class: 'flex-col' });
+grid1.append(colLeft, colRight);
+
+/* ③ 事件库区 */
+const libCard = card('③ 事件库区（1–20）', '当前事件库高亮 · 状态回读 <replay eventsA/B>');
+zoneCards.library = libCard;
+const libGrid = el('div', { class: 'btn-grid c5 mb8' });
+const libBtns = [];
+for (let i = 1; i <= 20; i++) {
+  const fn = `ReplaySelectEvents${i}`;
+  const b = el('button', { class: 'btn sm', type: 'button', text: String(i), title: `${fn} {{ Channel }}` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try {
+      await ws.cmd('replay.call', { fn, params: { Channel: st.view.channel || 'A' } });
+      try { await ws.cmd('replay.eventList', { eventList: i }); } catch { /* 引擎状态同步失败不阻断 */ }
+      ok(`已切到事件库 ${i}`);
+    } catch (e) { cmdError(e, `事件库 ${i}`); }
+  }));
+  libBtns.push(b);
+  libGrid.append(b);
+  markUsed(fn);
+}
+const libOps = el('div', { class: 'btn-row' });
+for (const [label, fn, val, title] of [
+  ['◀ 滚动', 'ReplayScrollSelectedEvent', -1, 'ReplayScrollSelectedEvent Value=-1（范围 −10–10）'],
+  ['▶ 滚动', 'ReplayScrollSelectedEvent', 1, 'ReplayScrollSelectedEvent Value=+1（范围 −10–10）'],
+  ['全选', 'ReplaySelectAllEvents', null, 'ReplaySelectAllEvents（无参数）'],
+]) {
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn, params: val === null ? {} : { Value: val } }); ok(`${label} 已执行`); }
+    catch (e) { cmdError(e, `事件库 ${label}`); }
+  }));
+  libOps.append(b);
+  markUsed(fn);
+}
+libCard.body.append(libGrid, libOps);
+colLeft.append(libCard);
+
+/* ④ 事件选择区 */
+const selCard = card('④ 事件选择区', '首个 / 末尾 / 上一 / 下一');
+zoneCards.select = selCard;
+const selRow = el('div', { class: 'btn-grid c2' });
+for (const [label, fn] of [
+  ['⏮ 首个', 'ReplaySelectFirstEvent'], ['⏭ 末尾', 'ReplaySelectLastEvent'],
+  ['◀ 上一', 'ReplaySelectPreviousEvent'], ['▶ 下一', 'ReplaySelectNextEvent'],
+]) {
+  const d = st.byFn.get(fn);
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title: `${fn} {{ Channel }}` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn, params: { Channel: st.view.channel || 'A' } }); ok(`${label} 已执行`); }
+    catch (e) { cmdError(e, label); }
+  }));
+  selRow.append(b);
+  markUsed(fn);
+}
+selCard.body.append(selRow);
+colLeft.append(selCard);
+
+/* ⑥ 播放控制区（18 函数，手工两排 + 上屏一排） */
+const playCard = card('⑥ 播放控制区', '18 个函数 · 「→ 输出」红色边框（B-REQ-2003）');
+zoneCards.play = playCard;
+const playRows = [
+  ['通道播放', [
+    ['▶ 播放', 'ReplayPlay'], ['⏸ 暂停', 'ReplayPause'], ['播放/暂停', 'ReplayPlayPause'], ['■ 停止', 'ReplayStopEvents'],
+    ['正向', 'ReplayPlayForward'], ['反向', 'ReplayPlayBackward'], ['◀ 上一事件', 'ReplayPlayPrevious'], ['▶ 下一事件', 'ReplayPlayNext'],
+  ]],
+  ['预览（不触输出）', [
+    ['播最近', 'ReplayPlayLastEvent'], ['播选中', 'ReplayPlaySelectedEvent'], ['播指定…', 'ReplayPlayEvent'],
+    ['播全部', 'ReplayPlayAllEvents'], ['按 ID 播…', 'ReplayPlayEventsByID'],
+  ]],
+];
+for (const [rowLabel, items] of playRows) {
+  playCard.body.append(el('div', { class: 'tiny muted mb8 mt8', text: rowLabel }));
+  const row = el('div', { class: 'btn-row' });
+  for (const [label, fn] of items) {
+    const d = st.byFn.get(fn);
+    const b = el('button', { class: 'btn sm', type: 'button', text: label, title: `${fn}${d && d.hint ? '\n' + d.hint : ''}` });
+    b.addEventListener('click', () => withBusy(b, async () => {
+      try { await ws.cmd('replay.call', { fn, params: { Channel: st.view.channel || 'A' } }); ok(`${label} 已执行`); }
+      catch (e) { cmdError(e, label); }
+    }));
+    row.append(b);
+    markUsed(fn);
+  }
+  playCard.body.append(row);
+}
+playCard.body.append(el('div', { class: 'tiny muted mb8 mt12', text: '上屏（→ 输出）' }));
+const airRow = el('div', { class: 'btn-row' });
+for (const [label, fn] of [
+  ['播最近 → 输出', 'ReplayPlayLastEventToOutput'], ['播选中 → 输出', 'ReplayPlaySelectedEventToOutput'],
+  ['播指定 → 输出', 'ReplayPlayEventToOutput'], ['播全部 → 输出', 'ReplayPlayAllEventsToOutput'],
+  ['按 ID → 输出', 'ReplayPlayEventsByIDToOutput'],
+]) {
+  const d = st.byFn.get(fn);
+  const b = el('button', { class: 'btn sm to-output', type: 'button', text: label, title: `${fn} —— 直接送输出，绕过状态机（请确认语义，R15 待实测）` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn, params: { Channel: st.view.channel || 'A' } }); ok(`${label} 已执行`); }
+    catch (e) { cmdError(e, label); }
+  }));
+  airRow.append(b);
+  markUsed(fn);
+}
+playCard.body.append(airRow,
+  el('div', { class: 'tiny muted mt8', text: '播放控制区的上屏函数绕过状态机（B-REQ-2004 的直调语义），正式流程请用裁切区的「裁切并上屏」；B-REQ-405：不存在 ReplayStop，停止播放 = ReplayStopEvents。' }));
+colRight.append(playCard);
+
+/* ⑦ 速度与方向区 */
+const spdCard = card('⑦ 速度与方向区', '0–1 软限位 · <0.5 二次确认（B-REQ-2008）');
+zoneCards.speed = spdCard;
+const spdRow = el('div', { class: 'inline' });
+const spdSlider = el('input', { type: 'range', min: '0', max: '1', step: '0.05', value: '1', title: 'ReplaySetSpeed Value（0–1，步进 0.05）' });
+const spdVal = el('span', { class: 'pill info mono-num', text: '1.00×' });
+let spdDragging = false;
+spdSlider.addEventListener('pointerdown', () => { spdDragging = true; });
+spdSlider.addEventListener('pointerup', () => { spdDragging = false; sync(); });
+const spdApply = el('button', { class: 'btn sm primary', type: 'button', text: '应用速度', title: 'ReplaySetSpeed' });
+spdApply.addEventListener('click', () => withBusy(spdApply, async () => {
+  const v = Number(spdSlider.value);
+  try {
+    let confirmed = false;
+    if (v < 0.5) {
+      const yes = await confirm({
+        title: '二次确认：低速播放',
+        message: `速度 ${v.toFixed(2)} 低于 0.5 —— 画面与本地音乐将严重失步，确定执行？`,
+        detail: 'B-REQ-2008：速度 0.5 以下须二次确认。音游场景建议保持 1.0，用定格逐帧强调细节。',
+        danger: true, confirmText: '确认低速',
+      });
+      if (!yes) return;
+      confirmed = true;
+    }
+    await ws.cmd('replay.call', { fn: 'ReplaySetSpeed', params: { Value: v, Channel: st.view.channel || 'A' }, speed: v, confirmed });
+    ok(`速度已设为 ${v.toFixed(2)}×`);
+  } catch (e) { cmdError(e, '设置速度'); }
+}));
+markUsed('ReplaySetSpeed');
+spdRow.append(spdSlider, spdVal, spdApply);
+const dirRow = el('div', { class: 'btn-row mt8' });
+for (const [label, fn] of [['正向', 'ReplaySetDirectionForward'], ['反向', 'ReplaySetDirectionBackward']]) {
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title: `${fn} {{ Channel }}` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn, params: { Channel: st.view.channel || 'A' } }); ok(`方向已设为${label}`); }
+    catch (e) { cmdError(e, label); }
+  }));
+  dirRow.append(b);
+  markUsed(fn);
+}
+for (const [label, fn] of [['⏩ 快进…', 'ReplayFastForward'], ['⏪ 快退…', 'ReplayFastBackward']]) {
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title: `${fn} Value 1–30（倍速）` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    const v = await prompt({ title: fn, label: '倍速（1–30）', value: '4' });
+    if (v === null) return;
+    const n = Number(v);
+    if (!Number.isFinite(n) || n < 1 || n > 30) { warn('倍速须在 1–30 之间'); return; }
+    try { await ws.cmd('replay.call', { fn, params: { Value: n, Channel: st.view.channel || 'A' } }); ok(`${label} ${n}× 已执行`); }
+    catch (e) { cmdError(e, label); }
+  }));
+  dirRow.append(b);
+  markUsed(fn);
+}
+spdCard.body.append(spdRow, dirRow,
+  el('div', { class: 'note warn mt8', text: 'B-REQ-701：speed < 1.0 时画面与本地音乐将失步；音游场景建议保持 1.0，用定格逐帧强调细节（慢放降调非常难听）。' }),
+  zoneRest('speed', '其余速度函数（自动生成：增减速度 / 反转方向 / 事件速度写入）'));
+colRight.append(spdCard);
+
+/* ⑧ 逐帧 / 时间码区 */
+const frmCard = card('⑧ 逐帧 / 时间码区', 'ReplayJumpFrames 单位待实测（R14）');
+zoneCards.frame = frmCard;
+const jfRow = el('div', { class: 'btn-row' });
+for (const f of [-10, -1, 1, 10]) {
+  const b = el('button', { class: 'btn sm', type: 'button', dataset: { jf: String(f) }, text: (f > 0 ? '+' : '') + f + 'f', title: `ReplayJumpFrames Value=${f} —— ${fmt.framesLabel(f, (st.cfg && st.cfg.clip && st.cfg.clip.frameRate) || 60)}（R14：默认单位疑为秒，见下方警示）` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn: 'ReplayJumpFrames', params: { Value: f, Channel: st.view.channel || 'A' } }); ok(`跳帧 ${f > 0 ? '+' : ''}${f}f 已执行`); }
+    catch (e) { cmdError(e, '跳帧'); }
+  }));
+  jfRow.append(b);
+}
+markUsed('ReplayJumpFrames');
+const fastRow = el('div', { class: 'btn-row mt8' });
+for (const [label, fn] of [['逐帧模式：快', 'ReplayJumpFramesFastOn'], ['逐帧模式：慢', 'ReplayJumpFramesFastOff']]) {
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title: `${fn} {{ Channel }} —— R14：开启 Fast 后 ReplayJumpFrames 才按帧解释` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn, params: { Channel: st.view.channel || 'A' } }); ok(`${label} 已执行`); }
+    catch (e) { cmdError(e, label); }
+  }));
+  fastRow.append(b);
+  markUsed(fn);
+}
+const jumpNow = el('button', { class: 'btn sm primary', type: 'button', text: '回最新（跳回直播点）', title: 'ReplayJumpToNow {{ Channel }} —— ★ 核对后必须回位（陷阱 #20）' });
+jumpNow.addEventListener('click', () => withBusy(jumpNow, async () => {
+  try { await ws.cmd('replay.call', { fn: 'ReplayJumpToNow', params: { Channel: st.view.channel || 'A' } }); ok('已跳回直播点'); }
+  catch (e) { cmdError(e, '跳回直播点'); }
+}));
+markUsed('ReplayJumpToNow');
+fastRow.append(jumpNow);
+const tcRow = el('div', { class: 'inline mt8' });
+const tcInput = el('input', { type: 'text', placeholder: 'yyyy-MM-ddTHH:mm:ss.fff', title: 'ReplaySetTimecode Value 时间码格式' });
+tcInput.style.width = '220px';
+const tcGo = el('button', { class: 'btn sm', type: 'button', text: '跳时间码', title: 'ReplaySetTimecode {{ Value, Channel }}' });
+tcGo.addEventListener('click', () => withBusy(tcGo, async () => {
+  const v = tcInput.value.trim();
+  if (!v) { warn('请输入时间码'); return; }
+  try {
+    await ws.cmd('replay.call', { fn: 'ReplaySetTimecode', params: { Value: v, Channel: st.view.channel || 'A' } });
+    localStorage.setItem('replay.lastTimecode', v);
+    ok('已跳转时间码');
+  } catch (e) { cmdError(e, '跳时间码'); }
+}));
+markUsed('ReplaySetTimecode');
+tcRow.append(tcInput, tcGo);
+frmCard.body.append(jfRow, fastRow, tcRow,
+  el('div', { class: 'note warn mt8', text: 'R14 待实测 —— 官方描述 ReplayJumpFrames 默认单位是秒，开启 FastOn 后才是帧，与直觉相反（附录 A.8）。实测前慎用大数值；逐帧微调请优先用裁切区的入点/出点微调（单位明确为帧）。' }));
+colRight.append(frmCard);
+
+/* ⑨ Live / 回放模式区 */
+const modeCard = card('⑨ Live / 回放模式区', 'ReplayLive 高危二次确认（B-REQ-602/603）');
+zoneCards.mode = modeCard;
+const modeRowEl = el('div', { class: 'btn-row' });
+const backLive = el('button', { class: 'btn lg primary', type: 'button', text: '回直播', title: 'replay.backToLive —— 先切 OBS、后 ReplayPause 停在最后一帧（§5.8，不用 ReplayLive）' });
+backLive.addEventListener('click', () => withBusy(backLive, async () => {
+  try { await ws.cmd('replay.backToLive', { channel: st.view.channel || 'A' }); ok('已回直播'); }
+  catch (e) { cmdError(e, '回直播'); }
+}));
+const liveBtn = el('button', { class: 'btn lg warn', type: 'button', text: 'ReplayLive（高危）', title: 'ReplayLive —— 高危：通道变为落后 L≈200ms 的直播直通（B-REQ-602）' });
+liveBtn.addEventListener('click', () => withBusy(liveBtn, async () => {
+  const yes = await confirm({
+    title: '高危确认：ReplayLive',
+    message: 'ReplayLive 使通道变为落后 L≈200ms 的直播直通，下一次硬切会造成画面倒退。仅用于手动找片段。',
+    detail: 'B-REQ-602：回程禁止调用 ReplayLive。B-REQ-603：本按钮仅用于需要手动找片段时，需二次确认。',
+    danger: true, confirmText: '我已知晓，执行',
+  });
+  if (!yes) return;
+  try { await ws.cmd('replay.call', { fn: 'ReplayLive', params: {}, confirmed: true }); ok('ReplayLive 已执行'); }
+  catch (e) { cmdError(e, 'ReplayLive'); }
+}));
+const toggleLive = el('button', { class: 'btn warn', type: 'button', text: '切换 Live', title: 'ReplayLiveToggle（高危）' });
+toggleLive.addEventListener('click', () => withBusy(toggleLive, async () => {
+  const yes = await confirm({
+    title: '高危确认：ReplayLiveToggle',
+    message: '在 Live 直通与回放态之间互换 —— 若误切到 Live 直通，下次硬切可能画面倒退。',
+    detail: 'ReplayLiveToggle 与 ReplayLive 同族高危（B-REQ-603）。', danger: true, confirmText: '确认执行',
+  });
+  if (!yes) return;
+  try { await ws.cmd('replay.call', { fn: 'ReplayLiveToggle', params: {}, confirmed: true }); ok('已切换'); }
+  catch (e) { cmdError(e, '切换 Live'); }
+}));
+const recordedBtn = el('button', { class: 'btn', type: 'button', text: '切到回放态', title: 'ReplayRecorded（无参数）' });
+recordedBtn.addEventListener('click', () => withBusy(recordedBtn, async () => {
+  try { await ws.cmd('replay.call', { fn: 'ReplayRecorded', params: {} }); ok('已切到回放态'); }
+  catch (e) { cmdError(e, '切到回放态'); }
+}));
+markUsed('ReplayLive'); markUsed('ReplayLiveToggle'); markUsed('ReplayRecorded');
+modeRowEl.append(backLive, recordedBtn, toggleLive, liveBtn);
+modeCard.body.append(modeRowEl,
+  el('div', { class: 'note danger mt8', text: 'B-REQ-602：回程禁止调用 ReplayLive —— 它使通道变为落后 L≈200ms 的直播直通，下一次硬切会造成画面倒退。这里只在需要手动找片段时使用（B-REQ-603）。正常回程请按「⬅ 回直播」。' }));
+colRight.append(modeCard);
+
+page.append(grid1);
+
+/* ─────────────────────────────────────────────────────────────
+   ⑤ 裁切区 ★ 核心（§5.6）—— 整行宽度
+   ───────────────────────────────────────────────────────────── */
+const clipCard = card('⑤ 裁切区', '§5.6 核心 · 回溯量 XX 自由配置（B-REQ-520）· 裁切 ≠ 上屏（B-REQ-528）· 全部操作记入审计日志（B-REQ-536）');
+zoneCards.mark = clipCard;
+
+/* 播放头错位醒目提示（陷阱 #20 / B-REQ-527） */
+const displacedNote = el('div', { class: 'note danger mb8 hidden', style: { fontSize: '13.5px', fontWeight: '700' },
+  text: '已移动播放头（你按过「跳入点 / 跳出点」核对）—— 必须按「⟲ 跳回直播点」回位，否则后续所有裁切起点都会错位！（陷阱 #20 / B-REQ-527）' });
+clipCard.body.append(displacedNote);
+
+/* XX 控制 */
+const xxGrid = el('div', { class: 'cols two' });
+const xxLeft = el('div', null);
+const xxRight = el('div', null);
+xxGrid.append(xxLeft, xxRight);
+
+xxLeft.append(el('div', { class: 'bold small mb8', text: '回溯量 XX' }));
+const xxSlider = el('input', { type: 'range', min: '1', max: '120', step: '0.5', value: '12', title: '回溯量滑杆：1–120s，步进 0.5s（clip.stepMs）。不得限制为 vMix 界面的 5/10/20（B-REQ-520 / 陷阱 #17）' });
+const xxInputWrap = el('div', { class: 'inline mt8' });
+const xxInput = el('input', { type: 'number', min: '1', max: '120', step: '0.1', value: '12', title: '回溯量（秒，允许小数）' });
+xxInput.style.width = '90px';
+const xxLabel = el('span', { class: 'pill info mono-num', text: '12.0s' });
+xxInputWrap.append(xxInput, xxLabel);
+xxLeft.append(xxSlider, xxInputWrap);
+
+const presetRow = el('div', { class: 'btn-row mt8' });
+const fineRow = el('div', { class: 'btn-row mt8' });
+xxLeft.append(el('div', { class: 'tiny muted mt8 mb8', text: '预设（config.clip.presets）' }), presetRow,
+  el('div', { class: 'tiny muted mt8 mb8', text: '微调' }), fineRow);
+
+for (const [label, delta] of [['-1s', -1000], ['-0.5s', -500], ['+0.5s', 500], ['+1s', 1000]]) {
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title: `回溯量 ${label}` });
+  b.addEventListener('click', () => setXx(st.xx + delta));
+  fineRow.append(b);
+}
+
+/* 超限 / 预警提示（B-REQ-521 / B-REQ-539） */
+const xxLimitNote = el('div', { class: 'note mt8 hidden' });
+xxLeft.append(xxLimitNote);
+
+/* 出点模式 */
+const modeField = el('div', { class: 'field mt12' });
+const modeSelect = el('select', null,
+  el('option', { value: 'follow-now', text: 'follow-now（即时裁切，默认主路径）' }),
+  el('option', { value: 'manual', text: 'manual（开放出点，配合「延长尾部」）' }),
+  el('option', { value: 'fixed-length', text: 'fixed-length（固定长度）' }),
+);
+modeSelect.addEventListener('change', () => { st.mode = modeSelect.value; updateFixedLenVis(); saveClipParams(false); });
+modeField.append(el('label', { text: '出点模式' }), modeSelect);
+xxLeft.append(modeField);
+const fixedField = el('div', { class: 'field hidden' });
+const fixedInput = el('input', { type: 'number', min: '0.5', step: '0.5', value: '8', title: '固定长度（秒）' });
+fixedInput.style.width = '120px';
+fixedInput.addEventListener('change', () => { st.fixedLen = Math.round(Number(fixedInput.value) * 1000); saveClipParams(false); });
+fixedField.append(el('label', { text: '固定长度（秒）' }), fixedInput);
+xxLeft.append(fixedField);
+function updateFixedLenVis() { fixedField.classList.toggle('hidden', st.mode !== 'fixed-length'); }
+
+/* 主按钮 */
+xxRight.append(el('div', { class: 'bold small mb8', text: '主操作' }));
+const clipBtn = el('button', { class: 'btn lg block mb8', type: 'button', text: '裁切', title: 'replay.clip —— §5.6.2 序列：SelectChannel → sleep(markDelayMs) → SelectEvents → MarkInOut → CUED（持久）。不触 OBS（B-REQ-528）' });
+const clipAirBtn = el('button', { class: 'btn lg block to-output mb8', type: 'button', text: '裁切并上屏', title: 'replay.clipAndAir —— clip() → air() 串联（§5.7 一键回放宏 17 步）' });
+const airBtn = el('button', { class: 'btn lg block to-output mb8', type: 'button', text: '上屏（已裁切）', title: 'replay.air —— 跳过裁切，把当前 CUED 片段送输出并切场景（B-REQ-531）' });
+const discardBtn = el('button', { class: 'btn lg block danger mb8', type: 'button', text: '丢弃', title: 'replay.discard —— ReplayMarkCancel + 清理 UI → ARMED（B-REQ-529）' });
+const extBtn = el('button', { class: 'btn block mb8', type: 'button', text: '⏩ 延长尾部', title: 'replay.extendTail —— ReplayUpdateSelectedOutPoint {{ Channel }}，开放出点，可重复点击（B-REQ-525/533）' });
+clipBtn.addEventListener('click', () => doClip('clip'));
+clipAirBtn.addEventListener('click', () => doClip('clipAndAir'));
+airBtn.addEventListener('click', () => withBusy(airBtn, async () => {
+  try { const r = await ws.cmd('replay.air', { channel: st.view.channel || 'A', speed: st.view.speed }); ok(`已上屏（via ${r.via || '—'}）`); }
+  catch (e) { cmdError(e, '上屏'); }
+}));
+discardBtn.addEventListener('click', () => withBusy(discardBtn, async () => {
+  const yes = await confirm({
+    title: '二次确认：丢弃片段',
+    message: '丢弃当前已裁切片段（ReplayMarkCancel），不可撤销，确定执行？',
+    detail: 'B-REQ-529：丢弃 → 清理 UI 状态 → 回到 ARMED。不触 OBS。', danger: true, confirmText: '确认丢弃',
+  });
+  if (!yes) return;
+  try { await ws.cmd('replay.discard', { channel: st.view.channel || 'A' }); ok('片段已丢弃'); }
+  catch (e) { cmdError(e, '丢弃'); }
+}));
+extBtn.addEventListener('click', () => withBusy(extBtn, async () => {
+  try { await ws.cmd('replay.extendTail', { channel: st.view.channel || 'A' }); ok('出点已延长到当前位置，可继续点击'); }
+  catch (e) { cmdError(e, '延长尾部'); }
+}));
+xxRight.append(clipBtn, clipAirBtn, airBtn, discardBtn, extBtn,
+  el('div', { class: 'tiny muted', text: '「裁切并上屏」= clip() → air() 串联（B-REQ-532）；「上屏」需已处于 CUED（持久裁切后）。AIR 相位下可用「回直播」返回。' }));
+
+/* 帧级微调（B-REQ-526 / 陷阱 #19） */
+xxRight.append(el('div', { class: 'bold small mb8 mt12', text: '帧级微调（CUED / AIR 均可用，B-REQ-206）' }));
+const fps = () => (st.cfg && st.cfg.clip && st.cfg.clip.frameRate) || 60;
+markUsed('ReplayMarkInOut');            // ✂ 裁切主路径（replay.clip 内部调用 ReplayMarkInOut）
+markUsed('ReplayUpdateSelectedOutPoint'); // ⏩ 延长尾部（replay.extendTail）
+markUsed('ReplayMarkCancel');            // 🗑 丢弃（replay.discard）
+markUsed('ReplayMoveSelectedInPoint');   // 入点帧级微调（replay.movePoint）
+markUsed('ReplayMoveSelectedOutPoint');  // 出点帧级微调（replay.movePoint）
+
+function tuneRow(which, label) {
+  const row = el('div', { class: 'btn-row mb8' });
+  row.append(el('span', { class: 'tiny muted nowrap', text: label }));
+  for (const f of [-10, -1, 1, 10]) {
+    const b = el('button', { class: 'btn sm', type: 'button', dataset: { which, frames: String(f) }, text: (f > 0 ? '+' : '') + f + 'f', title: `${which === 'in' ? 'ReplayMoveSelectedInPoint' : 'ReplayMoveSelectedOutPoint'} Value=${f} —— ${fmt.framesLabel(f, fps())}（单位是帧，陷阱 #19）` });
+    b.addEventListener('click', () => withBusy(b, async () => {
+      try { const r = await ws.cmd('replay.movePoint', { which, frames: f, channel: st.view.channel || 'A' }); ok(`${label} ${f > 0 ? '+' : ''}${f} 帧 ≈ ${r.equivalentMs !== undefined ? r.equivalentMs + 'ms' : ''}`); }
+      catch (e) { cmdError(e, `${label}微调`); }
+    }));
+    row.append(b);
+  }
+  return row;
+}
+xxRight.append(tuneRow('in', '入点'), tuneRow('out', '出点'));
+
+/* 入/出点核对 + 回位（B-REQ-527） */
+xxRight.append(el('div', { class: 'bold small mb8 mt12', text: '入 / 出点核对' }));
+const checkRow = el('div', { class: 'btn-row mb8' });
+for (const [label, which, fn] of [['⇥ 跳入点', 'in', 'ReplayJumpToSelectedInPoint'], ['⇥ 跳出点', 'out', 'ReplayJumpToSelectedOutPoint']]) {
+  const b = el('button', { class: 'btn sm', type: 'button', text: label, title: `${fn} {{ Channel }} —— 移动播放头，核对后必须回位（陷阱 #20）` });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { const r = await ws.cmd('replay.jumpToPoint', { which, channel: st.view.channel || 'A' }); warn(r.hint || '已移动播放头'); }
+    catch (e) { cmdError(e, label); }
+  }));
+  checkRow.append(b);
+  markUsed(fn);
+}
+const nowBtn = el('button', { class: 'btn sm primary', type: 'button', text: '⟲ 跳回直播点', title: 'ReplayJumpToNow {{ Channel }} —— 核对完必须回位（B-REQ-527 / 陷阱 #20）' });
+nowBtn.addEventListener('click', () => withBusy(nowBtn, async () => {
+  try { await ws.cmd('replay.call', { fn: 'ReplayJumpToNow', params: { Channel: st.view.channel || 'A' } }); ok('已跳回直播点'); }
+  catch (e) { cmdError(e, '跳回直播点'); }
+}));
+checkRow.append(nowBtn);
+xxRight.append(checkRow);
+
+/* 预估时长（B-REQ-530） */
+const estRow = el('div', { class: 'statusbar' });
+const estVal = el('span', { class: 'pill info mono-num', text: '--' });
+const markInfo = el('span', { class: 'pill mute mono-num', text: '最近打点 —' });
+estRow.append(el('span', { class: 'bold small', text: '片段预估时长' }), estVal, markInfo);
+xxRight.append(estRow,
+  el('div', { class: 'tiny muted mt8', text: '预估时长来自 snapshot.clip.estimatedDurationMs（B-REQ-530，≤200ms 内刷新）。' }));
+
+clipCard.body.append(xxGrid);
+/* 打点变体与其余 mark 函数（自动生成，陷阱 #21 醒目） */
+clipCard.body.append(el('div', { class: 'tiny muted mt12', text: '打点变体（自动生成）· ReplayMarkInOutLiveFuture 创建的事件 N 秒后才完整，不可即时上屏（陷阱 #21）· None 参数函数已强制先选通道（陷阱 #18）' }));
+const variantRow = clipCard.body.appendChild(zoneRest('mark', '打点变体与其余打点函数'));
+page.append(clipCard);
+
+/* ─────────────────────────────────────────────────────────────
+   ⑩ 机位区（可折叠，默认收起 —— B-REQ-2001）
+   ───────────────────────────────────────────────────────────── */
+const camCard = card('⑩ 机位区（1–8）', '可折叠 · 本项目单机位场景，可折叠；函数封装完整保留以便将来扩展（B-REQ-2001）');
+zoneCards.camera = camCard;
+camCard.body.classList.add('hidden');   // 默认收起
+camCard.querySelector('header').style.cursor = 'pointer';
+camCard.querySelector('header').addEventListener('click', () => camCard.body.classList.toggle('hidden'));
+const camGrid = el('div', { class: 'btn-grid c8 mb8' });
+for (let i = 1; i <= 8; i++) {
+  const fn = `ReplayCamera${i}`;
+  const b = el('button', { class: 'btn sm', type: 'button', text: '①'.replace('①', String(i)), title: fn });
+  b.textContent = String(i);
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try { await ws.cmd('replay.call', { fn, params: {} }); ok(`机位 ${i} 已执行`); }
+    catch (e) { cmdError(e, `机位 ${i}`); }
+  }));
+  camGrid.append(b);
+  markUsed(fn);
+}
+camCard.body.append(el('div', { class: 'tiny muted mb8', text: '机位 1–8（ReplayCamera1…8）' }), camGrid,
+  el('div', { class: 'tiny muted mb8', text: '全部 46 个机位函数（A/B 通道机位、事件机位开关与切换）' }),
+  zoneRest('camera', '全部 46 个机位函数'));
+
+/* ─────────────────────────────────────────────────────────────
+   ⑪ 文字标注区
+   ───────────────────────────────────────────────────────────── */
+const txtCard = card('⑪ 文字标注区', '最近事件 / 选中事件文字（≤80 字）与机位文字（机位号,标签）');
+zoneCards.text = txtCard;
+function textRow(label, fn, placeholder, title) {
+  const row = el('div', { class: 'inline mb8' });
+  const inp = el('input', { type: 'text', maxlength: '80', placeholder, title });
+  inp.style.width = '240px';
+  const go = el('button', { class: 'btn sm', type: 'button', text: '写入', title: fn });
+  go.addEventListener('click', () => withBusy(go, async () => {
+    const v = inp.value.trim();
+    if (!v) { warn('请输入文字'); return; }
+    try { await ws.cmd('replay.call', { fn, params: { Value: v } }); ok('文字已写入'); inp.value = ''; }
+    catch (e) { cmdError(e, '文字标注'); }
+  }));
+  row.append(el('span', { class: 'tiny muted nowrap', text: label }), inp, go);
+  markUsed(fn);
+  return row;
+}
+txtCard.body.append(
+  textRow('最近事件', 'ReplaySetLastEventText', '输入文字（≤80 字）', 'ReplaySetLastEventText Value'),
+  textRow('选中事件', 'ReplaySetSelectedEventText', '输入文字（≤80 字）', 'ReplaySetSelectedEventText Value'),
+  textRow('最近·机位文字', 'ReplaySetLastEventTextCamera', '机位号,标签', 'ReplaySetLastEventTextCamera Value=机位号,标签'),
+  textRow('选中·机位文字', 'ReplaySetSelectedEventTextCamera', '机位号,标签', 'ReplaySetSelectedEventTextCamera Value=机位号,标签'),
+);
+
+/* ─────────────────────────────────────────────────────────────
+   ⑫ 事件管理区
+   ───────────────────────────────────────────────────────────── */
+const mgrCard = card('⑫ 事件管理区', '复制 / 移动 / 克隆 / 排序 / 删除 / 导出（删除类二次确认 · 不可撤销）');
+zoneCards.manage = mgrCard;
+const mgrRow = el('div', { class: 'btn-row' });
+function mgrBtn(label, fn, { channel = true, promptLib = false, danger = false } = {}) {
+  const b = el('button', { class: 'btn sm' + (danger ? ' danger' : ''), type: 'button', text: label, title: fn + (danger ? ' —— 不可撤销（B-REQ-2009）' : '') });
+  b.addEventListener('click', () => withBusy(b, async () => {
+    try {
+      let params = channel ? { Channel: st.view.channel || 'A' } : {};
+      let confirmed = false;
+      if (promptLib) {
+        const v = await prompt({ title: fn, label: '目标事件库（0–19）', value: String(Math.max(1, (st.view.eventList || 1) - 1)) });
+        if (v === null) return;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n < 0 || n > 19) { warn('事件库编号须在 0–19'); return; }
+        params.Value = n;
+      }
+      if (danger) {
+        const yes = await confirm({ title: `二次确认：${fn}`, message: `${label} 不可撤销，确定执行？`, detail: 'B-REQ-2009：删除类函数须二次确认且不可撤销。', danger: true, confirmText: '确认删除' });
+        if (!yes) return;
+        confirmed = true;
+      }
+      await ws.cmd('replay.call', { fn, params, confirmed });
+      ok(`${label} 已执行`);
+    } catch (e) { cmdError(e, label); }
+  }));
+  mgrRow.append(b);
+  markUsed(fn);
+  return b;
+}
+mgrBtn('复制最近', 'ReplayCopyLastEvent', { promptLib: true });
+mgrBtn('复制选中', 'ReplayCopySelectedEvent', { promptLib: true });
+mgrBtn('移动最近', 'ReplayMoveLastEvent', { promptLib: true });
+mgrBtn('移动选中', 'ReplayMoveSelectedEvent', { promptLib: true });
+mgrBtn('克隆最近', 'ReplayDuplicateLastEvent', {});
+mgrBtn('克隆选中', 'ReplayDuplicateSelectedEvent', {});
+mgrBtn('上移', 'ReplayMoveSelectedEventUp', { channel: false });
+mgrBtn('下移', 'ReplayMoveSelectedEventDown', { channel: false });
+mgrBtn('删除最近', 'ReplayDeleteLastEvent', { danger: true });
+mgrBtn('删除选中', 'ReplayDeleteSelectedEvent', { danger: true });
+const exportBtn = el('button', { class: 'btn sm', type: 'button', text: '导出最近…', title: 'ReplayExportLastEvent Value=文件夹（B-REQ-2010：默认记住上次路径）' });
+exportBtn.addEventListener('click', () => withBusy(exportBtn, async () => {
+  const lastDir = localStorage.getItem('replay.lastExportDir') || '';
+  const v = await prompt({ title: 'ReplayExportLastEvent', label: '导出目录（vMix 机器上的路径）', value: lastDir, placeholder: '如 D:\\Clips' });
+  if (v === null) return;
+  const dir = v.trim();
+  if (!dir) { warn('请输入目录'); return; }
+  try {
+    await ws.cmd('replay.call', { fn: 'ReplayExportLastEvent', params: { Value: dir, Channel: st.view.channel || 'A' } });
+    localStorage.setItem('replay.lastExportDir', dir);
+    ok('导出已执行');
+  } catch (e) { cmdError(e, '导出'); }
+}));
+mgrRow.append(exportBtn);
+markUsed('ReplayExportLastEvent');
+mgrCard.body.append(mgrRow,
+  el('div', { class: 'tiny muted mt8', text: '删除类函数二次确认且不可撤销（B-REQ-2009）；导出默认记住上次路径（localStorage，B-REQ-2010）。' }));
+
+/* ─────────────────────────────────────────────────────────────
+   ⑬ UI / 其他区 + 覆盖度核对（AC-29）
+   ───────────────────────────────────────────────────────────── */
+const uiCard = card('⑬ UI / 其他区', 'Replay / ReplayShowHide / ReplaySetAudioSource');
+zoneCards.ui = uiCard;
+const coverage = el('span', { class: 'pill mute', text: '函数覆盖 —' });
+uiCard.body.append(zoneRest('ui', 'Replay / ReplayShowHide / ReplaySetAudioSource'), el('div', { class: 'mt8' }, coverage));
+
+const bottomRow = el('div', { class: 'cols two mt16' });
+const bottomLeft = el('div', { class: 'flex-col' });
+const bottomRight = el('div', { class: 'flex-col' });
+bottomLeft.append(mgrCard);
+bottomRight.append(txtCard, uiCard, camCard);
+bottomRow.append(bottomLeft, bottomRight);
+page.append(bottomRow);
+
+/* ─────────────────────────────────────────────────────────────
+   函数直调调试面板（B-REQ-2006，仅开发模式）
+   ───────────────────────────────────────────────────────────── */
+const devCard = card('函数直调（开发模式）', 'B-REQ-2006：任意 vMix Function + 参数 JSON，走 POST /api/replay/raw 直发 vMix，不经回放引擎');
+devCard.body.append(el('div', { class: 'note warn mb8', text: '直调绕过预检、busy 锁与二次确认，直接打到 vMix —— 仅在开发 / 排错时使用。' }));
+const devFnInput = el('input', { type: 'text', list: 'dev-fn-list', placeholder: '如 ReplayMarkInOut' });
+const devFnList = el('datalist', { id: 'dev-fn-list' });
+const devParams = el('textarea', { rows: '2', placeholder: '{"Value": 12}' });
+devParams.value = '{}';
+const devSend = el('button', { class: 'btn sm primary', type: 'button', text: '发送' });
+const devOut = el('pre', { class: 'tiny muted pre-wrap', style: { background: '#0d0d0d', padding: '8px', borderRadius: '8px', maxHeight: '160px', overflow: 'auto' }, text: '（响应显示在这里）' });
+devSend.addEventListener('click', () => withBusy(devSend, async () => {
+  const fn = devFnInput.value.trim();
+  if (!fn) { warn('请输入函数名'); return; }
+  let params = {};
+  try { params = JSON.parse(devParams.value || '{}'); } catch { warn('参数不是合法 JSON'); return; }
+  try {
+    const r = await api('/api/replay/raw', { method: 'POST', body: { fn, params } });
+    devOut.textContent = JSON.stringify(r, null, 2);
+    ok(`${fn} 已直发`);
+  } catch (e) { devOut.textContent = JSON.stringify(e.data || { error: e.message }, null, 2); cmdError(e, '直调'); }
+}));
+devCard.body.append(
+  el('div', { class: 'inline mb8' }, devFnInput, devSend),
+  el('div', { class: 'field' }, el('label', { text: '参数 JSON' }), devParams),
+  devOut);
+devCard.classList.toggle('hidden', !st.devMode);
+page.append(devCard);
+
+/* ─────────────────────────────────────────────────────────────
+   整页忙碌遮罩（B-REQ-202：MARKING / RETURNING 期间锁定）
+   ───────────────────────────────────────────────────────────── */
+const veil = el('div', { class: 'busy-veil hidden', style: { position: 'fixed', zIndex: '400' } },
+  el('span', { class: 'spinner' }),
+  el('span', { class: 'bold', text: '' }));
+page.append(veil);
+const veilLabel = $('span.bold', veil);
+
+/* ─────────────────────────────────────────────────────────────
+   状态同步与渲染
+   ───────────────────────────────────────────────────────────── */
+function snapshotToView(snap) {
+  const out = {};
+  if (snap) {
+    out.phase = snap.phase; out.busy = !!snap.busy; out.recording = !!snap.recording;
+    out.channel = snap.channel; out.eventList = snap.eventList; out.speed = snap.speed;
+    out.fault = snap.fault || null; out.playheadDisplaced = !!snap.playheadDisplaced;
+    out.clip = { ...(snap.clip || {}) };
+    if (snap.observed) {
+      out.positionMs = snap.observed.position || 0; out.durationMs = snap.observed.duration || 0;
+      out.live = !!snap.observed.live;
+    }
+  }
+  return out;
+}
+function httpToView(d) {
+  const out = snapshotToView(d.snapshot);
+  out.playheadDisplaced = d.playheadDisplaced !== undefined ? !!d.playheadDisplaced : out.playheadDisplaced;
+  return out;
+}
+function buildView() {
+  const wsr = ws.state && ws.state.replay ? ws.state.replay : {};
+  const http = st.httpView || {};
+  return st.view = {
+    phase: wsr.phase ?? http.phase ?? 'IDLE',
+    busy: wsr.busy ?? http.busy ?? false,
+    recording: wsr.recording ?? http.recording ?? false,
+    channel: wsr.channel ?? http.channel ?? 'A',
+    eventList: wsr.eventList ?? http.eventList ?? 1,
+    speed: wsr.speed ?? http.speed ?? 1,
+    fault: wsr.fault ?? http.fault ?? null,
+    externalChange: wsr.externalChange ?? null,
+    playheadDisplaced: wsr.playheadDisplaced ?? http.playheadDisplaced ?? false,
+    positionMs: wsr.positionMs ?? http.positionMs ?? 0,
+    durationMs: wsr.durationMs ?? http.durationMs ?? 0,
+    live: wsr.live ?? http.live ?? true,
+    lastMarkMs: wsr.lastMarkMs ?? null,
+    clip: { ...(http.clip || {}), ...(wsr.clip || {}) },
+  };
+}
+
+function refreshControls() {
+  const v = st.view;
+  const recording = !!v.recording;
+  const phase = v.phase || 'IDLE';
+  const busy = !!v.busy;
+  const transient = phase === 'MARKING' || phase === 'RETURNING';
+
+  /* ① 录制 LED + 时长 */
+  if (recording && !st.recordingSince) st.recordingSince = Date.now();
+  if (!recording) st.recordingSince = null;
+  const tcode = st.recordingSince ? fmt.timecode(Date.now() - st.recordingSince, { showMs: true }) : '--:--:--';
+  recTcodeEl.textContent = tcode;
+  recLed.className = 'pill ' + (recording ? 'ok' : 'mute');
+  statRecLed.className = 'pill ' + (recording ? 'ok' : 'mute');
+  statRecTcode.textContent = tcode;
+
+  /* B-REQ-2002：recording=false 时其余区域整体禁用（相位门控随后按相位再放开个别按钮） */
+  for (const b of $$('button', page)) {
+    if (btnSimple === b || btnFull === b || devToggle === b || faultReset === b || extAck === b || devSend === b || recBtns.contains(b)) continue;
+    if (b.dataset.busy) continue;
+    b.disabled = transient || !recording;
+  }
+  const reasonNote = recCard.body.querySelector('.rec-reason');
+  if (!recording) {
+    if (!reasonNote) recCard.body.append(el('div', { class: 'note warn mt8 rec-reason', text: 'recording=false：回放录制未启动 —— 除录制区外全部功能已禁用（B-REQ-2002）。请先「● 开始录制」。' }));
+  } else if (reasonNote) reasonNote.remove();
+
+  /* 相位 / busy / 状态条 */
+  const phTxt = fmt.phaseLabel(phase);
+  phasePill.className = 'pill ' + (phase === 'FAULT' ? 'err' : phase === 'AIR' ? 'warn' : phase === 'IDLE' ? 'mute' : 'info');
+  phasePill.textContent = `相位 ${phTxt}`;
+  busyPill.className = 'pill ' + (busy ? 'err' : 'mute');
+  busyPill.textContent = busy ? 'busy 锁：宏执行中' : 'busy 空闲';
+  chanPill.textContent = `通道 ${v.channel || 'A'}`;
+  chanPill.className = 'pill ' + (v.channel === 'B' ? 'info' : 'mute');
+  listPill.textContent = `事件库 ${v.eventList || 1}`;
+  const spd = Number(v.speed);
+  speedPill.textContent = Number.isFinite(spd) ? spd.toFixed(2) + '×' : '—×';
+  const pos = Number(v.positionMs) || 0, dur = Number(v.durationMs) || 0;
+  posPill.textContent = `${fmt.timecode(pos, { showMs: true })} / ${fmt.timecode(dur, { showMs: true })}`;
+  progBar.style.width = dur > 0 ? Math.min(100, (pos / dur) * 100).toFixed(2) + '%' : '0%';
+
+  /* 通道高亮 */
+  for (const [key, b] of Object.entries(chBtns)) {
+    if (key === 'A' || key === 'B') b.classList.toggle('on', v.channel === key);
+  }
+  /* 事件库高亮 */
+  for (let i = 0; i < libBtns.length; i++) libBtns[i].classList.toggle('on', (v.eventList || 1) === i + 1);
+
+  /* 裁切区按钮相位门控 */
+  const over = st.xx > (st.cfg ? st.cfg.clip.maxLookbackMs : 45000);
+  clipBtn.disabled = !(recording && phase === 'ARMED' && !busy && !over);
+  clipAirBtn.disabled = !(recording && phase === 'ARMED' && !busy && !over);
+  airBtn.disabled = !(recording && (phase === 'CUED' || phase === 'ARMED')) || busy;
+  discardBtn.disabled = !(phase === 'CUED' || phase === 'AIR') || busy;
+  extBtn.disabled = !(phase === 'CUED' || phase === 'AIR') || busy;
+  for (const b of $$('button', clipCard.body)) {
+    const t = b.title || '';
+    if (t.includes('ReplayMoveSelected')) b.disabled = !(phase === 'CUED' || phase === 'AIR') || busy;
+    if (t.includes('ReplayJumpToSelected')) b.disabled = !(phase === 'CUED' || phase === 'AIR') || busy;
+    if (t.includes('ReplayJumpToNow') && b !== nowBtn) b.disabled = !(phase === 'CUED' || phase === 'AIR') || busy;
+  }
+  backLive.disabled = !(phase === 'AIR') || busy;
+
+  /* 速度滑杆显示（非拖动时跟随回读） */
+  if (!spdDragging && Number.isFinite(spd)) { spdSlider.value = String(spd); spdVal.textContent = spd.toFixed(2) + '×'; }
+
+  /* 片段预估时长 + 最近打点（B-REQ-530） */
+  const est = v.clip && v.clip.estimatedDurationMs;
+  estVal.textContent = est ? fmt.duration(est) : '—';
+  markInfo.textContent = v.lastMarkMs ? `最近打点 ${fmt.relTime(v.lastMarkMs)}` : '最近打点 —';
+
+  /* 播放头错位提示 */
+  displacedNote.classList.toggle('hidden', !v.playheadDisplaced);
+
+  /* FAULT */
+  if (v.fault) {
+    faultBar.classList.remove('hidden');
+    faultText.textContent = `${v.fault.code || ''} —— ${v.fault.msg || ''}（${fmt.datetime(v.fault.at)}）`;
+  } else faultBar.classList.add('hidden');
+
+  /* 外部变化 */
+  if (v.externalChange) {
+    extBar.classList.remove('hidden');
+    const x = v.externalChange;
+    extText.textContent = `${x.msg || '通道回放状态与意图不符'}（期望 ${x.expected === null ? '—' : x.expected}，实际 ${x.observed === null ? '—' : x.observed}，vMix state=${x.state || '—'}，${fmt.relTime(x.at)}）`;
+  } else extBar.classList.add('hidden');
+
+  /* 瞬态整页锁定（B-REQ-202 防连点） */
+  veil.classList.toggle('hidden', !transient);
+  if (transient) veilLabel.textContent = `相位 ${phTxt} —— 回放宏执行中，已锁定全部操作（B-REQ-202）`;
+
+  /* 覆盖度 */
+  coverage.textContent = `函数覆盖 ${st.usedFns.size}/${st.totalFns}（§5.12.1 / AC-29）`;
+  coverage.className = 'pill ' + (st.usedFns.size >= st.totalFns ? 'ok' : 'warn');
+
+  updateXxUI();
+}
+
+function updateXxUI() {
+  if (!st.cfg) return;
+  const max = st.cfg.clip.maxLookbackMs;
+  const warnT = st.cfg.clip.warnThreshold || 0.8;
+  const over = st.xx > max;
+  const near = !over && st.xx > max * warnT;
+  xxInput.style.borderColor = over ? 'var(--danger)' : near ? 'var(--warn)' : '';
+  xxLabel.className = 'pill mono-num ' + (over ? 'err' : near ? 'warn' : 'info');
+  xxLabel.textContent = fmt.secs(st.xx);
+  if (over) {
+    xxLimitNote.className = 'note danger mt8';
+    xxLimitNote.textContent = `B-REQ-521：回溯量 ${fmt.secs(st.xx)} 超过回放会话缓冲容量 ${fmt.secs(max)}（config.clip.maxLookbackMs，R10 须实测回填）—— 执行按钮已禁用。入点会被 vMix 静默截断。`;
+  } else if (near) {
+    xxLimitNote.className = 'note warn mt8';
+    xxLimitNote.textContent = `B-REQ-539：回溯量已达缓冲容量的 ${Math.round((st.xx / max) * 100)}%（> ${Math.round(warnT * 100)}%），接近上限 ${fmt.secs(max)}。`;
+  } else {
+    xxLimitNote.className = 'note hidden';
+  }
+  /* 再次应用门控（over 状态可能变化） */
+  if (st.view) {
+    const v = st.view;
+    const busy = !!v.busy;
+    clipBtn.disabled = !(v.recording && v.phase === 'ARMED' && !busy && !over);
+    clipAirBtn.disabled = !(v.recording && v.phase === 'ARMED' && !busy && !over);
+  }
+}
+
+function setXx(ms, opts = {}) {
+  st.xx = Math.max(1000, Math.min(120000, Math.round(ms / 50) * 50));
+  const secs = (st.xx / 1000).toFixed(1);
+  if (document.activeElement !== xxInput) xxInput.value = secs;
+  xxSlider.value = secs;
+  updateXxUI();
+  schedulePreflight();
+  if (opts.skipSave) { clearTimeout(st.clipSaveTimer); st.clipSaveTimer = null; }
+  else scheduleSave();
+}
+function scheduleSave() {
+  clearTimeout(st.clipSaveTimer);
+  st.clipSaveTimer = setTimeout(saveClipParams, 300);
+}
+async function saveClipParams(persistConfig = true) {
+  const body = { lookbackMs: st.xx, outPointMode: st.mode, fixedLengthMs: st.fixedLen };
+  try { await ws.cmd('replay.clipParams', body); } catch (e) { /* WS 断了不提示，静默 */ }
+  if (persistConfig && st.cfg && st.xx <= st.cfg.clip.maxLookbackMs) {
+    try {
+      await api('/api/config', {
+        method: 'POST', body: { patch: { 'clip.defaultLookbackMs': st.xx, 'clip.defaultOutPointMode': st.mode, 'clip.fixedLengthMs': st.fixedLen } }, quiet: true,
+      });
+    } catch { /* 配置持久化失败静默（B-REQ-537 尽力而为） */ }
+  }
+}
+xxSlider.addEventListener('input', () => setXx(Number(xxSlider.value) * 1000));
+xxInput.addEventListener('change', () => { const v = Number(xxInput.value); if (Number.isFinite(v)) setXx(v * 1000); });
+xxInput.addEventListener('input', () => {
+  const v = Number(xxInput.value);
+  if (!Number.isFinite(v)) return;
+  st.xx = Math.max(1000, Math.min(120000, Math.round(v * 1000)));
+  xxLabel.textContent = fmt.secs(st.xx);
+  updateXxUI();
+  schedulePreflight();
+  scheduleSave();
+});
+xxSlider.addEventListener('change', () => { saveClipParams(true); });
+xxInput.addEventListener('blur', () => { saveClipParams(true); });
+
+async function doClip(which) {
+  const btn = which === 'clip' ? clipBtn : clipAirBtn;
+  withBusy(btn, async () => {
+    try {
+      const args = { lookbackMs: st.xx, outPointMode: st.mode, fixedLengthMs: st.fixedLen, eventList: st.view.eventList || 1, channel: st.view.channel || 'A' };
+      const r = await ws.cmd(which === 'clip' ? 'replay.clip' : 'replay.clipAndAir', args);
+      ok(which === 'clip' ? `已裁切（耗时 ${r.clip ? fmt.secs(r.clip.estimatedDurationMs || st.xx) : fmt.secs(st.xx)}，进入 CUED）` : `已裁切并上屏（总耗时 ${r.totalMs ? r.totalMs + 'ms' : '—'}）`);
+    } catch (e) { cmdError(e, which === 'clip' ? '裁切' : '裁切并上屏'); }
+  });
+}
+
+/* ── 同步入口 ── */
+function sync() {
+  buildView();
+  refreshControls();
+}
+ws.on('hello', sync);
+ws.on('patch', sync);
+ws.start({ audience: 'director' });
+
+/* ── 初始加载 ── */
+(async function init() {
+  try {
+    const [cat, http] = await Promise.all([
+      api('/api/replay/catalog'),
+      api('/api/replay/state'),
+    ]);
+    /* /api/replay/catalog 的 catalog 字段才是「分区 + 函数」结构（zones 字段仅分区元数据） */
+    st.zones = cat.catalog || cat.zones || [];
+    st.totalFns = cat.totalFunctions || 0;
+    for (const z of st.zones) for (const f of z.functions) st.byFn.set(f.fn, f);
+    st.cfg = http.config || null;
+    st.httpView = httpToView(http);
+    if (st.cfg) {
+      st.xx = (http.clip && http.clip.lookbackMs) || st.cfg.clip.defaultLookbackMs || 12000;
+      st.mode = (http.clip && http.clip.outPointMode) || st.cfg.clip.defaultOutPointMode || 'follow-now';
+      st.fixedLen = (http.clip && http.clip.fixedLengthMs) || st.cfg.clip.fixedLengthMs || 8000;
+      if (st.cfg.clip.presets && st.cfg.clip.presets.length) {
+        clear(presetRow);
+        for (const p of st.cfg.clip.presets) {
+          const b = el('button', { class: 'btn sm', type: 'button', text: `${p / 1000}s`, title: `回溯量预设 ${fmt.secs(p)}` });
+          b.addEventListener('click', () => setXx(p));
+          presetRow.append(b);
+        }
+      }
+      const tcode = localStorage.getItem('replay.lastTimecode');
+      if (tcode) tcInput.value = tcode;
+      modeSelect.value = st.mode;
+      fixedInput.value = String(st.fixedLen / 1000);
+      updateFixedLenVis();
+    }
+    /* 补全 datalist 与各功能区「其余函数」按钮（catalog 到位后生成） */
+    for (const f of st.byFn.values()) devFnList.append(el('option', { value: f.fn }));
+    /* 用真实帧率刷新帧级微调按钮的等价值秒提示（B-REQ-526 / 陷阱 #19） */
+    for (const b of $$('button', page)) {
+      if (b.dataset.which && b.dataset.frames !== undefined) {
+        const f = Number(b.dataset.frames);
+        b.title = `${b.dataset.which === 'in' ? 'ReplayMoveSelectedInPoint' : 'ReplayMoveSelectedOutPoint'} Value=${f} —— ${fmt.framesLabel(f, fps())}（单位是帧，陷阱 #19）`;
+      } else if (b.dataset.jf !== undefined) {
+        const f = Number(b.dataset.jf);
+        b.title = `ReplayJumpFrames Value=${f} —— ${fmt.framesLabel(f, fps())}（R14：默认单位疑为秒，见下方警示）`;
+      }
+    }
+    fillZoneRest();
+    applyMode();
+    setXx(st.xx, { skipSave: true });   // 初始化只回填 UI，不写配置 / 不发指令
+    sync();
+    runPreflight();
+  } catch (e) {
+    cmdError(e, '初始化');
+    err('页面初始化失败：' + e.message, { title: '初始化失败', ms: 8000 });
+  }
+})();
+
+/* 录制时长定时刷新 */
+setInterval(() => {
+  if (st.recordingSince) {
+    const t = fmt.timecode(Date.now() - st.recordingSince, { showMs: true });
+    recTcodeEl.textContent = t;
+    statRecTcode.textContent = t;
+  }
+}, 500);
+
+/* 预检随相位变化自动刷新（每 5s 或相位变化时） */
+let lastPfPhase = null;
+setInterval(() => {
+  if (st.view.phase !== lastPfPhase) { lastPfPhase = st.view.phase; runPreflight(); }
+}, 5000);
+
+})();
+</script>
+</body>
+</html>

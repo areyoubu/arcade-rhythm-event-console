@@ -1,0 +1,967 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>导播 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  /* ── 导播页布局：不再内嵌画面，整页为纯控制台（画面走 OBS 浏览器源） ── */
+  .d-app { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  .d-main { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+  .side-pane { display: flex; flex-direction: column; gap: 12px; width: 100%; max-width: 1200px; margin: 0 auto; }
+
+  /* ── 监看改由 OBS 输出：说明卡 ── */
+  #obsHelpCard .obs-url-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  #obsHelpCard .obs-url { flex: 1; min-width: 220px; font-family: var(--mono); font-size: 12.5px; background: var(--surface-3); border: 1px solid var(--border-strong); border-radius: 8px; padding: 6px 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* ── 编排面板 ── */
+  .cd-big { font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 62px; font-weight: 800; line-height: 1; color: var(--accent); }
+  .cd-big .unit { font-size: 26px; color: var(--text-dim); margin-left: 6px; font-weight: 700; }
+  .preset-on { /* 选中的提前量预设 */ }
+  .auto-danger { border: 1px solid #6d2d2d; border-radius: 4px; padding: 8px 10px; background: #1a1010; }
+  .queue-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .queue-row .remain { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 700; min-width: 64px; text-align: right; }
+
+  /* ── 快速提示 ── */
+  .cue-grid { display: grid; gap: 6px; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); }
+  .cue-tpl { position: relative; min-height: 46px; text-align: left; justify-content: flex-start; }
+  .cue-tpl .kbd { position: absolute; top: 5px; right: 6px; font-size: 10.5px; font-family: var(--mono); color: var(--text-mute); background: rgba(0,0,0,.45); border-radius: 5px; padding: 0 5px; }
+  .cue-tpl.dragging { opacity: .35; }
+
+  /* ── 回执看板 ── */
+  .ack-cue { border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; overflow: hidden; }
+  .ack-cue > header { display: flex; align-items: center; gap: 8px; padding: 7px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); font-size: 13px; }
+  .ack-cue .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ack-row { display: flex; align-items: center; gap: 8px; padding: 5px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+  .ack-row:last-child { border-bottom: none; }
+  .ack-ok { color: var(--ok); font-family: var(--mono); }
+  .ack-miss { color: #ff8a94; font-weight: 700; background: #331318; border: 1px solid #7a2530; border-radius: 6px; padding: 1px 8px; } /* C-REQ-804：未确认高亮 */
+
+  /* ── 事件日志 ── */
+  .log-box { max-height: 220px; overflow-y: auto; font-family: var(--mono); font-size: 12px; }
+  .log-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  .log-row .t { color: var(--text-mute); flex: 0 0 auto; }
+  .log-row .src { flex: 0 0 84px; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }
+  .log-row .msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .log-row .lvl { flex: 0 0 auto; font-weight: 700; }
+  .lvl.warn { color: var(--warn); } .lvl.error { color: var(--danger); } .lvl.info { color: var(--text-mute); }
+  .audit-tag { color: #f5c451; border: 1px solid #7a5d13; border-radius: 5px; padding: 0 5px; font-size: 10.5px; }
+
+  /* ── 悬浮大提醒（overlay 层） C-REQ-580~588 ── */
+  #bigAlert {
+    position: fixed; inset: 0; z-index: 400;
+    /* ★ C-REQ-588 / C-REQ-802 / AC-C17：默认 pointer-events 穿透，
+         大提醒绝不阻塞导播操作；只有下面的 ack 按钮（pointer-events:auto）可点。 */
+    pointer-events: none;
+  }
+  #bigAlert .ba-frame {
+    position: absolute; inset: 5vh 6vw;
+    border: 3px solid var(--danger); border-radius: 8px;
+    background: rgba(11, 13, 18, .58);
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2.2vh;
+    animation: ba-pulse .9s ease-in-out infinite;   /* C-REQ-581：全屏脉冲边框 */
+  }
+  @keyframes ba-pulse {
+    0%, 100% { border-color: rgba(189, 75, 75, .45); }
+    50%      { border-color: rgba(189, 75, 75, 1); }
+  }
+  #bigAlert .ba-title { font-size: clamp(64px, 13vh, 220px); font-weight: 900; line-height: 1.05; text-align: center; color: #fff; }
+  #bigAlert .ba-sub { font-size: clamp(22px, 4.5vh, 60px); color: var(--text-dim); font-weight: 700; }
+  #bigAlert .ba-ack { pointer-events: auto; font-size: clamp(20px, 3.5vh, 42px); padding: 14px 46px; border-radius: 6px; } /* 唯一可点的元素 */
+
+  /* 编排归零的待确认条 */
+  #zeroAction { border: 2px solid var(--danger); }
+
+  /* ── ?obs=1：作为 OBS 浏览器源投到监视器时（3 米外观看） ──
+     只靠 body.obs-mode 这一段 CSS 隐藏/放大，不在 JS 里删节点，
+     这样 OBS 重新载入或去掉 ?obs=1 后能完整恢复。 */
+  body.obs-mode .topbar { display: none !important; }
+  body.obs-mode #obsHelpCard { display: none !important; }
+  body.obs-mode #logCard { display: none !important; }
+  body.obs-mode .d-main { padding: 16px; }
+  body.obs-mode .side-pane { max-width: none; gap: 18px; }
+  body.obs-mode .statusbar { font-size: 15px; }
+  body.obs-mode .pill { font-size: 15px; padding: 5px 14px; }
+  body.obs-mode .card > header { font-size: 17px; }
+  body.obs-mode .card > header .sub { font-size: 14px; }
+  body.obs-mode .card > .body { font-size: 16px; }
+  body.obs-mode .btn { font-size: 16px; min-height: 42px; }
+  body.obs-mode .btn.sm { font-size: 15px; min-height: 36px; }
+  body.obs-mode .btn.lg { font-size: 19px; min-height: 58px; }
+  body.obs-mode .cd-big { font-size: clamp(90px, 18vh, 260px); }
+  body.obs-mode .cd-big .unit { font-size: clamp(32px, 6vh, 84px); }
+  body.obs-mode .queue-row { font-size: 16px; }
+  body.obs-mode .ack-row { font-size: 15px; }
+  body.obs-mode .ack-cue > header { font-size: 16px; }
+  body.obs-mode .note { font-size: 16px; }
+  body.obs-mode .small { font-size: 14px; }
+  body.obs-mode .tag { font-size: 14px; padding: 2px 9px; }
+  body.obs-mode .cue-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 9px; }
+  body.obs-mode .cue-tpl { min-height: 66px; font-size: 17px; }
+  body.obs-mode .cue-tpl .kbd { font-size: 12px; }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script src="/shared/audio.js"></script>
+<script>
+(function () {
+'use strict';
+const { el, $, $$, clear, esc, ok, warn, err, toast, cmdError, modal, confirm, prompt, topbar, withBusy, sortable, poll, api } = window.ui;
+const fmt = window.fmt;
+
+/* ═══════════ 页面状态 ═══════════ */
+let cfg = null;                 // GET /api/config 的全量配置
+let channels = ['director', 'cast', 'floor'];
+let templates = [];
+const allCues = new Map();      // cueId -> Cue（hello 全量 + cue:set + poll 校准）
+let clients = {};               // state.cue.clients
+let audioStats = {};            // state.cue.audio
+const ticks = new Map();        // countdownId -> {remainingMs, at:performance.now(), state, title}
+let mainCdId = null;            // state.countdown.active.id
+let pendingZero = null;         // 半自动归零待确认
+const logs = [];                // 事件日志缓冲（F）
+let logPaused = false;
+
+/* ?obs=1：本页作为 OBS 浏览器源投到监视器时，只加一个 body class，
+   由 CSS 隐藏导航条/说明卡/日志并整体放大；不删 DOM，重新载入可恢复。 */
+const obsMode = new URLSearchParams(location.search).get('obs') === '1';
+if (obsMode) document.body.classList.add('obs-mode');
+
+/* ═══════════ 布局 ═══════════ */
+// 声音解锁按钮放在**状态条**里而不是顶栏：
+// ?obs=1 时顶栏会被隐藏（那是给监视器看的），如果按钮藏在顶栏里，
+// 导播在 OBS 浏览器源里就永远没法解锁声音了。
+const unlockHost = el('span');
+const statusBar = el('div', { class: 'statusbar' });
+const app = el('div', { class: 'd-app' }, topbar({ current: '/director' }), statusBar);
+document.body.append(app);
+audioCue.mountUnlockButton(unlockHost, { compact: true });
+
+/* ── 顶部状态条：vMix ● / OBS ● / 渲染端 N / 解说端 N / 声音 N/M / 相位 ── */
+const pillVmix = statusPill('vMix'), pillObs = statusPill('OBS'), pillOverlay = statusPill('渲染端');
+const pillCast = statusPill('解说端'), pillAudio = statusPill('声音'), pillPhase = statusPill('相位');
+statusBar.append(pillVmix, pillObs, pillOverlay, pillCast, pillAudio, el('span', { class: 'spacer' }), unlockHost, pillPhase);
+function statusPill(name) { return el('span', { class: 'pill mute', text: '● ' + name }); }
+function setPill(p, good, text, title) {
+  p.className = 'pill ' + (good ? 'ok' : (good === null ? 'mute' : 'err'));
+  p.textContent = '● ' + text;
+  p.title = title || '';
+}
+function syncStatus() {
+  const s = window.arcadeWS.state || {};
+  const h = s.health || {};
+  setPill(pillVmix, !!h.vmix?.connected, h.vmix?.connected ? `vMix ${h.vmix.rttMs ?? 0}ms` : (h.vmix?.lastErr ? 'vMix 断开' : 'vMix 未连接'), h.vmix?.lastErr || null);
+  setPill(pillObs, !!h.obs?.connected, h.obs?.connected ? 'OBS 已连接' : 'OBS 未连接', h.obs?.lastErr || null);
+  // 渲染端：当前在线接收提示的渲染页面数（health.overlayClients）
+  const overlayClients = Number(h.overlayClients) || 0;
+  setPill(pillOverlay, overlayClients > 0, `渲染端 ${overlayClients} 个`, overlayClients === 0 ? '暂无渲染页面在线：请打开 /director、/cast 或 /floor' : null);
+  const counts = s.cue?.counts || {};
+  const cast = counts.cast || 0;
+  setPill(pillCast, cast > 0, `解说端已连接 ${cast}`, cast === 0 ? '解说端未连接：请打开 /cast' : null);
+  const au = (s.cue?.audio || {})['cast'] || { total: 0, unlocked: 0 };
+  setPill(pillAudio, au.total ? au.unlocked === au.total : null, `声音已解锁 ${au.unlocked || 0}/${au.total || 0}`, au.total && au.unlocked === 0 ? '解说端未启用声音（C-REQ-565）' : null);
+  const ph = s.replay?.phase || 'IDLE';
+  const phTxt = fmt.phaseLabel(ph);
+  pillPhase.className = 'pill ' + (ph === 'FAULT' ? 'err' : ph === 'AIR' ? 'warn' : ph === 'IDLE' ? 'mute' : 'info');
+  pillPhase.textContent = `相位 ${phTxt}`;
+}
+
+/* ═══════════ A. 布局 + 监看说明（画面改由 OBS 输出） ═══════════ */
+const sidePane = el('div', { class: 'side-pane' });
+const dMain = el('div', { class: 'd-main' }, sidePane);
+app.append(dMain);
+
+/* 说明卡：本页不再内嵌画面；导播端/解说端作为 OBS 浏览器源，再走 NDI 或 HDMI 到监视器 */
+const localBase = location.origin;
+const directorObsUrl = localBase + '/director?obs=1';
+const castObsUrl = localBase + '/cast';
+
+async function copyToClipboard(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    ok('已复制到剪贴板');
+    return;
+  } catch { /* 浏览器源/非安全上下文下 clipboard 可能不可用：走 textarea 兜底 */ }
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  let done = false;
+  try { done = document.execCommand('copy'); } catch { done = false; }
+  ta.remove();
+  if (done) ok('已复制到剪贴板'); else warn('复制失败，请手动选中地址复制');
+}
+function obsUrlRow(label, url) {
+  return el('div', { class: 'obs-url-row' },
+    el('span', { class: 'dim small', style: { minWidth: '62px' }, text: label }),
+    el('code', { class: 'obs-url', text: url, title: url }),
+    el('button', { class: 'btn sm', text: '复制', onclick: () => copyToClipboard(url) }),
+  );
+}
+const obsHelpCard = el('section', { class: 'card', id: 'obsHelpCard' },
+  el('header', null, el('span', { text: '监看已改由 OBS 输出' })),
+  el('div', { class: 'body' },
+    el('div', { class: 'small dim', style: { lineHeight: '1.7' } },
+      '本页不再内嵌画面。请把「导播端 / 解说端」页面作为 ',
+      el('b', { text: 'OBS 浏览器源' }),
+      ' 加入场景，再用 OBS 的 ',
+      el('b', { text: 'NDI 输出' }),
+      ' 或 ',
+      el('b', { text: 'HDMI' }),
+      ' 送到监视器。',
+    ),
+    el('div', { class: 'small dim mt8', style: { lineHeight: '1.7' } },
+      '浏览器源建议：1920×1080、60fps、',
+      el('code', { text: 'shutdown=false' }),
+      '、',
+      el('code', { text: 'restart_when_active=false' }),
+      '。',
+    ),
+    obsUrlRow('导播端', directorObsUrl),
+    obsUrlRow('解说端（透明叠加）', castObsUrl),
+    el('div', { class: 'tiny muted mt8', style: { lineHeight: '1.7' } },
+      '解说端是**背景完全透明**的叠加层，只画提示文字/倒计时，直接盖在画面上。'
+      + '预览时加 ?preview=1 会显示棋盘格底衬；需要在普通浏览器里点「收到」时加 ?ack=1。'),
+    el('div', { class: 'tiny muted mt8', style: { lineHeight: '1.7' } },
+      '声音：OBS 浏览器源默认不出声，需要在源的「高级音频属性」里把该源监听到输出，'
+      + '或在浏览器里先点一下页面解锁。'),
+    // 「监看延迟 D vs 回路延迟 L」的极简保留：画面以 OBS 监视器为准，L 用于打点补偿。
+    el('div', { class: 'small dim mt12', text: '画面延迟以 OBS 监视器为准；打点补偿在「设置 → 回放与时序 → markDelayMs」调整。' }),
+  ),
+);
+sidePane.append(obsHelpCard);
+
+/* ═══════════ B. 编排面板（C-REQ-540~548） ═══════════ */
+const phaseNote = el('div', { class: 'note warn' });
+const presetRow = el('div', { class: 'btn-row mb8' });
+const customInput = el('input', { type: 'number', min: '1', max: '600', placeholder: '自定义秒数', style: { width: '110px' } });
+const btnScheduleReplay = el('button', { class: 'btn lg primary block', text: '▶ 启动回放倒计时' });
+const btnScheduleBack = el('button', { class: 'btn lg block', text: '◀ 回直播倒计时' });
+const autoBox = el('div', { class: 'check' });
+const autoChk = el('input', { type: 'checkbox' });
+const autoDangerWrap = el('div');
+const cdHeader = el('div', { class: 'card' });
+const cdBigEl = el('span', { class: 'cd-big' });
+const cdTitleEl = el('span', { class: 'dim' });
+const cdStateEl = el('span', { class: 'tag' });
+const queueBox = el('div', { class: 'mt12' });
+const resultNote = el('div');
+const blockNote = el('div');
+const zeroAction = el('div', { class: 'card hidden', id: 'zeroAction' });
+
+autoChk.addEventListener('change', () => {
+  // C-REQ-808：勾选时红框 + ⚠ 醒目警示
+  autoDangerWrap.classList.toggle('auto-danger', autoChk.checked);
+  renderAutoNote();
+});
+autoBox.append(autoChk, el('span', { class: 'label', text: '到点自动执行' }), el('span', { class: 'sub', text: '高危：归零后直接调用模块 B（C-REQ-530/531）' }));
+
+function renderAutoNote() {
+  clear(autoDangerWrap);
+  autoDangerWrap.append(autoBox);
+  if (autoChk.checked) {
+    autoDangerWrap.append(el('div', { class: 'note danger mt8' },
+      '已开启全自动：倒计时归零将直接执行模块 B，不再等待人工确认。',
+      '若 B 执行失败而 C 已全自动推进，会造成空屏事故。',
+    ));
+  } else if (cfg && cfg.countdown?.allowAutoExecute === false) {
+    autoChk.disabled = true;
+    autoDangerWrap.append(el('div', { class: 'note warn mt8', text: '总开关 countdown.allowAutoExecute=false 已禁用自动执行；如需开启请到 设置 → 倒计时与编排。' }));
+  }
+}
+
+let selLeadMs = 15000;
+function renderPresets() {
+  clear(presetRow);
+  const presets = cfg?.countdown?.leadPresetsMs || [60000, 30000, 15000, 10000, 5000, 3000];
+  if (!selLeadMs || !presets.includes(selLeadMs)) selLeadMs = cfg?.countdown?.defaultLeadMs || 15000;
+  for (const ms of presets) {
+    const s = Math.round(ms / 1000);
+    presetRow.append(el('button', {
+      class: 'btn sm ' + (selLeadMs === ms ? 'on' : ''),
+      text: 'T-' + s,
+      title: `提前 ${s} 秒`,
+      onclick: () => { selLeadMs = ms; customInput.value = ''; renderPresets(); },
+    }));
+  }
+  presetRow.append(customInput);
+  customInput.onchange = () => {
+    const s = Number(customInput.value);
+    if (Number.isFinite(s) && s > 0) { selLeadMs = Math.round(s * 1000); renderPresets(); }
+  };
+}
+customInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') customInput.onchange && customInput.onchange(); });
+
+/* 归零确认执行（半自动流：C-REQ-529/530） */
+function showZeroAction(m) {
+  pendingZero = m;
+  clear(zeroAction);
+  zeroAction.classList.remove('hidden');
+  const btnGo = el('button', { class: 'btn danger lg', text: `确认执行：${m.title}` });
+  btnGo.addEventListener('click', () => {
+    ui.withBusy(btnGo, async () => {
+      const z = pendingZero;
+      if (!z) return;
+      const intent = z.title && z.title.includes('回直播') ? 'backToLive' : 'clipAndAir';
+      try {
+        await arcadeWS.cmd('orchestration.confirm', { countdownId: z.countdownId, intent, lookbackMs: cfg?.clip?.defaultLookbackMs });
+        ok('已执行：' + z.title);
+        // 顺手回执「现在切！」P0 提示（导播确认即回执）
+        const zeroCue = [...allCues.values()].find((c) => c.tag === `countdown-zero:${z.countdownId}`);
+        if (zeroCue) await arcadeWS.cmd('cue.ack', { cueId: zeroCue.id }).catch(() => {});
+        zeroAction.classList.add('hidden');
+        pendingZero = null;
+      } catch (e) { cmdError(e, '确认执行'); }
+    });
+  });
+  zeroAction.append(el('div', { class: 'body tight' },
+    el('div', { class: 'bold', text: `「${m.title}」倒计时已归零（半自动模式）—— 现在切！` }),
+    el('div', { class: 'small dim mt8', text: '执行前请确认 OBS 侧准备就绪；点「确认执行」将调用模块 B。' }),
+    el('div', { class: 'btn-row mt12' }, btnGo,
+      el('button', { class: 'btn ghost', text: '稍后再说', onclick: () => { zeroAction.classList.add('hidden'); } }),
+    ),
+  ));
+}
+
+function renderPhaseGate() {
+  const ph = window.arcadeWS.state?.replay?.phase || 'IDLE';
+  const label = fmt.phaseLabel(ph);
+  // C-REQ-803：编排面板在 B 非 ARMED 时禁用并显示原因（回直播要求 AIR）
+  const canReplay = ph === 'ARMED';
+  const canBack = ph === 'AIR';
+  btnScheduleReplay.disabled = !canReplay;
+  btnScheduleBack.disabled = !canBack;
+  btnScheduleReplay.title = canReplay ? '' : `模块 B 相位为 ${label}，须处于 ARMED（先开始回放录制）`;
+  btnScheduleBack.title = canBack ? '' : `模块 B 相位为 ${label}，须处于 AIR（回放已上屏）`;
+  clear(phaseNote);
+  if (!canReplay || !canBack) {
+    phaseNote.append(`当前模块 B 相位：${label}。`);
+    if (!canReplay) phaseNote.append(`启动回放倒计时需要「就绪 ARMED」（请先在回放面板开始录制）。`);
+    if (!canBack) phaseNote.append(`回直播倒计时需要「回放中 AIR」。`);
+  } else {
+    phaseNote.append(`当前模块 B 相位：${label}，可启动编排。`);
+  }
+}
+
+/* 高危确认（C-REQ-531）：勾选自动执行时启动前必须二次确认 */
+async function confirmAuto() {
+  if (!autoChk.checked) return true;
+  return await confirm({
+    danger: true,
+    title: '高危操作：到点自动执行',
+    message: '「到点自动执行」已勾选：倒计时归零后将直接调用模块 B 执行，不再等待人工确认。',
+    detail: '风险：若 B 执行失败而 C 已全自动推进，会造成<b>空屏事故</b>。每次执行都会记录审计日志。仅在充分演练后使用。',
+    confirmText: '我了解风险，启动全自动',
+  });
+}
+
+btnScheduleReplay.addEventListener('click', () => {
+  ui.withBusy(btnScheduleReplay, async () => {
+    if (!(await confirmAuto())) return;
+    try {
+      const r = await arcadeWS.cmd('orchestration.scheduleReplay', {
+        leadMs: selLeadMs,
+        autoExecute: autoChk.checked,
+        lookbackMs: cfg?.clip?.defaultLookbackMs,
+      });
+      ok(`回放倒计时已启动（T-${Math.round(selLeadMs / 1000)}s），预检通过`);
+      if (r?.preflight?.warn?.length) warn(r.preflight.warn.join('；'), { title: '预检告警' });
+    } catch (e) { cmdError(e, '启动回放编排'); }
+  });
+});
+btnScheduleBack.addEventListener('click', () => {
+  ui.withBusy(btnScheduleBack, async () => {
+    if (!(await confirmAuto())) return;
+    try {
+      await arcadeWS.cmd('orchestration.scheduleBackToLive', { leadMs: selLeadMs, autoExecute: autoChk.checked });
+      ok(`回直播倒计时已启动（T-${Math.round(selLeadMs / 1000)}s）`);
+    } catch (e) { cmdError(e, '启动回直播编排'); }
+  });
+});
+
+/* 编排依赖模块 B：功能开关关闭时直接说明原因，而不是让按钮点了才报错 */
+const orchFeatureHead = el('strong');
+const orchFeatureNote = el('div', { class: 'note warn mb12', style: { display: 'none' } },
+  orchFeatureHead, ' 编排无法启动。请到 ',
+  el('a', { href: '/settings#features', text: '设置 → 功能开关' }), ' 开启。');
+const syncOrchFeature = () => {
+  const replayOn = ui.featureEnabled('replay');
+  const vmixOn = ui.featureEnabled('vmix');
+  orchFeatureNote.style.display = (replayOn && vmixOn) ? 'none' : '';
+  orchFeatureHead.textContent = replayOn ? '「vMix 控制」未启用' : '「回放功能」未启用';
+};
+arcadeWS.on('hello', syncOrchFeature);
+arcadeWS.on('patch', (m) => { if (String(m.path || '').startsWith('config.features')) syncOrchFeature(); });
+setTimeout(syncOrchFeature, 0);
+
+const orchCard = el('section', { class: 'card' },
+  el('header', null, el('span', { text: '编排' }), el('span', { class: 'spacer' }), el('span', { class: 'sub', text: '预检不通过立即告警，不启动倒计时（C-REQ-542）' })),
+  el('div', { class: 'body' },
+    orchFeatureNote,
+    phaseNote,
+    el('div', { class: 'mb8' }, el('label', { class: 'dim small', text: '回放提前量（C-REQ-521）' }), presetRow),
+    el('div', { class: 'btn-row' }, btnScheduleReplay, btnScheduleBack),
+    el('div', { class: 'mt12' }, autoDangerWrap),
+    resultNote, blockNote, zeroAction,
+    cdHeader, queueBox,
+  ),
+);
+sidePane.append(orchCard);
+
+/* ── 倒计时大字显示 + 本地插值（C-REQ-528） ── */
+function renderCdHeader() {
+  clear(cdHeader);
+  if (!mainCdId) return;
+  const t = ticks.get(mainCdId);
+  const q = (window.arcadeWS.state?.countdown?.queue || []).find((x) => x.id === mainCdId);
+  const title = t?.title || q?.title || '倒计时';
+  const state = q?.state || t?.state || 'running';
+  cdHeader.classList.remove('hidden');
+  cdHeader.append(el('div', { class: 'body tight', style: { display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' } },
+    el('div', null, cdBigEl, el('span', { class: 'unit', text: 's' })),
+    el('div', { class: 'grow' },
+      el('div', { class: 'bold', text: title }),
+      el('div', { class: 'small dim mt8' }, state === 'held' ? '已暂停' : state === 'running' ? '倒计时中（本地插值显示）' : state),
+    ),
+    cdStateEl,
+  ));
+  cdStateEl.className = 'tag ' + (state === 'held' ? 'warn' : '');
+  cdStateEl.textContent = state === 'held' ? '已暂停' : '运行中';
+}
+
+function renderQueue() {
+  clear(queueBox);
+  const q = window.arcadeWS.state?.countdown?.queue || [];
+  if (!q.length) {
+    queueBox.append(el('div', { class: 'dim small', text: '待执行队列为空（C-REQ-548）' }));
+    return;
+  }
+  queueBox.append(el('div', { class: 'dim small bold mb8', text: '待执行队列' }));
+  for (const item of q) {
+    const remainEl = el('span', { class: 'remain', dataset: { cd: item.id } });
+    queueBox.append(el('div', { class: 'queue-row' },
+      el('span', { class: 'grow truncate', text: `${item.kind === 'backToLive' ? '◀' : '▶'} ${item.title}${item.autoExecute ? '（自动）' : ''}` }),
+      remainEl,
+      item.state === 'held'
+        ? el('button', { class: 'btn sm', text: '继续', onclick: () => cdCmd('countdown.resume', { id: item.id }, '恢复倒计时') })
+        : el('button', { class: 'btn sm', text: '暂停', onclick: () => cdCmd('countdown.hold', { id: item.id }, '暂停倒计时') }),
+      el('button', { class: 'btn sm', text: '+5s', onclick: () => cdCmd('countdown.extend', { id: item.id, deltaMs: 5000 }, '延长 5 秒') }),
+      el('button', { class: 'btn sm danger', text: '取消', onclick: () => cdCmd('countdown.cancel', { id: item.id }, '取消倒计时') }),
+    ));
+  }
+}
+async function cdCmd(op, args, ctx) {
+  try { await arcadeWS.cmd(op, args); } catch (e) { cmdError(e, ctx); }
+}
+
+/* 编排预检阻断（C-REQ-542 / 544 / AC-C02）：逐条列出并给补救步骤 */
+arcadeWS.on('orchestration:blocked', (m) => {
+  clear(blockNote);
+  blockNote.append(el('div', { class: 'note danger' },
+    el('strong', { text: `编排被阻断（${m.for === 'backToLive' ? '回直播' : '回放'}）：` }),
+    el('ul', { style: { margin: '6px 0 0', paddingLeft: '18px' } }, (m.blockers || []).map((b) => el('li', { text: b }))),
+    el('div', { class: 'mt8' }, '补救步骤：① 在回放面板确认已开始回放录制；② 检查 vMix / OBS 连接；③ 确认 OBS 中目标场景存在。'),
+  ));
+});
+
+function renderLastResult() {
+  clear(resultNote);
+  const r = window.arcadeWS.state?.countdown?.lastResult;
+  if (!r) return;
+  if (r.ok === false) {
+    resultNote.append(el('div', { class: 'note danger mt8' },
+      el('strong', { text: '上次编排失败：' }), (r.blockers || []).join('；') || r.msg || '见上方阻断详情'));
+  } else {
+    const kind = r.kind === 'execute' ? '执行' : r.kind === 'backToLive' ? '回直播编排' : '回放编排';
+    resultNote.append(el('div', { class: 'note ok mt8' },
+      `${kind}成功${r.leadMs ? `（提前量 ${Math.round(r.leadMs / 1000)}s）` : ''}${r.durationMs ? `，耗时 ${Math.round(r.durationMs)}ms` : ''} · ${fmt.clock(r.at)}`));
+  }
+}
+
+/* ═══════════ C. 快速提示（C-REQ-508/509/805，附录 E） ═══════════ */
+const cueGrid = el('div', { class: 'cue-grid' });
+const quickCard = el('section', { class: 'card' },
+  el('header', null, el('span', { text: '快速提示' }), el('span', { class: 'spacer' }),
+    el('span', { class: 'sub', text: '拖拽排序 · 数字键 1-9/0 触发（C-REQ-805）' })),
+  el('div', { class: 'body' }, cueGrid,
+    el('div', { class: 'btn-row mt12' }, el('button', { class: 'btn', text: '自由文本…', onclick: sendFreeText }))),
+);
+sidePane.append(quickCard);
+
+function interpolate(tpl, vars) {
+  return String(tpl).replace(/\{([^}]+)\}/g, (m, k) => {
+    const key = k.trim();
+    return vars[key] !== undefined ? String(vars[key]) : m;
+  });
+}
+
+function renderCueButtons() {
+  clear(cueGrid);
+  // 自定义排序：localStorage 存 id 顺序（C-REQ-805），未知 id 追加在末尾
+  let order = [];
+  try { order = JSON.parse(localStorage.getItem('director.cueOrder') || '[]'); } catch { order = []; }
+  const byId = new Map(templates.map((t) => [t.id, t]));
+  const ids = [...new Set([...order.filter((i) => byId.has(i)), ...templates.map((t) => t.id)])];
+  ids.forEach((id, i) => {
+    const t = byId.get(id);
+    const hint = i < 10 ? String((i + 1) % 10) : '';
+    cueGrid.append(el('button', {
+      class: 'btn cue-tpl', draggable: 'true', dataset: { id: t.id },
+      title: t.template,
+      onclick: () => sendTemplate(t),
+    },
+      el('span', { class: 'truncate', text: t.name }),
+      hint ? el('span', { class: 'kbd', text: hint }) : null,
+    ));
+  });
+}
+// 拖拽排序（ui.sortable），结束后落盘
+ui.sortable(cueGrid, {
+  onEnd: (ids) => { try { localStorage.setItem('director.cueOrder', JSON.stringify(ids)); } catch { /* ignore */ } },
+});
+
+/* 快捷键：数字 1-9 / 0 触发对应位置的模板按钮（输入框聚焦时不响应） */
+document.addEventListener('keydown', (e) => {
+  const tag = document.activeElement?.tagName || '';
+  if (/^(INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
+  const idx = '1234567890'.indexOf(e.key);
+  if (idx < 0) return;
+  const btns = [...cueGrid.querySelectorAll('[data-id]')];
+  if (btns[idx]) btns[idx].click();
+});
+
+/* 发送选项弹窗：优先级 / 声音 / 受众 / 需回执（默认值取自模板） */
+function cueOptionsModal({ title, preview, prio, sound, aud, requiresAck }) {
+  return new Promise((resolve) => {
+    // ⚠️ m.close() 会同步触发 onClose → resolve(null)。必须先落 settled 再 close，
+    //    否则「点发送」也会被 onClose 抢先解析成 null，提示永远发不出去。
+    let settled = false;
+    const finish = (v) => { if (settled) return; settled = true; m.close(); resolve(v); };
+    const prioSel = el('select', null, ['P0', 'P1', 'P2', 'P3'].map((p) => el('option', { value: p, text: p })));
+    prioSel.value = ['P0', 'P1', 'P2', 'P3'].includes(prio) ? prio : 'P3';
+    const soundSel = el('select', null, [['none', '无声音'], ['beep', 'beep 单短音'], ['triple', 'triple 三短音'], ['alarm', 'alarm 急促音']].map(([v, t]) => el('option', { value: v, text: t })));
+    soundSel.value = ['none', 'beep', 'triple', 'alarm'].includes(sound) ? sound : 'none';
+    const ackChk = el('input', { type: 'checkbox' });
+    ackChk.checked = !!requiresAck;
+    const audBoxes = channels.map((ch) => {
+      const c = el('input', { type: 'checkbox', value: ch });
+      c.checked = aud.includes(ch);
+      return el('label', { class: 'check', style: { display: 'inline-flex', marginRight: '14px' } }, c, el('span', { class: 'label', text: ch }));
+    });
+    const syncAck = () => { if (prioSel.value === 'P0') { ackChk.checked = true; ackChk.disabled = true; } else { ackChk.disabled = false; } };
+    prioSel.addEventListener('change', syncAck);
+    syncAck();
+    const m = modal({
+      title,
+      body: el('div', null,
+        el('div', { class: 'note info pre-wrap mb12', text: preview }),
+        el('div', { class: 'field' }, el('label', { text: '优先级' }), prioSel,
+          el('div', { class: 'help', text: 'P0 强制需回执（C-REQ-551）' })),
+        el('div', { class: 'field' }, el('label', { text: '声音' }), soundSel),
+        el('div', { class: 'field' }, el('label', { text: '受众' }), el('div', { class: 'inline' }, audBoxes)),
+        el('div', { class: 'check' }, ackChk, el('span', { class: 'label', text: '需回执（ack）' })),
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => finish(null) }),
+        el('button', { class: 'btn primary', text: '发送', onclick: () => {
+          const audience = channels.filter((ch) => audBoxes[channels.indexOf(ch)].querySelector('input').checked);
+          if (!audience.length) { warn('请至少选择一个受众'); return; }
+          finish({ priority: prioSel.value, sound: soundSel.value, audience, requiresAck: ackChk.checked });
+        } }),
+      ],
+      onClose: () => finish(null),
+    });
+  });
+}
+
+/* 按模板发送：先收集 {n}/{选手名}/{场景名} 变量，再选选项（C-REQ-508 / 1101） */
+async function sendTemplate(t) {
+  const vars = {};
+  const keys = [...new Set([...String(t.template).matchAll(/\{([^}]+)\}/g)].map((m) => m[1].trim()))];
+  for (const k of keys) {
+    const v = await prompt({ title: `话术变量 {${k}}`, label: `请填写「${k}」`, value: k === 'n' ? '3' : '', placeholder: k === '选手名' ? '选手姓名' : k === '场景名' ? '场景名称' : '' });
+    if (v === null) return;
+    vars[k] = v.trim();
+  }
+  const preview = interpolate(t.template, vars);
+  const opts = await cueOptionsModal({
+    title: `发送话术：${t.name}`,
+    preview,
+    prio: t.priority,
+    sound: t.sound,
+    aud: t.audience || [],
+    requiresAck: t.requiresAck,
+  });
+  if (!opts) return;
+  try {
+    const r = await api('/api/cues/fromTemplate', {
+      method: 'POST',
+      body: { templateId: t.id, vars, overrides: { priority: opts.priority, sound: opts.sound, audience: opts.audience, requiresAck: opts.requiresAck } },
+    });
+    ok(`已发送：${r.rendered}`);
+    addLog({ at: Date.now(), level: 'info', source: 'cue', msg: `手动发送话术 ${t.id}：${r.rendered}` });
+  } catch (e) { cmdError(e, '发送话术'); }
+}
+
+/* 自由文本（C-REQ-509） */
+async function sendFreeText() {
+  const text = await prompt({ title: '自由文本提示', multiline: true, placeholder: '输入要广播的文本…' });
+  if (text === null || !text.trim()) return;
+  const opts = await cueOptionsModal({
+    title: '自由文本提示',
+    preview: text.trim(),
+    prio: 'P2',
+    sound: 'none',
+    aud: channels,
+    requiresAck: false,
+  });
+  if (!opts) return;
+  try {
+    await api('/api/cues/free', {
+      method: 'POST',
+      body: { text: text.trim(), audience: opts.audience, priority: opts.priority, sound: opts.sound, requiresAck: opts.requiresAck },
+    });
+    ok('自由文本已广播');
+  } catch (e) { cmdError(e, '发送自由文本'); }
+}
+
+/* ═══════════ D. 回执看板（C-REQ-550~556） ═══════════ */
+const ackBox = el('div');
+const soundBox = el('div');
+const ackCard = el('section', { class: 'card' },
+  el('header', null, el('span', { text: '回执看板' }), el('span', { class: 'spacer' }), el('span', { class: 'sub', text: '未确认高亮（C-REQ-804）' })),
+  el('div', { class: 'body' }, soundBox, ackBox),
+);
+sidePane.append(ackCard);
+
+function shortId(id) { return String(id || '').slice(0, 8); }
+
+function renderSoundStatus() {
+  clear(soundBox);
+  const entries = Object.entries(audioStats || {});
+  if (!entries.length) { soundBox.append(el('div', { class: 'dim small', text: '暂无受众端在线' })); return; }
+  for (const [aud, a] of entries) {
+    const row = el('div', { class: 'ack-row' },
+      el('span', { class: 'tag', text: aud }),
+      el('span', { class: 'grow', text: `声音：${a.unlocked}/${a.total} 已解锁` }),
+    );
+    soundBox.append(row);
+    // C-REQ-567：某受众全部未解锁 → 降级建议
+    if (a.total > 0 && a.unlocked === 0) {
+      soundBox.append(el('div', { class: 'note warn mb8' }, `${aud} 端全部未启用声音 —— 请用对讲机或让该端点击「启用声音」`));
+    }
+    // C-REQ-565：列出哪些客户端未启用声音
+    const cList = (clients || {})[aud] || {};
+    for (const [cid, c] of Object.entries(cList)) {
+      if (c.audioUnlocked) continue;
+      soundBox.append(el('div', { class: 'ack-row small dim' },
+        el('span', { style: { paddingLeft: '18px' } }),
+        el('span', { class: 'grow truncate', text: `${shortId(cid)} · 声音未解锁`, title: c.ua }),
+      ));
+    }
+  }
+}
+
+function renderAckBoard() {
+  clear(ackBox);
+  renderSoundStatus();
+  const needAck = [...allCues.values()].filter((c) => c.requiresAck && c.state === 'active');
+  if (!needAck.length) {
+    ackBox.append(el('div', { class: 'dim small', text: '当前没有需回执的提示' }));
+    return;
+  }
+  for (const cue of needAck) {
+    const box = el('div', { class: 'ack-cue' });
+    const header = el('header', null,
+      el('span', { class: 'tag ' + fmt.priorityClass(cue.priority), text: cue.priority }),
+      el('span', { class: 'grow', text: cue.title, title: cue.body || '' }),
+      el('span', { class: 'tiny mute', text: fmt.relTime(cue.createdAt) }),
+      el('button', { class: 'btn sm danger', text: '强制清除', title: 'C-REQ-556：无视未 ack 直接清除', onclick: () => forceClear(cue) }),
+    );
+    box.append(header);
+    for (const aud of cue.audience || []) {
+      const cList = (clients || {})[aud] || {};
+      if (!Object.keys(cList).length) {
+        box.append(el('div', { class: 'ack-row dim small' },
+          el('span', { class: 'tag mute', text: aud }), el('span', { class: 'grow', text: '该受众无客户端在线' })));
+        continue;
+      }
+      for (const [cid, c] of Object.entries(cList)) {
+        const at = cue.acks?.[cid];
+        box.append(el('div', { class: 'ack-row' },
+          el('span', { class: 'tag mute', text: aud }),
+          el('span', { class: 'grow truncate', text: `${shortId(cid)} · ${c.audioUnlocked ? '声音已解锁' : '声音未解锁'}`, title: c.ua }),
+          at
+            ? el('span', { class: 'ack-ok', text: '已确认 ' + fmt.clock(at) })          // C-REQ-554：ack 时间戳
+            : el('span', { class: 'ack-miss', text: '⏳ 未确认' }),                 // C-REQ-804：未确认高亮
+        ));
+      }
+    }
+    ackBox.append(box);
+  }
+}
+
+async function forceClear(cue) {
+  const yes = await confirm({
+    danger: true,
+    title: '强制清除提示',
+    message: `确定强制清除「${cue.title}」？未回执的端将不再看到该提示。`,
+    confirmText: '强制清除',
+  });
+  if (!yes) return;
+  try { await arcadeWS.cmd('cue.forceClear', { cueId: cue.id }); ok('已强制清除'); }
+  catch (e) { cmdError(e, '强制清除'); }
+}
+
+/* ═══════════ E. 大提醒 overlay 层（C-REQ-580~588） ═══════════ */
+const BIG_ALERT_MS = 8000;                       // 显示时长，默认 8s（C-REQ-584）
+let bigTimer = null;
+const bigEl = el('div', { id: 'bigAlert' });
+/* ★ C-REQ-588 / C-REQ-802 / AC-C17：
+   大提醒 overlay 默认 pointer-events:none（见上方 CSS 注释），整层穿透、不阻塞导播操作；
+   全屏 pulse 边框 + 中央大字（C-REQ-581）；position:fixed + inset 全视口（C-REQ-585 多显示器）。 */
+const bigFrame = el('div', { class: 'ba-frame' });
+const bigTitle = el('div', { class: 'ba-title' });
+const bigSub = el('div', { class: 'ba-sub' });
+const bigAckBtn = el('button', { class: 'btn danger ba-ack' });   // 唯一 pointer-events:auto 的元素
+bigFrame.append(bigTitle, bigSub, bigAckBtn);
+bigEl.append(bigFrame);
+document.body.append(bigEl);
+
+function showBigAlert({ title, scene, cueId, requiresAck }) {
+  clearTimeout(bigTimer);
+  bigTitle.textContent = title || '';
+  bigSub.textContent = scene ? `${scene} · 检测到外部操作（非本系统宏触发）` : '';
+  bigAckBtn.textContent = requiresAck ? '收到（回执）' : '知道了';
+  bigAckBtn.classList.toggle('hidden', !requiresAck);
+  bigAckBtn.onclick = () => {
+    if (cueId) arcadeWS.cmd('cue.ack', { cueId }).catch(() => {});
+    hideBigAlert();
+  };
+  bigEl.classList.remove('hidden');
+  bigTimer = setTimeout(hideBigAlert, BIG_ALERT_MS);
+  addLog({ at: Date.now(), level: 'warn', source: 'cue', msg: `转场大提醒：${title}${scene ? '（' + scene + '）' : ''}` });
+}
+function hideBigAlert() {
+  clearTimeout(bigTimer);
+  bigEl.classList.add('hidden');
+}
+bigEl.classList.add('hidden');
+bigAckBtn.classList.add('hidden');
+
+arcadeWS.on('bigAlert', (m) => {
+  // 与常规提示共用优先级仲裁：若当前已有 P0 大提醒则让位（C-REQ-586 的页面侧兜底）
+  showBigAlert({ title: m.title, scene: m.scene, cueId: null, requiresAck: !!m.requiresAck });
+});
+arcadeWS.on('cue:alert', (m) => {
+  if (m.big) {
+    showBigAlert({ title: m.msg, scene: m.scene, cueId: m.cueId, requiresAck: !!m.requiresAck });
+  } else {
+    // 非大提醒的告警（如 P0 未回执升级、预检失败）→ 不阻塞的红色提示
+    toast(m.msg + (m.hint ? ` —— ${m.hint}` : ''), { type: 'err', title: m.severity === 'warn' ? '注意' : '告警', ms: 6000 });
+  }
+});
+
+/* ═══════════ F. 事件日志（C-REQ-806） ═══════════ */
+const logFilterSrc = el('select', { style: { width: '130px' } });
+const logFilterLvl = el('select', { style: { width: '110px' } });
+const logBox = el('div', { class: 'log-box' });
+const pauseChk = el('input', { type: 'checkbox' });
+const logCard = el('section', { class: 'card', id: 'logCard' },
+  el('header', null, el('span', { text: '事件日志' }), el('span', { class: 'sub', text: '最近 30 条' }), el('span', { class: 'spacer' }),
+    el('label', { class: 'check', style: { marginRight: '12px' } }, pauseChk, el('span', { class: 'label', text: '暂停滚动' })),
+    el('button', { class: 'btn ghost sm', text: '清空显示', onclick: () => { logs.length = 0; renderLogs(); } }),
+  ),
+  el('div', { class: 'body flush' },
+    el('div', { class: 'btn-row', style: { padding: '8px 10px' } }, logFilterSrc, logFilterLvl),
+    logBox,
+  ),
+);
+sidePane.append(logCard);
+pauseChk.addEventListener('change', () => { logPaused = pauseChk.checked; });
+
+const LOG_SOURCES = ['server', 'vmix', 'obs', 'cue', 'countdown', 'orchestration', 'replay', 'overlay', 'media', 'templates', 'config', 'obs-event'];
+function renderLogFilters() {
+  const src = logFilterSrc.value, lvl = logFilterLvl.value;
+  const used = new Set(logs.map((l) => l.source));
+  const opts = ['all', ...LOG_SOURCES].map((s) => el('option', { value: s, text: s === 'all' ? '全部来源' : s }));
+  clear(logFilterSrc);
+  logFilterSrc.append(...opts);
+  logFilterSrc.value = src;
+  const lvlOpts = [['all', '全部级别'], ['info', 'info'], ['warn', 'warn'], ['error', 'error']]
+    .map(([v, t]) => el('option', { value: v, text: t }));
+  clear(logFilterLvl);
+  logFilterLvl.append(...lvlOpts);
+  logFilterLvl.value = lvl;
+}
+logFilterSrc.addEventListener('change', renderLogs);
+logFilterLvl.addEventListener('change', renderLogs);
+
+function addLog(e) {
+  logs.unshift(e);
+  if (logs.length > 500) logs.pop();
+  renderLogs();
+}
+function renderLogs() {
+  renderLogFilters();
+  const src = logFilterSrc.value, lvl = logFilterLvl.value;
+  const shown = logs.filter((l) => (src === 'all' || l.source === src) && (lvl === 'all' || l.level === lvl)).slice(0, 30);
+  const stick = !logPaused && logBox.scrollTop + logBox.clientHeight >= logBox.scrollHeight - 40;
+  clear(logBox);
+  if (!shown.length) logBox.append(el('div', { class: 'dim small', style: { padding: '8px 10px' }, text: '暂无日志' }));
+  for (const l of shown) {
+    logBox.append(el('div', { class: 'log-row' },
+      el('span', { class: 't', text: fmt.clock(l.at) }),
+      el('span', { class: 'lvl ' + (l.level || 'info'), text: l.level || 'info' }),
+      el('span', { class: 'src', text: l.source, title: l.source }),
+      l.audit ? el('span', { class: 'audit-tag', text: '审计' }) : null,
+      el('span', { class: 'msg', text: (l.op ? `[${l.op}] ` : '') + l.msg, title: (l.op ? `[${l.op}] ` : '') + l.msg + (l.result ? ` => ${l.result}` : '') }),
+    ));
+  }
+  if (stick) logBox.scrollTop = logBox.scrollHeight;
+}
+
+/* ═══════════ WS 接线 ═══════════ */
+arcadeWS.on('hello', (m) => {
+  const st = m.state || {};
+  for (const [id, c] of Object.entries(st.cue?.active || {})) allCues.set(id, c);
+  renderAckBoard();
+  renderQueue();
+  renderCdHeader();
+  renderLastResult();
+  syncStatus();
+});
+
+/* cue:set —— 服务端已做优先级仲裁与受众过滤，直接渲染/合并（C-REQ-502/503） */
+arcadeWS.on('cue:set', (m) => {
+  const ids = new Set((m.cues || []).map((c) => c.id));
+  for (const c of m.cues || []) allCues.set(c.id, c);
+  // 该受众可见集之外的本地残留（导演播受众）视为已移除
+  if (m.audience === 'director') {
+    for (const [id, c] of [...allCues]) {
+      if ((c.audience || []).includes('director') && !ids.has(id)) allCues.delete(id);
+    }
+  }
+  renderAckBoard();
+});
+arcadeWS.on('cue:remove', (m) => { allCues.delete(m.cueId); renderAckBoard(); });
+arcadeWS.on('cue:ack', (m) => {
+  const c = allCues.get(m.cueId);
+  if (c) { c.acks = { ...(c.acks || {}), [m.clientId]: m.at }; allCues.set(m.cueId, c); renderAckBoard(); }
+});
+
+/* cue:sound → 本地合成音（C-REQ-560/561） */
+arcadeWS.on('cue:sound', (m) => { audioCue.play(m.sound); });
+
+/* cue:tick → 记录服务端时刻 + 本地单调时钟锚点，供 rAF 插值（C-REQ-528） */
+arcadeWS.on('cue:tick', (m) => {
+  ticks.set(m.countdownId, { remainingMs: m.remainingMs, at: performance.now(), state: m.state, title: m.title });
+  if (!mainCdId || m.countdownId === mainCdId) { mainCdId = m.countdownId; renderCdHeader(); }
+});
+arcadeWS.on('countdown:zero', (m) => {
+  ticks.delete(m.countdownId);
+  if (mainCdId === m.countdownId) { mainCdId = null; }
+  renderCdHeader();
+  if (m.autoExecute) toast(`「${m.title}」已到点，正在自动执行…`, { type: 'warn', title: '自动执行' });
+  else showZeroAction(m);          // 半自动：请导播确认「现在切！」
+});
+arcadeWS.on('countdown:cancel', (m) => {
+  ticks.delete(m.countdownId);
+  if (mainCdId === m.countdownId) { mainCdId = null; renderCdHeader(); }
+});
+
+arcadeWS.on('obs:event', (m) => {
+  addLog({ at: m.at || Date.now(), level: 'info', source: 'obs-event', msg: `OBS 事件 ${m.event} ${JSON.stringify(m.data || {}).slice(0, 160)}` });
+});
+arcadeWS.on('log', (m) => {
+  addLog({ at: m.at, level: m.level, source: m.source, msg: m.msg, op: m.op, result: m.result, durationMs: m.durationMs, audit: String(m.msg || '').startsWith('AUDIT') });
+});
+/* state 订阅（watch：hello 全量 + patch 增量） */
+arcadeWS.watch('health.overlayClients', () => syncStatus());
+arcadeWS.watch('replay.phase', () => { renderPhaseGate(); syncStatus(); });
+arcadeWS.watch('countdown.queue', () => { renderQueue(); renderCdHeader(); });
+arcadeWS.watch('countdown.active', (a) => { mainCdId = a?.id || null; renderCdHeader(); });
+arcadeWS.watch('countdown.lastResult', () => renderLastResult());
+arcadeWS.watch('cue.clients', (v) => { if (v) { clients = v; renderAckBoard(); } });
+arcadeWS.watch('cue.audio', (v) => { if (v) { audioStats = v; renderAckBoard(); syncStatus(); } });
+arcadeWS.watch('cue.counts', () => syncStatus());
+arcadeWS.watch('health.vmix', () => syncStatus());
+arcadeWS.watch('health.obs', () => syncStatus());
+
+/* rAF 本地插值循环（C-REQ-528：按本地单调时钟平滑推进，避免网络抖动跳秒） */
+function remNow(id) {
+  const t = ticks.get(id);
+  if (!t) return null;
+  if (t.state === 'held') return t.remainingMs;
+  return Math.max(0, t.remainingMs - (performance.now() - t.at));
+}
+(function rAF() {
+  const r = remNow(mainCdId);
+  if (r != null) {
+    const txt = (r / 1000).toFixed(1);
+    if (cdBigEl.textContent !== txt) cdBigEl.textContent = txt;
+  }
+  for (const elRemain of document.querySelectorAll('[data-cd]')) {
+    const r2 = remNow(elRemain.dataset.cd);
+    if (r2 != null) {
+      const txt2 = (r2 / 1000).toFixed(1) + 's';
+      if (elRemain.textContent !== txt2) elRemain.textContent = txt2;
+    }
+  }
+  requestAnimationFrame(rAF);
+})();
+
+/* ═══════════ 初始化 ═══════════ */
+(async function init() {
+  // 1) 配置（提前量预设 / 自动执行总开关 / 回溯量）
+  try {
+    const r = await api('/api/config');
+    cfg = r.config || {};
+    selLeadMs = cfg.countdown?.defaultLeadMs || 15000;
+    renderPresets();
+    renderAutoNote();
+  } catch (e) { cmdError(e, '读取配置'); }
+  // 2) 话术模板 + 受众频道
+  try {
+    const r = await api('/api/cues/state');
+    channels = r.channels || channels;
+    templates = r.templates || [];
+    for (const c of r.active || []) allCues.set(c.id, c);
+    clients = r.clients || clients;
+    audioStats = r.audio || audioStats;
+    renderCueButtons();
+    renderAckBoard();
+  } catch (e) { cmdError(e, '读取提示状态'); }
+  // 4) WS：必须声明受众 director（服务端据此过滤 + 授予导演播命令权限）
+  arcadeWS.start({ audience: 'director' });
+  renderPhaseGate();
+  syncStatus();
+  // 5) 兜底轮询：WS 断开也能刷新回执看板 / 模板（覆盖其它受众的 cue 增删）
+  ui.poll(async () => {
+    try {
+      const r = await api('/api/cues/state', { quiet: true });
+      if (r) {
+        const fresh = new Map((r.active || []).map((c) => [c.id, c]));
+        for (const [id, c] of fresh) { const old = allCues.get(id); if (old) fresh.set(id, { ...c, acks: { ...(c.acks || {}), ...(old.acks || {}) } }); }
+        allCues.clear();
+        for (const [id, c] of fresh) allCues.set(id, c);
+        clients = r.clients || clients;
+        audioStats = r.audio || audioStats;
+        renderAckBoard();
+        const tplJson = JSON.stringify(r.templates || []);
+        if (tplJson !== JSON.stringify(templates)) { templates = r.templates || []; renderCueButtons(); }
+      }
+    } catch { /* WS 断线期间轮询兜底，失败静默 */ }
+  }, 4000);
+})();
+
+})();
+</script>
+</body>
+</html>

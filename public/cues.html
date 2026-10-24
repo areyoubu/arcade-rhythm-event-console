@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>话术模板管理 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .tpl-tmpl { font-family: var(--mono); font-size: 12.5px; color: var(--text-dim); }
+  .builtin-note td { background: #151515; }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+'use strict';
+const { el, $, clear, esc, ok, warn, cmdError, modal, prompt, mount, withBusy, api } = window.ui;
+
+const page = mount({
+  current: '/cues',
+  title: '话术模板管理',
+  subtitle: '附录 E 内置模板 T1–T14 · 支持新增与覆盖（C-REQ-1101 / 1102）',
+});
+
+let templates = [];      // GET /api/cues/state 的原始列表（内置 + 自定义）
+let channels = ['director', 'cast'];
+
+/* 有效模板：同 ID 时自定义（后出现的）覆盖内置 —— cue.templates 即为覆盖机制 */
+function effectiveTemplates(raw) {
+  const m = new Map();
+  for (const t of raw || []) m.set(t.id, t);
+  return [...m.values()].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+}
+const isBuiltinId = (id) => /^T([1-9]|1[0-4])$/.test(String(id));
+
+/* ── 说明区 ── */
+const notes = el('div', { class: 'note info mb16' },
+  el('strong', { text: '变量插值语法（C-REQ-1101）：' }),
+  '话术中使用 ',
+  el('code', { text: '{n}' }), '（倒计时秒数）、', el('code', { text: '{选手名}' }), '、', el('code', { text: '{场景名}' }),
+  ' 作为占位符，发送时（导播页 / 下方试发）会逐项询问填入。',
+  el('div', { class: 'mt8' }),
+  el('strong', { text: '内置模板不可删除，只能被覆盖：' }),
+  'T1–T14 由服务端内置（附录 E）；编辑后以相同 ID 写入配置文件 cue.templates，即视为覆盖。自定义模板同样存于 cue.templates。',
+);
+
+/* ── 工具栏 + 表格 ── */
+const tbody = el('tbody');
+const btnRefresh = el('button', { class: 'btn', text: '刷新列表', onclick: load });
+const btnNew = el('button', { class: 'btn primary', text: '＋ 新增模板', onclick: () => openEditor(null) });
+
+const card = el('section', { class: 'card' },
+  el('header', null, el('span', { text: '模板列表' }), el('span', { class: 'spacer' }),
+    el('span', { class: 'sub', text: '「渐变」表示优先级/声音由发送时的倒计时梯度决定' }), btnRefresh, btnNew),
+  el('div', { class: 'body flush scroll yl' },
+    el('table', { class: 'tbl' },
+      el('thead', null, el('tr', null,
+        ['ID', '名称', '话术', '受众', '优先级', '声音', '需回执', '来源', '操作'].map((h) => el('th', { text: h })))),
+      tbody,
+    ),
+  ),
+);
+page.append(notes, card);
+
+const SOUND_LABEL = { none: '无', beep: 'beep', triple: 'triple', alarm: 'alarm', '渐变': '渐变' };
+
+function renderTable() {
+  clear(tbody);
+  const eff = effectiveTemplates(templates);
+  if (!eff.length) {
+    tbody.append(el('tr', null, el('td', { colspan: '9', class: 'center dim', text: '暂无模板（服务端内置库加载异常？）' })));
+    return;
+  }
+  for (const t of eff) {
+    const overriddenBuiltin = isBuiltinId(t.id) && t.custom;
+    const srcLabel = t.custom ? (overriddenBuiltin ? '覆盖内置' : '自定义') : '内置';
+    tbody.append(el('tr', null,
+      el('td', { class: 'mono' }, el('code', { text: t.id })),
+      el('td', null, el('span', { class: 'bold', text: t.name })),
+      el('td', null, el('span', { class: 'tpl-tmpl', text: t.template })),
+      el('td', { class: 'small' }, el('span', { text: (t.audience || []).join('、') })),
+      el('td', null, ['P0', 'P1', 'P2', 'P3'].includes(t.priority)
+        ? el('span', { class: 'tag ' + t.priority, text: t.priority })
+        : el('span', { class: 'tag mute', text: t.priority || '—' })),
+      el('td', { class: 'small' }, el('span', { text: SOUND_LABEL[t.sound] || t.sound || '—' })),
+      el('td', { class: 'center' }, el('span', { text: t.requiresAck ? '是' : '否' })),
+      el('td', { class: 'small dim' }, el('span', { text: srcLabel })),
+      el('td', null, el('div', { class: 'btn-row tight' },
+        el('button', { class: 'btn sm', text: '试发', title: '在导播页试发一次（POST /api/cues/fromTemplate）', onclick: () => previewSend(t) }),
+        el('button', { class: 'btn sm', text: '编辑', onclick: () => openEditor(t) }),
+      )),
+    ));
+  }
+}
+
+/* ── 新增 / 编辑弹窗 ── */
+function openEditor(t) {
+  const isNew = !t;
+  const idInput = el('input', { type: 'text', placeholder: '如 T20', value: t ? t.id : '' });
+  if (!isNew) idInput.disabled = true;           // 覆盖时 ID 固定
+  const nameInput = el('input', { type: 'text', value: t ? t.name : '' });
+  const tplInput = el('textarea', { rows: '2' });
+  tplInput.value = t ? t.template : '';
+  const prioSel = el('select', null, ['P0', 'P1', 'P2', 'P3', '渐变'].map((p) => el('option', { value: p, text: p === '渐变' ? '渐变（发送方指定）' : p })));
+  prioSel.value = t ? (t.priority || 'P3') : 'P3';
+  const soundSel = el('select', null, [['none', '无声音'], ['beep', 'beep'], ['triple', 'triple'], ['alarm', 'alarm'], ['渐变', '渐变（梯度决定）']].map(([v, l]) => el('option', { value: v, text: l })));
+  soundSel.value = t ? (t.sound || 'none') : 'none';
+  const ackChk = el('input', { type: 'checkbox' });
+  ackChk.checked = t ? !!t.requiresAck : false;
+  const audBoxes = channels.map((ch) => {
+    const c = el('input', { type: 'checkbox', value: ch });
+    c.checked = t ? (t.audience || []).includes(ch) : (ch === 'director');
+    return el('label', { class: 'check', style: { display: 'inline-flex', marginRight: '14px' } }, c, el('span', { class: 'label', text: ch }));
+  });
+
+  const m = modal({
+    title: isNew ? '新增话术模板' : `编辑话术模板 ${t.id}`,
+    wide: true,
+    body: el('div', null,
+      isBuiltinId(t?.id)
+        ? el('div', { class: 'note warn mb12', text: `「${t.id}」是内置模板，不可删除 —— 保存即覆盖（写入配置 cue.templates，以「覆盖内置」形式显示）。` })
+        : null,
+      el('div', { class: 'cols two' },
+        el('div', null,
+          el('div', { class: 'field' }, el('label', { text: 'ID' }), idInput,
+            el('div', { class: 'help', text: '形如 T20；使用内置 ID（T1–T14）即为覆盖。' })),
+          el('div', { class: 'field' }, el('label', { text: '名称' }), nameInput),
+          el('div', { class: 'field' }, el('label', { text: '话术（支持 {n} / {选手名} / {场景名}）' }), tplInput),
+        ),
+        el('div', null,
+          el('div', { class: 'field' }, el('label', { text: '优先级' }), prioSel),
+          el('div', { class: 'field' }, el('label', { text: '声音' }), soundSel),
+          el('div', { class: 'field' }, el('label', { text: '受众' }), el('div', { class: 'inline' }, audBoxes)),
+          el('div', { class: 'check' }, ackChk, el('span', { class: 'label', text: '需回执（ack）' }),
+            el('div', { class: 'sub', text: 'P0 会由服务端强制需回执（C-REQ-551）' })),
+        ),
+      ),
+    ),
+    footer: [
+      el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+      el('button', { class: 'btn primary', text: '保存', onclick: () => {
+        const id = idInput.value.trim();
+        const name = nameInput.value.trim();
+        const tplText = tplInput.value.trim();
+        if (!/^T\d+$/.test(id)) { warn('ID 须形如 T20（T + 数字）'); return; }
+        if (!name) { warn('请填写名称'); return; }
+        if (!tplText) { warn('请填写话术'); return; }
+        const audience = channels.filter((ch) => audBoxes[channels.indexOf(ch)].querySelector('input').checked);
+        if (!audience.length) { warn('请至少选择一个受众'); return; }
+        const rec = { id, name, template: tplText, audience, priority: prioSel.value, sound: soundSel.value, requiresAck: ackChk.checked };
+        m.close();
+        saveTemplate(rec);
+      } }),
+    ],
+  });
+}
+
+/* 保存：把覆盖/新增写入 config 的 cue.templates（C-REQ-1102），内置原样不动 */
+async function saveTemplate(rec) {
+  try {
+    // 当前所有自定义条目（含对内置的覆盖），合并本次修改后整体写回
+    const custom = {};
+    for (const t of effectiveTemplates(templates)) {
+      if (t.custom) custom[t.id] = { name: t.name, template: t.template, audience: t.audience, priority: t.priority, sound: t.sound, requiresAck: t.requiresAck };
+    }
+    custom[rec.id] = { name: rec.name, template: rec.template, audience: rec.audience, priority: rec.priority, sound: rec.sound, requiresAck: rec.requiresAck };
+    const r = await api('/api/config', { method: 'POST', body: { 'cue.templates': custom } });
+    // ★ 回读校验：部分服务端构建的 patchConfig 会按 DEFAULT_CONFIG 形状裁剪，
+    //   cue.templates 默认形状为空对象时整节会被丢弃（POST 仍返回 changed）。
+    //   这里必须回读确认真正生效，绝不显示「假成功」。
+    const check = await api('/api/cues/state', { quiet: true });
+    const saved = effectiveTemplates(check?.templates || []).find((t) => t.id === rec.id);
+    const persisted = !!saved
+      && saved.template === rec.template && saved.name === rec.name
+      && (saved.audience || []).join(',') === (rec.audience || []).join(',');
+    if (persisted) {
+      ok(`模板 ${rec.id} 已保存并生效（${r.changed?.length || 0} 处变更）`, { title: '保存成功' });
+    } else {
+      err('服务端未持久化该模板：当前服务端构建在 POST /api/config 时会裁剪未登记节点 cue.templates（返回了 changed 但未落盘）。请直接编辑 config/config.json 的 cue.templates 后重启服务，或让后端在 schema 中登记该节点。', { title: '保存未生效', ms: 9000 });
+    }
+    await load();
+  } catch (e) { cmdError(e, '保存模板'); }
+}
+
+/* 试发一次（在导播页预览，C-REQ-1101 变量即时询问） */
+async function previewSend(t) {
+  const vars = {};
+  const keys = [...new Set([...String(t.template).matchAll(/\{([^}]+)\}/g)].map((m) => m[1].trim()))];
+  for (const k of keys) {
+    const v = await prompt({ title: `试发变量 {${k}}`, label: `请填写「${k}」`, value: k === 'n' ? '3' : '' });
+    if (v === null) return;
+    vars[k] = v.trim();
+  }
+  const title = String(t.template).replace(/\{([^}]+)\}/g, (m, k) => vars[k.trim()] !== undefined ? String(vars[k.trim()]) : m);
+  const prio = ['P0', 'P1', 'P2', 'P3'].includes(t.priority) ? t.priority : 'P3';
+  const sound = ['none', 'beep', 'triple', 'alarm'].includes(t.sound) ? t.sound : 'none';
+  try {
+    const r = await api('/api/cues/fromTemplate', {
+      method: 'POST',
+      body: {
+        templateId: t.id,
+        vars,
+        // 显式带全量覆盖：保证被覆盖的内置模板也按「当前有效版本」试发。
+        // 试发必须带 TTL：模板里很多是 P3（默认 TTL=null = 永不自动消失），
+        // 否则每点一次试发就在解说页/导播页永久堆一条「解说 T-ns」。
+        overrides: {
+          title, priority: prio, sound, audience: t.audience || [], requiresAck: !!t.requiresAck,
+          ttlMs: 5000, source: 'test',
+        },
+      },
+    });
+    ok(`已试发：${r.rendered}（导播页 / 对应受众端可见）`, { title: '试发成功' });
+  } catch (e) { cmdError(e, '试发话术'); }
+}
+
+/* ── 加载 ── */
+async function load() {
+  try {
+    const r = await api('/api/cues/state');
+    channels = r.channels || channels;
+    templates = r.templates || [];
+    renderTable();
+  } catch (e) { cmdError(e, '读取模板列表'); }
+}
+load();
+})();
+</script>
+</body>
+</html>

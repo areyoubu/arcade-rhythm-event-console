@@ -1,0 +1,1089 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>人物与角色 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  /* 仅本页布局：颜色 / 圆角 / 字体全部沿用设计系统变量 */
+  .people-grid {
+    display: grid; gap: 10px;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+  @media (max-width: 1400px) { .people-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  @media (max-width: 1050px) { .people-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  @media (max-width: 760px) { .people-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .people-card { position: relative; }
+  .people-check {
+    position: absolute; top: 8px; right: 8px; z-index: 3;
+    width: 19px; height: 19px; accent-color: var(--accent);
+    cursor: pointer; margin: 0;
+  }
+  .people-card.current {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent);
+    background: rgba(255,255,255,.06);
+  }
+  .people-duo {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    gap: 10px; align-items: stretch;
+  }
+  .people-duo-card {
+    display: flex; align-items: center; gap: 9px;
+    padding: 10px; min-width: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+  }
+  .people-duo-card.empty { border-style: dashed; color: var(--text-mute); }
+  .people-duo-swap { display: flex; align-items: center; justify-content: center; }
+  .people-avatar {
+    width: 42px; height: 42px; flex: 0 0 auto; border-radius: 9px; overflow: hidden;
+    background: #0d0d0d; display: flex; align-items: center; justify-content: center;
+  }
+  .people-avatar img { width: 100%; height: 100%; object-fit: cover; }
+  .people-avatar.team { border-radius: 50%; }
+  .people-avatar.team img { object-fit: contain; padding: 2px; }
+  .people-avatar .ph {
+    width: 100%; height: 100%; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; color: #cfcfc8; line-height: 1; user-select: none;
+    background: #2b2e33; border: 1px solid #454950;
+    border: 1px solid rgba(124, 192, 255, .3);
+  }
+  .people-avatar .ph.off {
+    background: #151a24; border-color: var(--border); color: var(--text-mute);
+  }
+
+  /* 队伍卡片无 Logo 时的占位：与有 Logo 时同样大小的圆形色块 */
+  .tile-thumb .team-ph {
+    width: 72%; height: 72%; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 32px; font-weight: 700; line-height: 1; color: #cfcfc8;
+    user-select: none; word-break: keep-all;
+    background: #2b2e33; border: 1px solid #454950;
+    border: 1px solid rgba(124, 192, 255, .3);
+    box-shadow: inset 0 0 0 4px rgba(10, 15, 22, .35);
+  }
+
+  /* 选手按队伍分组 */
+  .people-group { margin-bottom: 16px; }
+  .people-group:last-child { margin-bottom: 0; }
+  .people-group-head {
+    position: sticky; top: 58px; z-index: 12;
+    display: flex; align-items: center; gap: 9px;
+    padding: 7px 10px; margin-bottom: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    box-shadow: none;
+  }
+  .people-group-head .grow { min-width: 0; }
+  .people-other-head {
+    margin: 18px 0 8px; padding-top: 12px;
+    border-top: 1px dashed var(--border-strong);
+    font-size: 12px; color: var(--text-mute); font-weight: 700;
+  }
+  /* 窄屏顶栏可能换行变高，分组标题改为静态，避免被顶栏遮住 */
+  @media (max-width: 1050px) { .people-group-head { position: static; } }
+  @media (max-width: 760px) {
+    .people-duo { grid-template-columns: minmax(0, 1fr); }
+    .people-duo-swap { order: 3; }
+  }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+  'use strict';
+  const { el, $, clear, ok, warn, err, toast, confirm, modal, withBusy, api, esc, cmdError } = window.ui;
+  const ws = window.arcadeWS;
+  const fmt = window.fmt;
+
+  const page = window.ui.mount({
+    current: '/people',
+    title: '人物与角色',
+    subtitle: '选手、解说/导播、赞助商都在这一个库里维护（实体库 A-REQ-301~305）',
+  });
+  ws.start();
+
+  const KIND_META = {
+    player: { label: '选手', tab: '选手', tag: 'P3' },
+    talent: { label: '解说 / 导播', tab: '解说·导播', tag: 'P1' },
+    sponsor: { label: '赞助商', tab: '赞助商', tag: 'P2' },
+    team: { label: '队伍', tab: '队伍', tag: 'P0' },
+  };
+  const KINDS = ['player', 'talent', 'sponsor', 'team'];
+
+  const S = {
+    list: [],
+    tab: 'all',
+    q: '',
+    selected: new Set(),   // 有序：第 1 个 = A 位，第 2 个 = B 位
+    current: null,         // overlay.playerSnapshot
+    template: 'talentTwin',
+  };
+
+  // ── ?kind=player|talent|sponsor|team 直接定位 ───────────────
+  const qKind = new URLSearchParams(location.search).get('kind');
+  if (KINDS.includes(qKind)) S.tab = qKind;
+
+  const pickedEntities = () => [...S.selected]
+    .map((id) => S.list.find((e) => e.id === id))
+    .filter(Boolean);
+
+  // playerSnapshot 的形状是 { playerId, playerName, side, at, entity }（A-REQ-306）
+  const currentId = () => S.current?.playerId || S.current?.entity?.id || S.current?.id || null;
+
+  // ── 队伍工具（队伍 = kind:'team' 的普通实体） ──────────────
+  const teams = () => S.list.filter((e) => e.kind === 'team');
+  const teamById = (id) => (id ? S.list.find((e) => e.id === id && e.kind === 'team') || null : null);
+  const teamMembers = (teamId) => S.list.filter((e) => e.kind === 'player' && e.teamId === teamId);
+
+  function initialOf(name) {
+    const chars = Array.from(String(name || '?').trim());
+    return (chars[0] || '?').toUpperCase();
+  }
+
+  function subInfo(e) {
+    if (e.kind === 'player') {
+      const team = teamById(e.teamId);
+      const teamLabel = team
+        ? team.name
+        : (e.team ? (e.teamId ? `原队伍：${e.team}` : `未编队（原队伍：${e.team}）`) : null);
+      return [
+        teamLabel,
+        e.side === 'H' ? '主场 H' : e.side === 'A' ? '客场 A' : null,
+        e.handle,
+      ].filter(Boolean).join(' / ');
+    }
+    if (e.kind === 'talent') {
+      return [e.role, e.twitch ? `twitch.tv/${e.twitch}` : null].filter(Boolean).join(' / ');
+    }
+    if (e.kind === 'sponsor') {
+      return [e.tier, e.url].filter(Boolean).join(' / ');
+    }
+    return (e.tags || []).join(' / ');
+  }
+
+  // ═══════════════════ 工具栏 ═══════════════════
+  const search = el('input', {
+    type: 'search',
+    placeholder: '搜索名字 / 队伍 / 角色 / 标签…',
+    'aria-label': '搜索人物与角色',
+    style: { maxWidth: '360px' },
+  });
+  search.oninput = () => { S.q = search.value; renderGrid(); };
+
+  const toolbar = el('div', { class: 'card mb12' },
+    el('div', { class: 'body tight' },
+      el('div', { class: 'inline' },
+        el('button', {
+          class: 'btn primary', text: '＋ 新增',
+          onclick: (e) => withBusy(e.currentTarget, async () => (
+            S.tab === 'team' ? teamModal() : entityModal(null)
+          )),
+        }),
+        el('button', {
+          class: 'btn', text: '批量导入',
+          onclick: (e) => withBusy(e.currentTarget, async () => importModal()),
+        }),
+        el('span', { class: 'spacer grow' }),
+        
+        search,
+      ),
+    ),
+  );
+
+  // ═══════════════════ 类型 tabs ═══════════════════
+  const tabsEl = el('div', { class: 'tabs' });
+
+  function tabCount(key) {
+    return key === 'all' ? S.list.length : S.list.filter((e) => e.kind === key).length;
+  }
+
+  function setTab(key) {
+    S.tab = key;
+    const url = key === 'all' ? '/people' : `/people?kind=${key}`;
+    try { history.replaceState(null, '', url); } catch { /* 忽略 */ }
+    renderTabs();
+    renderGrid();
+  }
+
+  function renderTabs() {
+    clear(tabsEl);
+    const defs = [{ key: 'all', label: '全部' }, ...KINDS.map((k) => ({ key: k, label: KIND_META[k].tab }))];
+    for (const d of defs) {
+      const n = tabCount(d.key);
+      tabsEl.append(el('button', {
+        class: S.tab === d.key ? 'active' : '',
+        onclick: () => setTab(d.key),
+      }, d.label, el('span', { class: 'tiny muted', text: ` ${n}` })));
+    }
+  }
+
+  // ═══════════════════ 多选 → 双人投递面板 ═══════════════════
+  const duoHost = el('div', { class: 'mb12 hidden' });
+
+  function toggleSelect(id) {
+    if (S.selected.has(id)) S.selected.delete(id);
+    else {
+      if (S.selected.size >= 2) { warn('最多同时选择 2 个人；请先取消一个再选'); renderGrid(); return; }
+      S.selected.add(id);
+    }
+    renderGrid();
+    renderDuo();
+  }
+
+  function swapAB() {
+    const arr = [...S.selected];
+    if (arr.length !== 2) return;
+    S.selected = new Set([arr[1], arr[0]]);
+    renderGrid();
+    renderDuo();
+  }
+
+  // 头像 / Logo：有图用图（破图时回退首字），没图用首字占位；队伍占位为圆形
+  function avatarPh(e, size) {
+    if (e.kind === 'team') {
+      return el('div', {
+        class: 'ph',
+        style: { fontSize: `${Math.max(11, Math.round(size * 0.42))}px` },
+        text: initialOf(e.name),
+      });
+    }
+    return el('span', { class: 'muted bold', text: initialOf(e.name) });
+  }
+
+  function avatarNode(e, size = 42) {
+    const box = el('div', {
+      class: `people-avatar${e.kind === 'team' ? ' team' : ''}`,
+      style: { width: `${size}px`, height: `${size}px` },
+    });
+    if (e.image) {
+      const img = el('img', { src: e.image, alt: '', loading: 'lazy' });
+      // 图片失效时不要显示破图图标 / 空白方块，直接换回首字占位
+      img.onerror = () => { clear(box); box.append(avatarPh(e, size)); };
+      box.append(img);
+    } else {
+      box.append(avatarPh(e, size));
+    }
+    return box;
+  }
+
+  function tilePh(e) {
+    if (e.kind === 'team') return el('div', { class: 'team-ph', text: initialOf(e.name) });
+    return el('span', { class: 'muted', style: { fontSize: '32px', fontWeight: '800' }, text: initialOf(e.name) });
+  }
+
+  function thumbNode(e) {
+    const box = el('div', { class: 'tile-thumb' });
+    if (e.image) {
+      const img = el('img', { src: e.image, alt: '', loading: 'lazy' });
+      img.onerror = () => { clear(box); box.append(tilePh(e)); };
+      box.append(img);
+    } else {
+      box.append(tilePh(e));
+    }
+    return box;
+  }
+
+  function duoCard(e, slot) {
+    if (!e) {
+      return el('div', { class: 'people-duo-card empty' },
+        el('span', { class: `pill ${slot === 'A' ? 'info' : ''}`, text: `${slot} 位` }),
+        el('div', { class: 'small', text: slot === 'A' ? '请勾选第 1 个人' : '请勾选第 2 个人' }),
+      );
+    }
+    return el('div', { class: 'people-duo-card' },
+      el('span', { class: `pill ${slot === 'A' ? 'info' : ''}`, text: `${slot} 位` }),
+      avatarNode(e),
+      el('div', { class: 'grow' },
+        el('div', { class: 'bold truncate', text: e.name }),
+        el('div', { class: 'tiny muted truncate', text: subInfo(e) || KIND_META[e.kind].label }),
+      ),
+      el('button', {
+        class: 'btn ghost sm', text: '✕', title: '取消选择',
+        onclick: () => { S.selected.delete(e.id); renderGrid(); renderDuo(); },
+      }),
+    );
+  }
+
+  function renderDuo() {
+    clear(duoHost);
+    const picked = pickedEntities();
+    if (!picked.length) { duoHost.classList.add('hidden'); return; }
+    duoHost.classList.remove('hidden');
+
+    const a = picked[0];
+    const b = picked[1];
+    const enough = picked.length === 2;
+
+    const tplSel = el('select', {
+      style: { maxWidth: '260px' },
+      onchange: (e) => { S.template = e.target.value; },
+    },
+      el('option', { value: 'talentTwin', text: '双人解说名牌（talentTwin）', selected: S.template === 'talentTwin' }),
+      el('option', { value: 'versusCard', text: '对阵卡（versusCard）', selected: S.template === 'versusCard' }),
+    );
+
+    const duoBtn = el('button', {
+      class: 'btn primary', text: '投递到浮窗', disabled: !enough,
+      title: enough ? '一次投递 A 位与 B 位' : '双人模板需要选择两名不同的人物',
+      onclick: (e) => withBusy(e.currentTarget, async () => {
+        const cur = pickedEntities();
+        if (cur.length !== 2) {
+          cmdError({ code: 'need_two_entities', message: '双人模板需要选择两名不同的人物' }, '双人投递');
+          return;
+        }
+        try {
+          const r = await ws.cmd('overlay.fill', {
+            entityIds: [cur[0].id, cur[1].id],
+            template: S.template,
+            target: 'main',
+          });
+          const f = r?.filled || {};
+          const aName = f.aName || f.leftName || cur[0].name;
+          const bName = f.bName || f.rightName || cur[1].name;
+          ok(`已投递：A 位 ${aName} / B 位 ${bName} → ${S.template === 'talentTwin' ? '双人解说名牌' : '对阵卡'}（浮窗-主）`);
+        } catch (ex) { cmdError(ex, '双人投递'); }
+      }),
+    });
+
+    const lowerBtn = el('button', {
+      class: 'btn', text: '姓名条投递（单人）', disabled: picked.length !== 1,
+      title: picked.length === 1 ? '把这个人投递到 lowerThird 姓名条' : '姓名条为单人模板，请只选 1 个人',
+      onclick: (e) => withBusy(e.currentTarget, async () => {
+        const cur = pickedEntities();
+        if (cur.length !== 1) { warn('姓名条为单人模板，请只选 1 个人'); return; }
+        try {
+          const r = await ws.cmd('overlay.fill', { entityId: cur[0].id, template: 'lowerThird', target: 'main' });
+          ok(`已投递姓名条：${r?.filled?.name || cur[0].name}（浮窗-主）`);
+        } catch (ex) { cmdError(ex, '姓名条投递'); }
+      }),
+    });
+
+    duoHost.append(el('div', { class: 'card' },
+      el('header', null,
+        el('span', { text: '双人投递' }),
+        el('span', { class: 'sub', text: `已选 ${picked.length} / 2 · 第 1 个 = A 位，第 2 个 = B 位` }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          class: 'btn ghost sm', text: '清空选择',
+          onclick: () => { S.selected.clear(); renderGrid(); renderDuo(); },
+        }),
+      ),
+      el('div', { class: 'body' },
+        el('div', { class: 'people-duo mb12' },
+          duoCard(a, 'A'),
+          el('div', { class: 'people-duo-swap' },
+            el('button', {
+              class: 'btn sm', text: '⇄ 交换 A/B', disabled: !enough,
+              onclick: swapAB,
+            }),
+          ),
+          duoCard(b, 'B'),
+        ),
+        el('div', { class: 'inline mb8' },
+          el('label', { text: '模板' }), tplSel,
+          el('span', { class: 'spacer grow' }),
+          duoBtn,
+          lowerBtn,
+        ),
+        !enough ? el('div', { class: 'note warn small mb8', text: '双人模板需要选择两名不同的人物。当前只选了 1 个 —— 再勾选一个人即可投递；此时仍可用「姓名条投递」。' }) : null,
+        el('div', { class: 'note info small', text: '一次传两个实体，服务端按槽位名（a* / left* → A 位；b* / right* → B 位）分派，不会填成同一个人。' }),
+      ),
+    ));
+  }
+
+  // ═══════════════════ 列表 ═══════════════════
+  const countSub = el('span', { class: 'sub' });
+  const gridBox = el('div');
+  const listCard = el('div', { class: 'card' },
+    el('header', null,
+      el('span', { text: '人物与角色列表' }),
+      countSub,
+      el('span', { class: 'spacer' }),
+      el('button', {
+        class: 'btn ghost sm', text: '刷新',
+        onclick: (e) => withBusy(e.currentTarget, async () => { await reload(); ok('已刷新'); }),
+      }),
+    ),
+    el('div', { class: 'body tight' }, gridBox),
+  );
+
+  function filtered() {
+    const q = S.q.trim().toLowerCase();
+    return S.list.filter((e) => {
+      if (S.tab !== 'all' && e.kind !== S.tab) return false;
+      if (!q) return true;
+      const teamName = e.kind === 'player' ? (teamById(e.teamId)?.name || '') : '';
+      return `${e.name} ${teamName} ${e.team || ''} ${e.handle || ''} ${e.role || ''} ${e.twitch || ''} ${e.tier || ''} ${(e.tags || []).join(' ')}`
+        .toLowerCase().includes(q);
+    });
+  }
+
+  function entityCard(e) {
+    const isSel = S.selected.has(e.id);
+    const selIdx = [...S.selected].indexOf(e.id);
+    const isCurrent = e.kind === 'player' && currentId() === e.id;
+    const meta = KIND_META[e.kind] || { label: e.kind, tag: 'P3' };
+    const sub = subInfo(e);
+
+    const cb = el('input', {
+      type: 'checkbox', class: 'people-check',
+      title: '多选（双人投递用）',
+      'aria-label': `选择 ${e.name}`,
+    });
+    cb.checked = isSel;
+    cb.onchange = () => toggleSelect(e.id);
+
+    return el('div', {
+      class: `tile people-card${isCurrent ? ' current' : ''}${isSel ? ' selected' : ''}`,
+    },
+      cb,
+      thumbNode(e),
+      el('div', { class: 'inline mb8' },
+        el('span', { class: `tag ${meta.tag}`, text: meta.label }),
+        e.kind === 'team' ? el('span', { class: 'pill mute', text: `${teamMembers(e.id).length} 名选手` }) : null,
+        isSel ? el('span', { class: 'pill info', text: selIdx === 0 ? 'A 位' : selIdx === 1 ? 'B 位' : `已选 ${selIdx + 1}` }) : null,
+        isCurrent ? el('span', { class: 'pill ok', text: '当前选手' }) : null,
+      ),
+      el('div', { class: 'tile-title', text: e.name }),
+      el('div', { class: 'tile-sub truncate', text: sub || '—', title: sub }),
+      (e.tags || []).length ? el('div', { class: 'inline mt8' },
+        e.tags.slice(0, 4).map((t) => el('span', { class: 'tag', text: t })),
+        e.tags.length > 4 ? el('span', { class: 'tag', text: `+${e.tags.length - 4}` }) : null,
+      ) : null,
+      el('div', { class: 'btn-row tight mt8' },
+        el('button', {
+          class: 'btn sm', text: '编辑',
+          onclick: (ev) => {
+            ev.stopPropagation();
+            withBusy(ev.currentTarget, async () => (e.kind === 'team' ? teamModal(e) : entityModal(e)));
+          },
+        }),
+        el('button', {
+          class: 'btn sm danger', text: '删除',
+          onclick: (ev) => { ev.stopPropagation(); withBusy(ev.currentTarget, async () => delEntity(e)); },
+        }),
+        e.kind === 'player' ? el('button', {
+          class: 'btn sm ghost', text: isCurrent ? '✓ 当前选手' : '设为当前选手',
+          disabled: isCurrent,
+          onclick: (ev) => { ev.stopPropagation(); withBusy(ev.currentTarget, async () => setCurrentPlayer(e)); },
+        }) : null,
+      ),
+    );
+  }
+
+  function cardGrid(items) {
+    const grid = el('div', { class: 'people-grid' });
+    for (const e of items) grid.append(entityCard(e));
+    return grid;
+  }
+
+  // 按队伍实体分组；队伍按名称排序，未编队放最后
+  function buildPlayerGroups(players) {
+    const map = new Map();
+    for (const p of players) {
+      const team = teamById(p.teamId);
+      const key = team ? team.id : '__none__';
+      if (!map.has(key)) map.set(key, { team, players: [] });
+      map.get(key).players.push(p);
+    }
+    const out = [...map.values()]
+      .filter((g) => g.team)
+      .sort((a, b) => a.team.name.localeCompare(b.team.name, 'zh'));
+    if (map.has('__none__')) out.push(map.get('__none__'));
+    return out;
+  }
+
+  function groupHead(group) {
+    const team = group.team;
+    const icon = team
+      ? avatarNode(team, 30)
+      : el('div', { class: 'people-avatar team', style: { width: '30px', height: '30px' } },
+        el('div', { class: 'ph off', style: { fontSize: '13px' }, text: '—' }));
+    return el('div', { class: 'people-group-head' },
+      icon,
+      el('span', { class: 'small bold truncate', text: team ? team.name : '未编队' }),
+      el('span', { class: 'tiny dim nowrap', text: `· ${group.players.length} 人` }),
+    );
+  }
+
+  function renderGrid() {
+    clear(gridBox);
+    const list = filtered();
+    countSub.textContent = ` ${list.length} / ${S.list.length} 个实体`;
+
+    if (!S.list.length) {
+      gridBox.append(el('div', { class: 'note info', text: '实体库还是空的。点「＋ 新增」添加，或用「⤒ 批量导入」粘贴名单。' }));
+      return;
+    }
+    if (!list.length) {
+      gridBox.append(el('div', { class: 'note info', text: '没有匹配的人物或角色；换个关键词或切到「全部」。' }));
+      return;
+    }
+
+    const players = list.filter((e) => e.kind === 'player');
+    const others = list.filter((e) => e.kind !== 'player');
+    const groupedTab = S.tab === 'all' || S.tab === 'player';
+
+    if (groupedTab && players.length) {
+      const groups = buildPlayerGroups(players);
+      // 单人赛 / 只有一个「未编队」组时直接平铺，不显示多余的分组标题
+      if (groups.length === 1 && !groups[0].team) {
+        gridBox.append(cardGrid(groups[0].players));
+      } else {
+        for (const g of groups) {
+          gridBox.append(el('section', { class: 'people-group' }, groupHead(g), cardGrid(g.players)));
+        }
+      }
+    } else if (players.length) {
+      gridBox.append(cardGrid(players));
+    }
+
+    if (others.length) {
+      if (players.length) gridBox.append(el('div', { class: 'people-other-head', text: '其他人物 / 角色' }));
+      gridBox.append(cardGrid(others));
+    }
+  }
+
+  async function setCurrentPlayer(e) {
+    try {
+      const r = await api('/api/entities/current', { method: 'POST', body: { id: e.id } });
+      S.current = r.player || { id: e.id, name: e.name };
+      ok(`已设为当前选手：${e.name}`);
+      renderGrid();
+    } catch (ex) { err(ex.message); }
+  }
+
+  async function delEntity(e) {
+    const isTeam = e.kind === 'team';
+    const members = isTeam ? teamMembers(e.id).length : 0;
+    const yes = await confirm({
+      danger: true,
+      title: isTeam ? '删除队伍' : '删除人物 / 角色',
+      message: isTeam
+        ? (members
+          ? `「${e.name}」下有 ${members} 名选手，删除后他们会变成未编队（选手本身不会被删除）。此操作不可恢复。`
+          : `确认删除队伍「${e.name}」？该队伍下目前没有选手。此操作不可恢复。`)
+        : `确认删除「${e.name}」（${KIND_META[e.kind]?.label || e.kind}）？此操作不可恢复。`,
+    });
+    if (!yes) return;
+    try {
+      const r = await api(`/api/entities/${e.id}`, { method: 'DELETE' });
+      S.selected.delete(e.id);
+      const cleared = Number(r?.clearedMembers) || 0;
+      if (cleared > 0) warn(`已删除队伍「${e.name}」，${cleared} 名选手已被移出队伍，现为未编队`);
+      else ok(`已删除「${e.name}」`);
+      await reload();
+    } catch (ex) { err(ex.message); }
+  }
+
+  // ═══════════════════ 新增 / 编辑（字段按 kind 动态显示） ═══════════════════
+  /** 可复用的图片选择字段（头像 / Logo）；返回 field 节点与当前 URL */
+  function buildImageField(initialUrl, { label = '头像 / Logo（绑定媒体库图片，A-REQ-302）', help = '未选则用名字首字占位' } = {}) {
+    let url = initialUrl || '';
+    const img = el('img', { alt: '', style: { maxWidth: '100%', maxHeight: '100%', objectFit: 'contain' } });
+    const ph = el('span', { class: 'muted tiny', text: '无' });
+    img.onerror = () => { img.style.display = 'none'; ph.style.display = 'block'; };
+    const box = el('div', {
+      style: {
+        width: '72px', height: '72px', flex: '0 0 auto', background: '#0d0d0d',
+        border: '1px solid var(--border)', borderRadius: '8px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '4px',
+      },
+    }, img, ph);
+
+    function paint() {
+      if (url) {
+        img.src = url;
+        img.style.display = 'block';
+        ph.style.display = 'none';
+      } else {
+        img.removeAttribute('src');
+        img.style.display = 'none';
+        ph.style.display = 'block';
+      }
+    }
+    paint();
+
+    const field = el('div', { class: 'field' },
+      el('label', { text: label }),
+      el('div', { class: 'inline' },
+        box,
+        el('div', { class: 'btn-row' },
+          el('button', {
+            class: 'btn sm', text: '从媒体库选',
+            onclick: () => openMediaPicker({ onPick: (a) => { url = a.url; paint(); } }),
+          }),
+          el('button', { class: 'btn sm ghost', text: '✕ 清除', onclick: () => { url = ''; paint(); } }),
+          el('span', { class: 'help', text: help }),
+        ),
+      ),
+    );
+
+    return { field, getUrl: () => url };
+  }
+
+  function entityModal(existing) {
+    const isNew = !existing;
+    let kind = existing?.kind || (S.tab !== 'all' ? S.tab : 'player');
+    if (!KINDS.includes(kind)) kind = 'player';
+
+    const wraps = {};
+    const errBox = el('div', { class: 'mb8' });
+
+    function wrapField(key, label, control, help) {
+      const w = el('div', { class: 'field' },
+        el('label', { text: label }),
+        control,
+        help ? el('div', { class: 'help', text: help }) : null,
+      );
+      wraps[key] = w;
+      return w;
+    }
+
+    function clearErrors() {
+      clear(errBox);
+      for (const w of Object.values(wraps)) {
+        w.classList.remove('error');
+        const old = $('.err', w);
+        if (old) old.remove();
+      }
+    }
+
+    function showErrors(errors) {
+      clearErrors();
+      const unknown = [];
+      for (const [k, msg] of Object.entries(errors || {})) {
+        const w = wraps[k];
+        if (w) { w.classList.add('error'); w.append(el('div', { class: 'err', text: String(msg) })); }
+        else unknown.push(`${k}：${msg}`);
+      }
+      if (unknown.length) errBox.append(el('div', { class: 'note danger small', text: unknown.join('；') }));
+    }
+
+    // 公共字段
+    const nameIn = el('input', { type: 'text', value: existing?.name || '', maxlength: '64', placeholder: '显示名称（必填，≤64 字符）' });
+    const kindIn = el('select', null, KINDS.map((k) => el('option', { value: k, text: KIND_META[k].label, selected: k === kind })));
+    kindIn.value = kind;
+    const tagsIn = el('input', { type: 'text', value: (existing?.tags || []).join(', '), placeholder: '逗号分隔，如：主力,新人' });
+
+    const imgField = buildImageField(existing?.image || '');
+    wraps.image = imgField.field;
+
+    // 选手字段：队伍改为从队伍实体列表选择（teamId），保留「无队伍」与旧自由文本兜底
+    const teamSel = el('select');
+    const teamHelp = el('div', { class: 'help' });
+    let teamSelectId = existing?.teamId || '';
+
+    function paintTeamOptions(selectedId) {
+      const list = teams().slice().sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+      clear(teamSel);
+      teamSel.append(el('option', { value: '', text: '无队伍' }));
+      for (const t of list) teamSel.append(el('option', { value: t.id, text: t.name }));
+      const valid = selectedId && list.some((t) => t.id === selectedId);
+      teamSelectId = valid ? selectedId : '';
+      teamSel.value = teamSelectId;
+
+      clear(teamHelp);
+      if (existing?.team && !existing?.teamId) {
+        teamHelp.append(el('div', { text: `原队伍：${existing.team}（当前未编队；选择上方队伍即可归队，「无队伍」会保留原记录）` }));
+      }
+      if (existing?.teamId && !valid) {
+        teamHelp.append(el('div', { class: 'help warn', text: '原所属队伍已不存在，请重新选择队伍，否则保存后该选手为未编队。' }));
+      }
+      if (!teamHelp.childNodes.length) teamHelp.append(el('div', { text: '队伍来自队伍实体；没有合适的队伍可以点右侧「＋ 新建队伍」。' }));
+    }
+    paintTeamOptions(teamSelectId);
+
+    const teamField = el('div', { class: 'field' },
+      el('label', { text: '队伍' }),
+      el('div', { class: 'inline' },
+        el('div', { class: 'grow', style: { minWidth: '180px' } }, teamSel),
+        el('button', {
+          class: 'btn sm', text: '＋ 新建队伍', type: 'button',
+          onclick: (ev) => {
+            ev.preventDefault();
+            teamModal(null, (created) => paintTeamOptions(created.id));
+          },
+        }),
+      ),
+      teamHelp,
+    );
+    wraps.teamId = teamField;
+    wraps.team = teamField;
+
+    const sideIn = el('select', null, ['', 'H', 'A'].map((s) => el('option', {
+      value: s, text: s === '' ? '未设置' : s === 'H' ? '主场 H' : '客场 A', selected: (existing?.side || '') === s,
+    })));
+    sideIn.value = existing?.side || '';
+    const handleIn = el('input', { type: 'text', value: existing?.handle || '', placeholder: '游戏内 ID' });
+    const playerGroup = el('div', null,
+      teamField,
+      el('div', { class: 'cols two' },
+        wrapField('side', '方位', sideIn),
+        wrapField('handle', '游戏 ID', handleIn),
+      ),
+    );
+
+    // 解说字段
+    const roleIn = el('select', null, ['', '解说', '导播', '主持'].map((r) => el('option', {
+      value: r, text: r === '' ? '未设置' : r, selected: (existing?.role || '') === r,
+    })));
+    roleIn.value = existing?.role || '';
+    const twitchIn = el('input', { type: 'text', value: existing?.twitch || '', placeholder: 'Twitch 频道名（不带网址）' });
+    const talentGroup = el('div', null,
+      el('div', { class: 'cols two' },
+        wrapField('role', '角色', roleIn),
+        wrapField('twitch', 'Twitch', twitchIn),
+      ),
+    );
+
+    // 赞助商字段
+    const tierIn = el('select', null, ['', '冠名', '金牌', '银牌', '合作'].map((t) => el('option', {
+      value: t, text: t === '' ? '未设置' : t, selected: (existing?.tier || '') === t,
+    })));
+    tierIn.value = existing?.tier || '';
+    const urlIn = el('input', { type: 'text', value: existing?.url || '', placeholder: 'https://…' });
+    const sponsorGroup = el('div', null,
+      el('div', { class: 'cols two' },
+        wrapField('tier', '层级', tierIn),
+        wrapField('url', '官网 URL', urlIn),
+      ),
+    );
+
+    const teamNote = el('div', { class: 'note info small', text: '队伍实体没有额外字段；可在标签里标注赛区 / 地区，用于筛选与致谢。' });
+
+    function applyKind() {
+      playerGroup.classList.toggle('hidden', kind !== 'player');
+      talentGroup.classList.toggle('hidden', kind !== 'talent');
+      sponsorGroup.classList.toggle('hidden', kind !== 'sponsor');
+      teamNote.classList.toggle('hidden', kind !== 'team');
+    }
+    kindIn.onchange = () => { kind = kindIn.value; applyKind(); };
+    applyKind();
+
+    const m = modal({
+      title: isNew ? '新增人物 / 角色' : `编辑「${existing.name}」`,
+      body: el('div', null,
+        errBox,
+        wrapField('name', '名字 *', nameIn),
+        wrapField('kind', '类型 *', kindIn),
+        el('div', { class: 'cols two' },
+          wrapField('tags', '标签', tagsIn),
+          imgField.field,
+        ),
+        playerGroup,
+        talentGroup,
+        sponsorGroup,
+        teamNote,
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', text: '保存',
+          onclick: (ev) => withBusy(ev.currentTarget, async () => {
+            clearErrors();
+            const name = nameIn.value.trim();
+            if (!name) { showErrors({ name: '名字不能为空' }); nameIn.focus(); return; }
+            if (name.length > 64) { showErrors({ name: '名字不能超过 64 字符' }); nameIn.focus(); return; }
+
+            const body = {
+              kind,
+              name,
+              tags: tagsIn.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+              image: imgField.getUrl() || (isNew ? undefined : ''),
+            };
+            if (kind === 'player') {
+              const teamId = teamSel.value || '';
+              body.teamId = teamId || null;   // null = 移出队伍
+              // 已编入正式队伍时清掉旧的自由文本，避免两种队伍来源同时显示
+              if (teamId) body.team = '';
+              body.side = sideIn.value;
+              body.handle = handleIn.value.trim();
+            } else if (kind === 'talent') {
+              body.role = roleIn.value;
+              body.twitch = twitchIn.value.trim();
+            } else if (kind === 'sponsor') {
+              body.tier = tierIn.value;
+              body.url = urlIn.value.trim();
+            }
+
+            try {
+              if (isNew) { await api('/api/entities', { method: 'POST', body, quiet: true }); ok('已新增'); }
+              else { await api(`/api/entities/${existing.id}`, { method: 'PUT', body, quiet: true }); ok('已保存修改'); }
+              m.close();
+              await reload();
+            } catch (ex) {
+              if (ex.data?.errors) showErrors(ex.data.errors);
+              else err(ex.message);
+            }
+          }),
+        }),
+      ],
+    });
+  }
+
+  /** 队伍新建 / 编辑：只有 名称（必填）+ Logo（可选）+ 标签 */
+  function teamModal(existing, onSaved) {
+    const isNew = !existing;
+    const errBox = el('div', { class: 'mb8' });
+
+    const nameIn = el('input', {
+      type: 'text', value: existing?.name || '', maxlength: '64',
+      placeholder: '队伍名称（必填，≤64 字符）',
+    });
+    const tagsIn = el('input', {
+      type: 'text', value: (existing?.tags || []).join(', '),
+      placeholder: '逗号分隔，如：赛区A,青训',
+    });
+    const imgField = buildImageField(existing?.image || '', {
+      label: '队伍 Logo（可选，绑定媒体库图片）',
+      help: '可不设；未选时用队伍名首字做圆形占位',
+    });
+
+    const nameField = el('div', { class: 'field' }, el('label', { text: '队伍名称 *' }), nameIn);
+    const tagsField = el('div', { class: 'field' }, el('label', { text: '标签' }), tagsIn);
+    const fields = [nameField, tagsField, imgField.field];
+
+    function clearErrors() {
+      clear(errBox);
+      for (const f of fields) {
+        f.classList.remove('error');
+        const old = $('.err', f);
+        if (old) old.remove();
+      }
+    }
+
+    const m = modal({
+      title: isNew ? '新建队伍' : `编辑队伍「${existing.name}」`,
+      body: el('div', null,
+        errBox,
+        nameField,
+        tagsField,
+        imgField.field,
+        el('div', { class: 'note info small', text: '队伍用于团队赛的归属与分组；单人赛可不建队伍，选手会归到「未编队」。' }),
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', text: '保存',
+          onclick: (ev) => withBusy(ev.currentTarget, async () => {
+            clearErrors();
+            const name = nameIn.value.trim();
+            if (!name) {
+              nameField.classList.add('error');
+              nameField.append(el('div', { class: 'err', text: '队伍名称不能为空' }));
+              nameIn.focus();
+              return;
+            }
+            if (name.length > 64) {
+              nameField.classList.add('error');
+              nameField.append(el('div', { class: 'err', text: '队伍名称不能超过 64 字符' }));
+              nameIn.focus();
+              return;
+            }
+            const body = {
+              kind: 'team',
+              name,
+              tags: tagsIn.value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+              image: imgField.getUrl() || (isNew ? undefined : ''),
+            };
+            try {
+              const r = isNew
+                ? await api('/api/entities', { method: 'POST', body, quiet: true })
+                : await api(`/api/entities/${existing.id}`, { method: 'PUT', body, quiet: true });
+              const saved = r?.entity || { ...body, id: existing?.id };
+              m.close();
+              await reload();
+              ok(isNew ? `已创建队伍「${saved.name}」` : `已保存队伍「${saved.name}」`);
+              if (onSaved) onSaved(saved);
+            } catch (ex) {
+              const errs = ex.data?.errors;
+              if (errs) {
+                const msg = errs.name || Object.values(errs)[0];
+                nameField.classList.add('error');
+                nameField.append(el('div', { class: 'err', text: String(msg) }));
+              } else {
+                errBox.append(el('div', { class: 'note danger small', text: ex.message }));
+              }
+            }
+          }),
+        }),
+      ],
+    });
+    return m;
+  }
+
+  function openMediaPicker({ onPick }) {
+    let assets = [];
+    const grid = el('div', { class: 'grid-cards media scroll yl' });
+    const pickSearch = el('input', { type: 'search', placeholder: '搜索文件名 / 标签…', class: 'grow' });
+    const m = modal({
+      title: '从媒体库选择', wide: true,
+      body: el('div', null, el('div', { class: 'inline mb12' }, pickSearch), grid),
+      footer: [el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() })],
+    });
+    const render = () => {
+      const q = pickSearch.value.trim().toLowerCase();
+      const list = assets.filter((a) => !q || `${a.originalName || ''} ${a.filename} ${(a.tags || []).join(' ')}`.toLowerCase().includes(q));
+      clear(grid);
+      if (!list.length) {
+        grid.append(el('div', { class: 'muted small', text: '没有匹配的资源（可把图片直接拷进 media/ 目录，服务端会自动索引）' }));
+        return;
+      }
+      for (const a of list) {
+        grid.append(el('div', { class: 'tile', onclick: () => { onPick(a); m.close(); } },
+          el('div', { class: 'tile-thumb' }, el('img', { src: a.thumbnail, alt: '', loading: 'lazy' })),
+          el('div', { class: 'tile-title truncate', text: a.originalName || a.filename }),
+          el('div', { class: 'tile-sub truncate', text: `${a.width && a.height ? a.width + '×' + a.height + ' · ' : ''}${fmt.bytes(a.size)}` }),
+        ));
+      }
+    };
+    pickSearch.oninput = render;
+    api('/api/media?limit=500').then((r) => { assets = r.items || []; render(); }).catch(() => render());
+    return m;
+  }
+
+  // ═══════════════════ 批量导入 ═══════════════════
+  function importModal() {
+    let kind = S.tab !== 'all' ? S.tab : 'player';
+    const kindIn = el('select', null, KINDS.map((k) => el('option', { value: k, text: KIND_META[k].label, selected: k === kind })));
+    kindIn.value = kind;
+
+    const impText = el('textarea', {
+      placeholder: '名字,游戏ID,队伍,方位(H/A),标签|标签,头像URL\n玩家甲,playerA,战队X,H,主力|新人,/media/xxx.png\n玩家乙,playerB,战队Y,A,老将\n\n也支持 Tab 分隔或逗号分隔（A-REQ-304）',
+      style: { minHeight: '180px', fontFamily: 'var(--mono)', fontSize: '12px' },
+    });
+    const headerChk = el('input', { type: 'checkbox' });
+    headerChk.checked = true;
+    const fileIn = el('input', {
+      type: 'file', accept: '.txt,.csv,text/plain,text/csv', style: { display: 'none' },
+    });
+    fileIn.onchange = async () => {
+      const f = fileIn.files && fileIn.files[0];
+      if (!f) return;
+      try {
+        const text = await f.text();
+        impText.value = text;
+        const lines = text.split(/\r?\n/).filter((l) => l.trim()).length;
+        toast(`已读取 ${f.name}（${lines} 行）`, { type: 'ok' });
+      } catch (ex) {
+        err(`读取文件失败：${ex.message}`);
+      } finally {
+        fileIn.value = '';
+      }
+    };
+
+    const result = el('div', { class: 'mt12' });
+    const m = modal({
+      title: '批量导入',
+      body: el('div', null,
+        el('div', { class: 'field' },
+          el('label', { text: '导入为类型' }),
+          kindIn,
+        ),
+        el('div', { class: 'note info small mb12', text: '列顺序：名字, 游戏ID, 队伍, 方位(H/A), 标签（用 | 分隔）, 头像URL。解说角色 / 赞助商层级不参与批量导入，导入后可在卡片上编辑。' }),
+        el('div', { class: 'field' },
+          el('label', { text: '粘贴列表或 CSV' }),
+          impText,
+        ),
+        el('div', { class: 'inline' },
+          el('label', { class: 'check' },
+            headerChk,
+            el('span', null,
+              el('span', { class: 'label', text: '首行是表头' }),
+              el('span', { class: 'sub', text: '（勾选后自动识别 名字 / 游戏ID / 队伍 / 方位 / 标签 / 头像 列名）' }),
+            ),
+          ),
+          el('span', { class: 'spacer grow' }),
+          fileIn,
+          el('button', { class: 'btn sm', text: '⤒ 从文件读取（.txt / .csv）', onclick: () => fileIn.click() }),
+        ),
+        result,
+      ),
+      footer: [
+        el('button', { class: 'btn ghost', text: '关闭', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', text: '导入',
+          onclick: (ev) => withBusy(ev.currentTarget, async () => {
+            const text = impText.value.trim();
+            clear(result);
+            if (!text) { warn('请先粘贴或读取要导入的列表'); return; }
+            try {
+              const r = await api('/api/entities/import', {
+                method: 'POST',
+                body: { text, kind: kindIn.value, hasHeader: headerChk.checked },
+                quiet: true,
+              });
+              result.append(el('div', {
+                class: `note ${r.created ? 'ok' : 'warn'} mb8`,
+                text: `已导入 ${r.created} 条${r.errors?.length ? `，${r.errors.length} 行失败` : ''}`,
+              }));
+              if (r.errors?.length) {
+                result.append(el('div', { class: 'note danger small' },
+                  r.errors.slice(0, 20).map((x) => el('div', { text: `第 ${x.line} 行：${x.msg}` })),
+                  r.errors.length > 20 ? el('div', { text: `…共 ${r.errors.length} 行失败` }) : null,
+                ));
+              }
+              await reload();
+            } catch (ex) {
+              const errs = ex.data?.errors;
+              result.append(el('div', {
+                class: 'note danger small',
+                text: errs ? Object.entries(errs).map(([k, v]) => `${k}：${v}`).join('；') : ex.message,
+              }));
+            }
+          }),
+        }),
+      ],
+    });
+    return m;
+  }
+
+  // ═══════════════════ 状态同步 ═══════════════════
+  async function reload() {
+    try {
+      const r = await api('/api/entities');
+      S.list = r.items || [];
+      const ids = new Set(S.list.map((e) => e.id));
+      for (const id of [...S.selected]) if (!ids.has(id)) S.selected.delete(id);
+      S.current = ws.state.overlay?.playerSnapshot || null;
+      renderAll();
+    } catch (ex) {
+      console.warn('[people] 拉取实体失败', ex.message);
+    }
+  }
+
+  function renderAll() {
+    renderTabs();
+    renderGrid();
+    renderDuo();
+  }
+
+  function syncCurrent() {
+    const c = ws.state.overlay?.playerSnapshot || null;
+    S.current = c;
+    renderGrid();
+  }
+
+  ws.on('hello', syncCurrent);
+  ws.on('patch', (msg) => {
+    if (!msg?.path || msg.path === 'overlay.playerSnapshot' || msg.path.startsWith('overlay.playerSnapshot.')) syncCurrent();
+  });
+  ws.on('entities:changed', () => reload());
+  window.ui.poll(() => { if (!ws.connected) reload(); }, 15000);
+
+  page.append(toolbar, tabsEl, duoHost, listCard);
+  reload();
+})();
+</script>
+</body>
+</html>

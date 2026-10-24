@@ -1,0 +1,85 @@
+{
+  "id": "scoreBar",
+  "name": "比分条·静态（叠加模板）",
+  "category": "custom",
+  "family": "scoreBar",
+  "style": "broadcast",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "leftTeam",
+      "label": "左队名",
+      "type": "text",
+      "required": false,
+      "maxLength": 24
+    },
+    {
+      "key": "leftTeamAvatar",
+      "label": "左队 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "leftScore",
+      "label": "左队比分",
+      "type": "text",
+      "required": false,
+      "maxLength": 4,
+      "default": "0",
+      "placeholder": "0"
+    },
+    {
+      "key": "label",
+      "label": "中间标签",
+      "type": "text",
+      "required": false,
+      "maxLength": 16,
+      "placeholder": "第 1 局"
+    },
+    {
+      "key": "rightScore",
+      "label": "右队比分",
+      "type": "text",
+      "required": false,
+      "maxLength": 4,
+      "default": "0",
+      "placeholder": "0"
+    },
+    {
+      "key": "rightTeam",
+      "label": "右队名",
+      "type": "text",
+      "required": false,
+      "maxLength": 24
+    },
+    {
+      "key": "rightTeamAvatar",
+      "label": "右队 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#d9d9d9"
+    }
+  ],
+  "defaultAnim": {
+    "in": "fadeDown",
+    "out": "fadeOut",
+    "durationMs": 420
+  },
+  "cssVars": {
+    "--sb-accent": "#d9d9d9",
+    "--sb-team-size": "20px",
+    "--sb-score-size": "32px",
+    "--sb-logo": "34px",
+    "--sb-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif"
+  },
+  "html": "<div class=\"sb-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--sb-accent\">\n  <div class=\"sb-side sb-left\">\n    <span class=\"sb-logo\"><img data-slot=\"leftTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"sb-logo-fb\"></span></span>\n    <span class=\"sb-team\" data-slot=\"leftTeam\"></span>\n    <span class=\"sb-score\" data-slot=\"leftScore\"></span>\n  </div>\n  <div class=\"sb-mid\">\n    <span class=\"sb-label\" data-slot=\"label\"></span>\n    <span class=\"sb-vs\">VS</span>\n  </div>\n  <div class=\"sb-side sb-right\">\n    <span class=\"sb-score\" data-slot=\"rightScore\"></span>\n    <span class=\"sb-team\" data-slot=\"rightTeam\"></span>\n    <span class=\"sb-logo\"><img data-slot=\"rightTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"sb-logo-fb\"></span></span>\n  </div>\n</div>",
+  "css": ".sb-root{position:absolute;left:50%;top:48px;transform:translateX(-50%);display:flex;align-items:stretch;font-family:var(--sb-font);background:rgba(10,10,11,.94);border:1px solid #2e2e2e;border-bottom:2px solid var(--sb-accent);}\n.sb-side{display:flex;align-items:center;gap:14px;padding:9px 20px;min-width:250px;}\n.sb-left{justify-content:flex-end;}\n.sb-right{justify-content:flex-start;}\n.sb-logo{position:relative;width:var(--sb-logo);height:var(--sb-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;}\n.sb-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.sb-logo img.is-ready{display:block;}\n.sb-logo-fb{width:6px;height:6px;background:var(--sb-accent);}\n.sb-logo:has(img.is-ready) .sb-logo-fb{display:none;}\n.sb-team{font-size:var(--sb-team-size);font-weight:700;color:#f2f2f2;letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;}\n.sb-team:empty{display:none;}\n.sb-score{font-family:ui-monospace,Consolas,monospace;font-size:var(--sb-score-size);font-weight:700;color:#fff;font-variant-numeric:tabular-nums;line-height:1;min-width:1.2em;text-align:center;}\n.sb-mid{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:0 18px;border-left:1px solid #2e2e2e;border-right:1px solid #2e2e2e;min-width:72px;}\n.sb-label{font-size:11px;font-weight:600;letter-spacing:1.5px;color:#9a9a9a;white-space:nowrap;}\n.sb-label:empty{display:none;}\n.sb-vs{font-size:11px;font-weight:700;letter-spacing:2px;color:var(--sb-accent);}"
+}

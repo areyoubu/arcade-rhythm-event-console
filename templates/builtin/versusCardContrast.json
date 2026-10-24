@@ -1,0 +1,99 @@
+{
+  "id": "versusCardContrast",
+  "name": "对阵卡·对抗色（全屏）",
+  "category": "player",
+  "family": "versusCard",
+  "style": "contrast",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "leftName",
+      "label": "左侧姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24
+    },
+    {
+      "key": "leftAvatar",
+      "label": "左侧头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "rightName",
+      "label": "右侧姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24
+    },
+    {
+      "key": "rightAvatar",
+      "label": "右侧头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "leftTeam",
+      "label": "左侧队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "leftTeamAvatar",
+      "label": "左侧队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "rightTeam",
+      "label": "右侧队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "rightTeamAvatar",
+      "label": "右侧队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "roundLabel",
+      "label": "轮次标签",
+      "type": "text",
+      "required": false,
+      "maxLength": 32,
+      "placeholder": "胜者组 决赛"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#d9d9d9"
+    }
+  ],
+  "defaultAnim": {
+    "in": "scaleIn",
+    "out": "fadeOut",
+    "durationMs": 600
+  },
+  "cssVars": {
+    "--vn-accent": "#d9d9d9",
+    "--vn-name-size": "54px",
+    "--vn-round-size": "20px",
+    "--vn-avatar-size": "240px",
+    "--vn-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--vn-team-size": "24px",
+    "--vn-team-logo": "34px"
+  },
+  "html": "<div class=\"vn-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--vn-accent\">\n  <div class=\"vn-round\" data-slot=\"roundLabel\"></div>\n  <div class=\"vn-body\">\n    <div class=\"vn-side vn-left\">\n      <div class=\"vn-avatar\">\n        <img data-slot=\"leftAvatar\" data-slot-type=\"image\" alt=\"\" />\n        <span class=\"vn-fallback\">1P</span>\n      </div>\n      <div class=\"vn-team\"><span class=\"vn-team-logo\"><img data-slot=\"leftTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"vn-team-fallback\"></span></span><span class=\"vn-team-name\" data-slot=\"leftTeam\"></span></div>\n      <div class=\"vn-name\" data-slot=\"leftName\"></div>\n    </div>\n    <div class=\"vn-mid\">\n      <div class=\"vn-vs\">VS</div>\n    </div>\n    <div class=\"vn-side vn-right\">\n      <div class=\"vn-avatar\">\n        <img data-slot=\"rightAvatar\" data-slot-type=\"image\" alt=\"\" />\n        <span class=\"vn-fallback\">2P</span>\n      </div>\n      <div class=\"vn-team\"><span class=\"vn-team-logo\"><img data-slot=\"rightTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"vn-team-fallback\"></span></span><span class=\"vn-team-name\" data-slot=\"rightTeam\"></span></div>\n      <div class=\"vn-name\" data-slot=\"rightName\"></div>\n    </div>\n  </div>\n</div>",
+  "css": ".vn-root{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:30px;font-family:var(--vn-font);overflow:hidden;background:linear-gradient(90deg,var(--vn-accent) 0%,var(--vn-accent) 50%,#101011 50%,#101011 100%);}\n.vn-round{font-size:var(--vn-round-size);font-weight:700;letter-spacing:7px;color:var(--vn-accent);text-transform:uppercase;background:#101011;padding:4px 18px;}\n.vn-round:empty{display:none;}\n.vn-body{display:flex;align-items:center;}\n.vn-side{display:flex;flex-direction:column;align-items:center;gap:18px;width:600px;}\n.vn-avatar{width:var(--vn-avatar-size);height:var(--vn-avatar-size);overflow:hidden;background:#0d0d0e;display:flex;align-items:center;justify-content:center;}\n.vn-left .vn-avatar{border:1px solid #3a2a12;}\n.vn-right .vn-avatar{border:1px solid #3a3a3f;}\n.vn-avatar img{width:100%;height:100%;object-fit:cover;display:none;}\n.vn-avatar img.is-ready{display:block;}\n.vn-fallback{font-size:56px;font-weight:700;color:#55554e;}\n.vn-avatar:has(img.is-ready) .vn-fallback{display:none;}\n.vn-name{font-size:var(--vn-name-size);font-weight:800;letter-spacing:.5px;text-align:center;line-height:1.12;max-width:520px;word-break:break-word;}\n.vn-left .vn-name{color:#141210;}\n.vn-right .vn-name{color:#f4f4f0;}\n.vn-mid{width:120px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}\n.vn-vs{font-size:26px;font-weight:700;letter-spacing:4px;color:#c9c9c2;background:#101011;padding:8px 0;width:100%;text-align:center;border-top:1px solid #3a3a3f;border-bottom:1px solid #3a3a3f;}\n.vn-team{display:flex;align-items:center;gap:10px;max-width:520px;}\n.vn-team:not(:has(.vn-team-name:not(:empty),img.is-ready)){display:none;}\n.vn-team-logo{position:relative;width:var(--vn-team-logo);height:var(--vn-team-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;}\n.vn-team-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.vn-team-logo img.is-ready{display:block;}\n.vn-team-fallback{width:6px;height:6px;}\n.vn-left .vn-team-fallback{background:#141210;}\n.vn-right .vn-team-fallback{background:var(--vn-accent);}\n.vn-team-logo:has(img.is-ready) .vn-team-fallback{display:none;}\n.vn-team-name{font-size:var(--vn-team-size);font-weight:700;letter-spacing:2px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}\n.vn-left .vn-team-name{color:#3a2a12;}\n.vn-right .vn-team-name{color:var(--vn-accent);}\n.vn-team-name:empty{display:none;}"
+}

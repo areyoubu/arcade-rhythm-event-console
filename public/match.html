@@ -1,0 +1,1312 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>比赛计分 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .match-head { border-top: 3px solid var(--accent); }
+  .match-head .body { display: flex; flex-direction: column; gap: 12px; }
+  .match-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .match-line .grow { flex: 1; min-width: 220px; }
+  .match-name { font-size: 18px; font-weight: 700; }
+  .match-summary {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 8px 11px; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: var(--radius); font-family: var(--mono); font-size: 12.5px; color: var(--text-dim);
+  }
+  .match-summary b { color: var(--text); font-size: 15px; }
+  .match-summary .left-num { color: var(--left-color, #d0344e); }
+  .match-summary .right-num { color: var(--right-color, #3d78c9); }
+  .match-summary .gold { color: #d9a441; }
+
+  .side-card > header .side-tag { font-weight: 700; letter-spacing: .04em; }
+  .side-card.left  { border-top: 3px solid var(--left-color, #d0344e); }
+  .side-card.right { border-top: 3px solid var(--right-color, #3d78c9); }
+  .team-color { width: 52px; height: 30px; }
+  .side-fields { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 10px; }
+  @media (max-width: 620px) { .side-fields { grid-template-columns: minmax(0,1fr); } }
+
+  /* ── 筛选 ── */
+  .filter-line { display: grid; grid-template-columns: minmax(180px, 1.4fr) repeat(4, minmax(110px, .8fr)) auto auto; gap: 8px; align-items: end; }
+  @media (max-width: 1100px) { .filter-line { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+  .filter-line .field { margin: 0; }
+  .filter-line label { font-size: 11.5px; }
+  .level-range { display: flex; align-items: center; gap: 4px; }
+  .level-range input { width: 100%; padding: 5px 7px; }
+
+  /* ── 曲目行 ── */
+  .song-rows { display: flex; flex-direction: column; }
+  .song-row {
+    display: grid;
+    grid-template-columns: 54px minmax(0, 1fr) 168px minmax(132px, .6fr) minmax(132px, .6fr) 96px 112px;
+    gap: 9px; align-items: center;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+  }
+  .song-row:last-child { border-bottom: none; }
+  .song-row.is-empty { opacity: .7; }
+  .song-row.is-current::before {
+    content: ''; position: absolute; left: -14px; top: 8px; bottom: 8px;
+    width: 3px; background: #d9a441;
+  }
+  .row-no {
+    font-family: var(--mono); font-size: 18px; font-weight: 800;
+    color: var(--text-mute); text-align: center;
+  }
+  .song-row.is-current .row-no { color: #d9a441; }
+  .song-pick {
+    display: flex; flex-direction: row; align-items: center; gap: 8px;
+    width: 100%; min-height: 48px; padding: 5px 8px;
+    background: var(--surface-3); border: 1px solid var(--border-strong);
+    border-radius: 3px; color: var(--text); text-align: left; cursor: pointer;
+    font-family: inherit; overflow: hidden;
+  }
+  .song-pick:hover { border-color: var(--accent); }
+  .song-pick .cover { width: 42px; height: 42px; flex: 0 0 auto; object-fit: cover; border-radius: 2px; border: 1px solid var(--border); background: #111; }
+  .cover.ph { display: flex; align-items: center; justify-content: center; color: var(--text-mute); font-size: 18px; }
+  .song-pick .sp { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+  .song-pick .t { font-size: 13.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .song-pick .m { font-size: 11px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  .song-pick.is-empty { border-style: dashed; color: var(--text-dim); justify-content: center; }
+  .song-pick:disabled { cursor: default; opacity: .55; }
+  .diff-sel { width: 100%; padding: 6px; font-size: 12px; }
+  .score-input {
+    width: 100%; padding: 8px 9px;
+    font-family: var(--mono); font-size: 17px; font-weight: 700;
+    text-align: right; letter-spacing: -.3px;
+    background: #17181b; border: 1px solid var(--border-strong); border-radius: 3px;
+    color: var(--text);
+  }
+  .score-input:focus { border-color: var(--accent); outline: none; }
+  .score-input.left { border-left: 3px solid var(--left-color, #d0344e); }
+  .score-input.right { border-left: 3px solid var(--right-color, #3d78c9); }
+  .score-input:disabled { opacity: .55; }
+  .row-result { font-size: 11.5px; font-weight: 700; text-align: center; line-height: 1.3; color: var(--text-mute); }
+  .row-result.left { color: var(--left-color, #d0344e); }
+  .row-result.right { color: var(--right-color, #3d78c9); }
+  .row-result.draw { color: var(--warn); }
+  .row-actions { display: flex; gap: 5px; justify-content: flex-end; }
+  .row-actions .btn { min-height: 28px; padding: 3px 7px; font-size: 11.5px; }
+  .song-row.is-locked .song-pick, .song-row.is-locked .diff-sel { opacity: .55; }
+
+  /* ── Ban / 选曲请求 ── */
+  .ban-list, .pick-list { display: flex; flex-direction: column; gap: 5px; max-height: 320px; overflow-y: auto; }
+  .ban-item, .pick-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 7px 9px; background: var(--surface-2); border: 1px solid var(--border);
+    border-radius: 3px;
+  }
+  .ban-item .main, .pick-item .main { min-width: 0; flex: 1; }
+  .ban-item .t, .pick-item .t { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ban-item .m, .pick-item .m { font-size: 11px; color: var(--text-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pick-side {
+    font-family: var(--mono); font-size: 11px; font-weight: 800; letter-spacing: 1px;
+    padding: 2px 6px; color: #fff; flex: 0 0 auto;
+  }
+  .pick-side.left { background: var(--left-color, #d0344e); }
+  .pick-side.right { background: var(--right-color, #3d78c9); }
+  .pick-actions { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
+  .pick-actions .btn { min-height: 26px; padding: 2px 6px; font-size: 11px; }
+  .qr-box { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .qr-box img { width: min(420px, 74vw); height: auto; background: #fff; padding: 10px; border-radius: 4px; }
+  .qr-url {
+    width: 100%; word-break: break-all; text-align: center;
+    font-family: var(--mono); font-size: 11.5px; color: var(--text-dim);
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px; padding: 7px 9px;
+  }
+
+  /* ── 曲目选择弹窗 ── */
+  .check-row { display: flex; align-items: center; gap: 12px; padding-bottom: 9px; flex-wrap: wrap; }
+  .picker-filters { display: grid; grid-template-columns: minmax(0,1.6fr) repeat(4, minmax(0,1fr)); gap: 8px; align-items: end; }
+  @media (max-width: 900px) { .picker-filters { grid-template-columns: repeat(2, minmax(0,1fr)); } }
+  .picker-filters .field { margin: 0; }
+  .picker-results { margin-top: 10px; max-height: 52vh; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
+  .song-item { padding: 8px 10px; border: 1px solid transparent; border-bottom-color: var(--border); display: flex; align-items: center; gap: 10px; }
+  .song-item:hover { background: var(--surface-2); border-color: var(--border); }
+  .song-item .cover { width: 48px; height: 48px; flex: 0 0 auto; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); background: #111; }
+  .song-item .body { flex: 1; min-width: 0; }
+  .song-item .top { display: flex; align-items: center; gap: 8px; }
+  .song-item .title { font-size: 13.5px; font-weight: 700; min-width: 0; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .song-item .artist { font-size: 11.5px; color: var(--text-mute); margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .song-item .tag { font-size: 10.5px; padding: 1px 5px; border: 1px solid var(--border-strong); color: var(--text-mute); border-radius: 2px; flex: 0 0 auto; }
+  .song-item .tag.cn { color: #8fc7a2; border-color: #345641; }
+  .song-item .tag.used { color: #d9a441; border-color: #5a4a22; }
+  .song-item .tag.banned { color: var(--danger); border-color: #5a2a2a; }
+  .diff-chips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 7px; }
+  .diff-chip {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 800; letter-spacing: .2px;
+    padding: 3px 6px; border: 1px solid rgba(255,255,255,.18); border-radius: 2px;
+    cursor: pointer; color: #fff;
+  }
+  .diff-chip b { font-size: 11.5px; }
+  .diff-chip:hover { filter: brightness(1.18); }
+  .diff-chip[data-diff="ultima"] { border-color: rgba(255,255,255,.72); }
+  .diff-chip:disabled { opacity: .35; cursor: not-allowed; filter: grayscale(.6); }
+  .picker-more { align-self: center; margin: 8px 0; }
+
+  /* ── 历史 ── */
+  .hist-list { display: flex; flex-direction: column; gap: 4px; }
+  .hist-item {
+    display: flex; align-items: center; gap: 10px; padding: 8px 10px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 3px;
+    flex-wrap: wrap;
+  }
+  .hist-item .when { font-family: var(--mono); font-size: 11px; color: var(--text-mute); flex: 0 0 auto; }
+  .hist-item .nm { font-size: 13px; font-weight: 700; min-width: 120px; flex: 1; }
+  .hist-item .res { font-size: 12px; font-weight: 700; }
+  .hist-item .res.left { color: var(--left-color, #d0344e); }
+  .hist-item .res.right { color: var(--right-color, #3d78c9); }
+  .hist-item .res.draw { color: var(--warn); }
+  .hist-item .meta { font-size: 11.5px; color: var(--text-mute); }
+
+  .hist-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .hist-table th, .hist-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); text-align: left; }
+  .hist-table th { color: var(--text-mute); font-weight: 600; font-size: 11.5px; }
+  .hist-table td.num { font-family: var(--mono); text-align: right; }
+  .hist-table tr.win td { background: rgba(217,164,65,.07); }
+
+  .preview-frame { width: 100%; aspect-ratio: 16 / 9; border: 0; display: block; background: #0b0b0b; border-radius: var(--radius); }
+  .out-url {
+    flex: 1; min-width: 220px; font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-mute); background: #17181b; border: 1px solid var(--border);
+    border-radius: 3px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, clear, api, ok, warn, cmdError, mount, modal, confirm, prompt } = ui;
+
+  const page = mount({
+    current: '/match',
+    title: '比赛计分',
+    subtitle: '1–4 首自适应 · 总分制 / 小局制 · 与比分条联动 · 扫码选曲与 ban 曲',
+  });
+
+  let S = {
+    match: null,
+    score: null,
+    players: [],
+    teams: [],
+    musicMeta: null,
+    history: [],
+  };
+
+  const formatDate = (ts) => (ts ? fmt.datetime(ts) : '—');
+
+  // ═══════════════════════════════════════════════════════════════
+  // 顶部：比赛名称 / 模式 / 生命周期
+  // ═══════════════════════════════════════════════════════════════
+  const nameInput = el('input', { type: 'text', maxLength: 60, placeholder: '如：八强赛 A 组 第 1 场', class: 'match-name' });
+  const nameBtn = el('button', { class: 'btn', text: '应用名称' });
+  const modeSel = el('select', null,
+    el('option', { value: 'total', text: '总分制（曲目得分相加）' }),
+    el('option', { value: 'wins', text: '小局制（赢的曲目多者胜）' }),
+  );
+  const srcChk = el('input', { type: 'checkbox' });
+  const srcHint = el('span', { class: 'small muted' });
+  const statusPill = el('span', { class: 'pill mute', text: '进行中' });
+  const summaryBox = el('div', { class: 'match-summary' });
+  const finishBtn = el('button', { class: 'btn danger', text: '结束本局并保存' });
+  const newBtn = el('button', { class: 'btn primary', text: '开启新一轮' });
+  const randomBtn = el('button', { class: 'btn', text: '随机选曲' });
+
+  const headCard = el('section', { class: 'card match-head' },
+    el('header', null,
+      el('span', { text: '本局信息' }),
+      el('span', { class: 'spacer' }),
+      statusPill,
+      el('a', { class: 'btn ghost sm', href: '/scoreboard', text: '比分条控制台' }),
+    ),
+    el('div', { class: 'body' },
+      el('div', { class: 'match-line' },
+        nameInput, nameBtn,
+        el('span', { class: 'small muted', text: '计分模式' }), modeSel,
+        el('span', { class: 'spacer' }),
+        randomBtn, finishBtn, newBtn,
+      ),
+      el('div', { class: 'match-line' },
+        el('label', { class: 'check' }, srcChk, el('span', { class: 'label', text: '比分条跟随本局（显示总分 / 胜局）' })),
+        srcHint,
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'small muted', text: '结束后曲目与分数会被锁定；历史里保留当时的结果。' }),
+      ),
+      summaryBox,
+    ),
+  );
+  page.append(headCard);
+
+  // ═══════════════════════════════════════════════════════════════
+  // 选手 / 队伍（与比分条、叠加共用 lineup）
+  // ═══════════════════════════════════════════════════════════════
+  function openPlayerPicker(sideKey) {
+    const side = sideKey === 'left' ? S.score?.left : S.score?.right;
+    ui.playerPicker({
+      title: sideKey === 'left' ? '选择 P1 选手' : '选择 P2 选手',
+      players: S.players,
+      teams: S.teams,
+      selectedId: side?.playerId || null,
+      onPick: (entityId) => setPlayer(sideKey, entityId),
+    });
+  }
+
+  function fillSelect(sel, items, selected, emptyLabel) {
+    clear(sel);
+    sel.append(el('option', { value: '', text: emptyLabel }));
+    for (const it of items) sel.append(el('option', { value: it.id, text: it.name, selected: it.id === selected }));
+    sel.value = selected || '';
+  }
+
+  function makeSideCard(key, letter, label) {
+    const playerBtn = el('button', { class: 'btn grow truncate', type: 'button', text: '选择选手' });
+    const clearBtn = el('button', { class: 'btn ghost sm', type: 'button', text: '清空' });
+    const teamSel = el('select', null, el('option', { value: '', text: '跟随选手' }));
+    const color = el('input', { type: 'color', class: 'team-color', value: key === 'left' ? '#d0344e' : '#3d78c9' });
+    const winLine = el('div', { class: 'small muted' });
+
+    playerBtn.onclick = () => openPlayerPicker(key);
+    clearBtn.onclick = () => setPlayer(key, null);
+    teamSel.onchange = () => { const v = teamSel.value; setTeam(key, v); };
+    color.onchange = () => { const v = color.value; setColor(key, v); };
+
+    const card = el('section', { class: `card side-card ${key}` },
+      el('header', null, el('span', { class: 'side-tag', text: `${letter} · ${label}` }), el('span', { class: 'spacer' })),
+      el('div', { class: 'body' },
+        el('div', { class: 'side-fields' },
+          el('div', { class: 'field' }, el('label', { text: '选手' }), el('div', { class: 'inline' }, playerBtn, clearBtn)),
+          el('div', { class: 'field' }, el('label', { text: '队伍' }), teamSel),
+        ),
+        el('div', { class: 'inline mt8' },
+          el('label', { text: '队伍色' }), color,
+          el('span', { class: 'small muted', text: '与比分条 / 总比分画面共用' }),
+        ),
+        winLine,
+      ),
+    );
+    return { key, card, playerBtn, teamSel, color, winLine };
+  }
+
+  const leftCard = makeSideCard('left', 'P1', '左 / A 侧');
+  const rightCard = makeSideCard('right', 'P2', '右 / B 侧');
+  page.append(el('div', { class: 'cols two mt12' }, leftCard.card, rightCard.card));
+
+  // ═══════════════════════════════════════════════════════════════
+  // 筛选 + 曲目行
+  // ═══════════════════════════════════════════════════════════════
+  const genreSel = el('select');
+  const diffSel = el('select');
+  const cnChk = el('input', { type: 'checkbox' });
+  const includeWeChk = el('input', { type: 'checkbox' });
+  const minLevel = el('input', { type: 'number', min: '1', max: '16', step: '0.1', placeholder: '最低' });
+  const maxLevel = el('input', { type: 'number', min: '1', max: '16', step: '0.1', placeholder: '最高' });
+
+  const filterCard = el('section', { class: 'card mt12' },
+    el('header', null,
+      el('span', { text: '选曲筛选' }),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '随机选曲 / 选曲弹窗 / 扫码选曲共用这些条件' }),
+    ),
+    el('div', { class: 'body' },
+      el('div', { class: 'filter-line' },
+        el('div', { class: 'field' }, el('label', { text: '分类' }), genreSel),
+        el('div', { class: 'field' }, el('label', { text: '难度' }), diffSel),
+        el('div', { class: 'field' }, el('label', { text: '等级范围' }),
+          el('div', { class: 'level-range' }, minLevel, el('span', { class: 'muted', text: '–' }), maxLevel)),
+        el('div', { class: 'check-row' },
+          el('label', { class: 'check' }, cnChk, el('span', { class: 'label', text: '仅国服曲目' })),
+          el('label', { class: 'check' }, includeWeChk, el('span', { class: 'label', text: '含 WE 特殊谱面' }))),
+        el('span'),
+        el('span'),
+      ),
+    ),
+  );
+  page.append(filterCard);
+
+  const songRows = [];
+  function makeSongRow(i) {
+    const rowNo = el('div', { class: 'row-no', text: String(i + 1).padStart(2, '0') });
+    const songBtn = el('button', { class: 'song-pick is-empty', type: 'button' });
+    const rowDiff = el('select', { class: 'diff-sel' });
+    const leftIn = el('input', { class: 'score-input left', type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: 'P1 分数' });
+    const rightIn = el('input', { class: 'score-input right', type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: 'P2 分数' });
+    const result = el('div', { class: 'row-result', text: '—' });
+    const curBtn = el('button', { class: 'btn ghost', type: 'button', text: '设为当前' });
+    const clearBtn = el('button', { class: 'btn ghost', type: 'button', text: '清空' });
+    const rowEl = el('div', { class: 'song-row is-empty' },
+      rowNo, songBtn, rowDiff, leftIn, rightIn, result,
+      el('div', { class: 'row-actions' }, curBtn, clearBtn),
+    );
+
+    songBtn.onclick = () => openSongPicker(i);
+    rowDiff.onchange = () => changeDifficulty(i, rowDiff.value);
+
+    const save = async (side, input) => {
+      const raw = input.value.trim();
+      if (input.dataset.saved === raw) return;
+      try {
+        const r = await api('/api/match/score', { method: 'POST', body: { index: i, side, value: raw } });
+        input.dataset.saved = raw;
+        applyMatchState(r.state);
+      } catch (e) {
+        cmdError(e, `第 ${i + 1} 首 ${side === 'left' ? 'P1' : 'P2'} 分数`);
+        input.value = input.dataset.saved || '';
+      }
+    };
+    leftIn.onchange = () => save('left', leftIn);
+    rightIn.onchange = () => save('right', rightIn);
+    leftIn.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); leftIn.blur(); rightIn.focus(); } };
+    rightIn.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault(); rightIn.blur();
+        const next = songRows[i + 1];
+        if (next) next.leftIn.focus(); else leftIn.focus();
+      }
+    };
+    curBtn.onclick = async () => {
+      try { const r = await api('/api/match/current', { method: 'POST', body: { index: i } }); applyMatchState(r.state); }
+      catch (e) { cmdError(e, '设为当前曲目'); }
+    };
+    clearBtn.onclick = async () => {
+      const data = S.match?.current?.songs?.[i];
+      if (data?.filled) {
+        const yes = await confirm({
+          title: '清空这一行？', message: '会清掉曲目信息和双方分数。',
+          detail: data.title || '', danger: true, confirmText: '清空',
+        });
+        if (!yes) return;
+      }
+      try { const r = await api('/api/match/row/clear', { method: 'POST', body: { index: i } }); applyMatchState(r.state); }
+      catch (e) { cmdError(e, '清空曲目行'); }
+    };
+
+    return { rowEl, rowNo, songBtn, rowDiff, leftIn, rightIn, result, curBtn, clearBtn };
+  }
+
+  const rowsBox = el('div', { class: 'song-rows' });
+  for (let i = 0; i < 4; i++) {
+    const r = makeSongRow(i);
+    songRows.push(r);
+    rowsBox.append(r.rowEl);
+  }
+
+  const songsCard = el('section', { class: 'card mt12' },
+    el('header', null,
+      el('span', { text: '曲目与分数' }),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '空行不会出现在总比分画面；最多 4 首，列表会自动收缩' }),
+    ),
+    el('div', { class: 'body' }, rowsBox),
+  );
+  page.append(songsCard);
+
+  function filterParams() {
+    const p = {};
+    if (genreSel.value) p.genre = genreSel.value;
+    if (diffSel.value && diffSel.value !== 'any') p.difficulty = diffSel.value;
+    if (minLevel.value !== '') p.minLevel = Number(minLevel.value);
+    if (maxLevel.value !== '') p.maxLevel = Number(maxLevel.value);
+    if (cnChk.checked) p.cnOnly = true;
+    if (includeWeChk.checked || diffSel.value === 'we') p.includeWe = true;
+    return p;
+  }
+  function queryString(params) {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) {
+      if (v === undefined || v === null || v === false || v === '') continue;
+      q.set(k, v === true ? '1' : String(v));
+    }
+    return q.toString();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 曲目选择弹窗
+  // ═══════════════════════════════════════════════════════════════
+  function difficultyChips(song, banned, onPick, includeWe = false) {
+    const box = el('div', { class: 'diff-chips' });
+    const order = S.musicMeta?.difficultyOrder || ['basic', 'advanced', 'expert', 'master', 'ultima'];
+    for (const key of order) {
+      const level = song.difficulties?.[key];
+      if (!level) continue;
+      const meta = S.musicMeta?.difficulties?.[key] || {};
+      const chip = el('button', {
+        class: 'diff-chip', type: 'button', disabled: banned,
+        dataset: { diff: key },
+        title: banned ? '这首已被 ban' : `选择 ${meta.name || key} ${level}`,
+        style: { background: meta.color || '#4a4e56' },
+      });
+      chip.append(document.createTextNode(`${(meta.name || key).slice(0, 3)} `));
+      chip.append(el('b', { text: String(level) }));
+      chip.onclick = () => onPick(song, key);
+      box.append(chip);
+    }
+    if (includeWe && song.we) {
+      const meta = S.musicMeta?.we || { name: "WORLD'S END", color: '#b04ad9' };
+      const chip = el('button', {
+        class: 'diff-chip', type: 'button', disabled: banned,
+        dataset: { diff: 'we' },
+        title: banned ? '这首已被 ban' : `选择 WE ${song.we.kanji}★${song.we.star}`,
+        style: { background: meta.color || '#b04ad9' },
+      });
+      chip.append(document.createTextNode('WE '));
+      chip.append(el('b', { text: `${song.we.kanji}★${song.we.star}` }));
+      chip.onclick = () => onPick(song, 'we');
+      box.append(chip);
+    }
+    return box;
+  }
+
+  function openSongPicker(index) {
+    if (S.match?.current?.status === 'finished') { warn('本局已结束，开启新一轮后再选曲'); return; }
+    const qInput = el('input', { type: 'search', placeholder: '搜索曲名 / 曲师 / ID…' });
+    const fGenre = el('select');
+    const fDiff = el('select');
+    const fCn = el('input', { type: 'checkbox', checked: cnChk.checked });
+    const fWe = el('input', { type: 'checkbox', checked: includeWeChk.checked });
+    const fMin = el('input', { type: 'number', min: '1', max: '16', step: '0.1', placeholder: '最低' });
+    const fMax = el('input', { type: 'number', min: '1', max: '16', step: '0.1', placeholder: '最高' });
+    fillGenre(fGenre);
+    fillDiff(fDiff);
+    fGenre.value = genreSel.value;
+    fDiff.value = diffSel.value;
+    fMin.value = minLevel.value;
+    fMax.value = maxLevel.value;
+
+    const results = el('div', { class: 'picker-results' });
+    const status = el('div', { class: 'small muted', text: '输入关键词开始搜索' });
+    let offset = 0;
+    let items = [];
+    let total = 0;
+    let loading = false;
+    let m = null;
+
+    const bannedSet = () => new Set((S.match?.current?.bans || []).map((b) => b.musicId));
+    // 当前这一行自己的曲目不算「已选」，否则打开选择器会看到自己的歌被标成占用
+    const usedSet = () => new Set((S.match?.current?.songs || [])
+      .filter((s) => s.musicId && s.index !== index)
+      .map((s) => s.musicId));
+
+    const localParams = () => {
+      const p = {};
+      if (qInput.value.trim()) p.q = qInput.value.trim();
+      if (fGenre.value) p.genre = fGenre.value;
+      if (fDiff.value && fDiff.value !== 'any') p.difficulty = fDiff.value;
+      if (fMin.value !== '') p.minLevel = Number(fMin.value);
+      if (fMax.value !== '') p.maxLevel = Number(fMax.value);
+      if (fCn.checked) p.cnOnly = true;
+      if (fWe.checked || fDiff.value === 'we') p.includeWe = true;
+      return p;
+    };
+
+    async function choose(song, difficulty) {
+      const cur = S.match?.current?.songs?.[index];
+      if (cur && cur.musicId === song.id && cur.difficulty === difficulty) { if (m) m.close(); return; }
+      if (cur && (Number.isFinite(cur.scoreLeft) || Number.isFinite(cur.scoreRight))) {
+        const yes = await confirm({
+          title: '这一行已经有分数',
+          message: `换曲会清空第 ${index + 1} 首已录入的 P1 / P2 分数。`,
+          danger: true, confirmText: '换曲',
+        });
+        if (!yes) return;
+      }
+      try {
+        const r = await api('/api/match/song', {
+          method: 'POST',
+          body: { index, musicId: song.id, difficulty },
+        });
+        applyMatchState(r.state);
+        if (m) m.close();
+        ok(`第 ${index + 1} 首：${song.name}（${(S.musicMeta?.difficulties?.[difficulty]?.name) || difficulty} ${song.difficulties[difficulty]}）`);
+      } catch (e) { cmdError(e, '选择曲目'); }
+    }
+
+    async function toggleBan(song) {
+      const banned = bannedSet().has(song.id);
+      try {
+        const r = await api('/api/match/ban', { method: 'POST', body: { musicId: song.id, banned: !banned } });
+        applyMatchState(r.state);
+        renderResults();
+        ok(banned ? `已取消 ban：${song.name}` : `已 ban：${song.name}`);
+      } catch (e) { cmdError(e, banned ? '取消 ban' : 'ban 曲目'); }
+    }
+
+    function renderResults() {
+      clear(results);
+      if (!items.length) {
+        results.append(el('div', { class: 'dim small', style: { padding: '14px' }, text: loading ? '搜索中…' : '没有匹配的曲目' }));
+        return;
+      }
+      const banned = bannedSet();
+      const used = usedSet();
+      for (const song of items) {
+        const isBanned = banned.has(song.id);
+        const isUsed = used.has(song.id);
+        const top = el('div', { class: 'top' },
+          el('span', { class: 'title', text: song.name }),
+          song.cn ? el('span', { class: 'tag cn', text: '国服' }) : el('span', { class: 'tag', text: '日服' }),
+          isUsed ? el('span', { class: 'tag used', text: '已选' }) : null,
+          isBanned ? el('span', { class: 'tag banned', text: '已 ban' }) : null,
+          el('button', {
+            class: `btn ghost sm ${isBanned ? '' : 'danger'}`,
+            type: 'button',
+            text: isBanned ? '取消 ban' : 'Ban',
+            onclick: () => toggleBan(song),
+          }),
+        );
+        const cover = song.cover
+          ? el('img', { class: 'cover', src: song.cover, alt: '', loading: 'lazy' })
+          : el('span', { class: 'cover ph', text: '♪' });
+        const item = el('div', { class: 'song-item' },
+          cover,
+          el('div', { class: 'body' },
+            top,
+            el('div', { class: 'artist', text: `${song.artist || '—'} · ${song.genreLabel || song.genre || '未分类'}` }),
+            difficultyChips(song, isBanned, choose, fWe.checked),
+          ),
+        );
+        results.append(item);
+      }
+      if (offset + items.length < total) {
+        const more = el('button', {
+          class: 'btn ghost sm picker-more', type: 'button',
+          text: `加载更多（${offset + items.length} / ${total}）`,
+          onclick: () => load(false),
+        });
+        results.append(more);
+      }
+    }
+
+    async function load(reset = true) {
+      if (loading) return;
+      loading = true;
+      if (reset) { offset = 0; items = []; clear(results); }
+      status.textContent = '搜索中…';
+      try {
+        const qs = queryString({ ...localParams(), limit: 50, offset });
+        const r = await api(`/api/music?${qs}`);
+        total = r.total || 0;
+        items = reset ? (r.items || []) : [...items, ...(r.items || [])];
+        offset = items.length;
+        status.textContent = `共 ${total} 首${filterParams().cnOnly ? '（仅国服）' : ''}`;
+        renderResults();
+      } catch (e) {
+        status.textContent = '搜索失败';
+        console.warn(e);
+      } finally { loading = false; }
+    }
+
+    let timer = null;
+    const debounce = () => { clearTimeout(timer); timer = setTimeout(() => load(true), 250); };
+    qInput.oninput = debounce;
+    for (const n of [fGenre, fDiff, fCn, fWe, fMin, fMax]) n.onchange = () => load(true);
+
+    const body = el('div', null,
+      el('div', { class: 'picker-filters' },
+        el('div', { class: 'field' }, el('label', { text: '搜索' }), qInput),
+        el('div', { class: 'field' }, el('label', { text: '分类' }), fGenre),
+        el('div', { class: 'field' }, el('label', { text: '难度' }), fDiff),
+        el('div', { class: 'field' }, el('label', { text: '等级' }),
+          el('div', { class: 'level-range' }, fMin, el('span', { class: 'muted', text: '–' }), fMax)),
+        el('div', { class: 'field' }, el('label', { text: '选项' }),
+          el('div', { class: 'check-row' },
+            el('label', { class: 'check' }, fCn, el('span', { class: 'label', text: '仅国服' })),
+            el('label', { class: 'check' }, fWe, el('span', { class: 'label', text: '含 WE' })))),
+      ),
+      status,
+      results,
+    );
+
+    m = modal({
+      title: `为第 ${index + 1} 首选择曲目`,
+      wide: true,
+      body,
+      footer: [
+        el('button', {
+          class: 'btn', text: '随机选一首',
+          onclick: async () => {
+            const cur = S.match?.current?.songs?.[index];
+            if (cur && (Number.isFinite(cur.scoreLeft) || Number.isFinite(cur.scoreRight))) {
+              const yes = await confirm({
+                title: '这一行已经有分数',
+                message: `随机换曲会清空第 ${index + 1} 首已录入的 P1 / P2 分数。`,
+                danger: true, confirmText: '随机换曲',
+              });
+              if (!yes) return;
+            }
+            try {
+              const r = await api('/api/match/random', { method: 'POST', body: { index, ...localParams() } });
+              applyMatchState(r.state);
+              if (m) m.close();
+              ok(`随机：${r.pick.song.name}（${r.pick.difficulty === 'we' ? "WORLD'S END" : r.pick.difficulty.toUpperCase()} ${r.pick.levelText || r.pick.level}）`);
+            } catch (e) { cmdError(e, '随机选曲'); }
+          },
+        }),
+        el('button', { class: 'btn ghost', text: '关闭', onclick: () => m.close() }),
+      ],
+    });
+    load(true);
+    setTimeout(() => qInput.focus(), 40);
+  }
+
+  async function changeDifficulty(index, difficulty) {
+    const data = S.match?.current?.songs?.[index];
+    if (!data?.musicId || !difficulty || difficulty === data.difficulty) return;
+    if (Number.isFinite(data.scoreLeft) || Number.isFinite(data.scoreRight)) {
+      const yes = await confirm({
+        title: '换难度会清空本行分数',
+        message: `第 ${index + 1} 首从 ${data.difficultyName} 换到 ${difficulty.toUpperCase()}，已录入的 P1 / P2 分数会被清空。`,
+        danger: true, confirmText: '换难度',
+      });
+      if (!yes) { renderRows(); return; }
+    }
+    try {
+      const r = await api('/api/match/song', {
+        method: 'POST',
+        body: { index, musicId: data.musicId, difficulty },
+      });
+      applyMatchState(r.state);
+    } catch (e) { cmdError(e, '切换难度'); renderRows(); }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Ban / 扫码选曲
+  // ═══════════════════════════════════════════════════════════════
+  const banList = el('div', { class: 'ban-list' });
+  const clearBansBtn = el('button', { class: 'btn ghost sm', text: '清空 ban' });
+  clearBansBtn.onclick = async () => {
+    const yes = await confirm({ title: '清空 ban 列表', message: '所有已 ban 的曲目会重新进入随机池。', confirmText: '清空' });
+    if (!yes) return;
+    try { const r = await api('/api/match/bans/clear', { method: 'POST', body: {} }); applyMatchState(r.state); }
+    catch (e) { cmdError(e, '清空 ban'); }
+  };
+
+  const bansCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: 'Ban 曲目' }),
+      el('span', { class: 'spacer' }),
+      clearBansBtn,
+    ),
+    el('div', { class: 'body' }, banList),
+  );
+
+  const pickList = el('div', { class: 'pick-list' });
+  const qrBtn = el('button', { class: 'btn sm', text: '显示选曲二维码' });
+  const pickOverlayBtn = el('button', { class: 'btn ghost sm', text: '打开选曲大屏' });
+  qrBtn.onclick = openQr;
+  pickOverlayBtn.onclick = () => window.open('/render/pick?window=1', 'matchPick', 'width=1280,height=800');
+
+  const picksCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '扫码选曲请求' }),
+      el('span', { class: 'spacer' }),
+      qrBtn, pickOverlayBtn,
+    ),
+    el('div', { class: 'body' },
+      el('div', { class: 'note info mb8', text: '选手扫码后提交的选曲会先出现在这里，不会直接改动画面 —— 由你选择用在哪一行。' }),
+      el('div', { class: 'small muted mb8', text: `二维码大屏（OBS 浏览器源）：${location.origin}/render/pick` }),
+      pickList,
+    ),
+  );
+
+  page.append(el('div', { class: 'cols two mt12' }, bansCard, picksCard));
+
+  async function openQr() {
+    const origin = encodeURIComponent(location.origin);
+    let info = null;
+    try { info = await api(`/api/match/pickUrl?origin=${origin}`); }
+    catch (e) { cmdError(e, '生成选曲地址'); return; }
+    const img = el('img', { alt: '选曲二维码', src: `/api/match/qr?size=460&origin=${origin}` });
+    const urlBox = el('div', { class: 'qr-url', text: info.url });
+    const copyBtn = el('button', {
+      class: 'btn sm', text: '复制地址',
+      onclick: async () => {
+        try { await navigator.clipboard.writeText(info.url); ok('已复制选曲地址'); }
+        catch { warn('复制失败，请手动选中地址复制'); }
+      },
+    });
+    const body = el('div', { class: 'qr-box' },
+      el('div', { class: 'small muted', text: '手机连同一 Wi-Fi，扫码打开选曲页；P1 / P2 各自选择后提交。' }),
+      img,
+      urlBox,
+      el('div', { class: 'inline' }, copyBtn),
+      info.warning ? el('div', { class: 'note warn', text: info.warning }) : null,
+    );
+    const m = modal({ title: '扫码选曲', body, footer: [el('button', { class: 'btn ghost', text: '关闭', onclick: () => m.close() })] });
+  }
+
+  function pickTime(ts) {
+    const d = Date.now() - ts;
+    if (d < 15000) return '刚刚';
+    if (d < 60000) return `${Math.floor(d / 1000)} 秒前`;
+    return `${Math.floor(d / 60000)} 分钟前`;
+  }
+
+  function renderPicks() {
+    clear(pickList);
+    const picks = S.match?.picks || [];
+    const finished = S.match?.current?.status === 'finished';
+    if (!picks.length) {
+      pickList.append(el('div', { class: 'dim small', style: { padding: '10px 0' }, text: '暂无请求。选手扫码提交后会出现在这里。' }));
+      return;
+    }
+    for (const p of picks) {
+      const actions = el('div', { class: 'pick-actions' });
+      for (let i = 0; i < 4; i++) {
+        actions.append(el('button', {
+          class: 'btn ghost sm', type: 'button', text: `→${i + 1}`, disabled: finished,
+          title: `应用到第 ${i + 1} 首`,
+          onclick: () => applyPick(p, i),
+        }));
+      }
+      actions.append(el('button', {
+        class: 'btn ghost sm', type: 'button', text: '忽略', disabled: finished,
+        onclick: () => dismissPick(p),
+      }));
+      const item = el('div', { class: 'pick-item' },
+        el('span', { class: `pick-side ${p.side === 'right' ? 'right' : 'left'}`, text: p.side === 'right' ? 'P2' : 'P1' }),
+        el('div', { class: 'main' },
+          el('div', { class: 't', text: p.title }),
+          el('div', { class: 'm', text: `${p.artist || '—'} · ${p.difficultyName} ${p.level ?? ''} · ${pickTime(p.at)}` }),
+        ),
+        actions,
+      );
+      pickList.append(item);
+    }
+  }
+
+  async function applyPick(p, index) {
+    const cur = S.match?.current?.songs?.[index];
+    if (cur && (Number.isFinite(cur.scoreLeft) || Number.isFinite(cur.scoreRight))) {
+      const yes = await confirm({
+        title: '目标行已经有分数',
+        message: `把「${p.title}」放到第 ${index + 1} 首会清空该行已录入的 P1 / P2 分数。`,
+        danger: true, confirmText: '覆盖该行',
+      });
+      if (!yes) return;
+    }
+    try {
+      const r = await api('/api/match/pick/apply', { method: 'POST', body: { id: p.id, index } });
+      applyMatchState(r.state);
+      ok(`已把「${p.title}」放到第 ${index + 1} 首`);
+    } catch (e) { cmdError(e, '应用选曲'); }
+  }
+  async function dismissPick(p) {
+    try {
+      const r = await api('/api/match/pick/dismiss', { method: 'POST', body: { id: p.id } });
+      applyMatchState(r.state);
+    } catch (e) { cmdError(e, '忽略选曲'); }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 预览 / OBS 输出
+  // ═══════════════════════════════════════════════════════════════
+  const preview = el('iframe', {
+    class: 'preview-frame', src: '/render/match?preview=1', title: '总比分画面预览', loading: 'lazy',
+  });
+  const outputUrl = `${location.origin}/render/match`;
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); ok('已复制到剪贴板'); }
+    catch {
+      warn('非安全上下文，复制失败；请手动选中地址复制');
+    }
+  }
+
+  const previewCard = el('section', { class: 'card mt12' },
+    el('header', null,
+      el('span', { text: '总比分画面（独立整屏场景）' }),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'btn ghost sm', text: '静态背景版', onclick: () => window.open('/render/match?static=1&window=1', 'matchOutputStatic', 'width=1280,height=720') }),
+      el('button', { class: 'btn ghost sm', text: '打开输出窗口', onclick: () => window.open('/render/match?window=1', 'matchOutput', 'width=1280,height=720') }),
+    ),
+    el('div', { class: 'body' },
+      preview,
+      el('div', { class: 'out-row mt12' },
+        el('span', { class: 'small bold nowrap', text: '输出地址' }),
+        el('code', { class: 'out-url', text: outputUrl }),
+        el('button', { class: 'btn sm', text: '复制地址', onclick: () => copyText(outputUrl) }),
+      ),
+      el('div', { class: 'note info mt8', text: '独立整屏场景，复用直播间动态背景；空行自动隐藏，1–4 首自适应。比分条（/render/score）仍是另一路紧凑叠加，可在上面勾选「比分条跟随本局」。' }),
+      el('div', { class: 'note mt8', text: '如果 OBS 里视频解码有问题或想省 GPU，用「静态背景版」或地址加 ?static=1。' }),
+    ),
+  );
+  page.append(previewCard);
+
+  // ═══════════════════════════════════════════════════════════════
+  // 历史
+  // ═══════════════════════════════════════════════════════════════
+  const histList = el('div', { class: 'hist-list' });
+  const clearHistBtn = el('button', { class: 'btn ghost sm', text: '清空历史' });
+  clearHistBtn.onclick = async () => {
+    const yes = await confirm({
+      title: '清空比赛历史', message: '所有已保存的场次记录会被删除，无法恢复。',
+      danger: true, confirmText: '清空历史',
+    });
+    if (!yes) return;
+    try { const r = await api('/api/match/history/clear', { method: 'POST', body: {} }); applyMatchState(r.state); }
+    catch (e) { cmdError(e, '清空历史'); }
+  };
+  const histCard = el('section', { class: 'card mt12' },
+    el('header', null,
+      el('span', { text: '比赛历史' }),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '结束本局时自动保存 · 控制页显示最近 20 场' }),
+      clearHistBtn,
+    ),
+    el('div', { class: 'body' }, histList),
+  );
+  page.append(histCard);
+
+  function winnerLabel(m, players) {
+    if (!m?.winner) return '未完成';
+    if (m.winner === 'draw') return '平局';
+    const p = m.winner === 'left' ? players?.left : players?.right;
+    const fallback = m.winner === 'left' ? 'P1' : 'P2';
+    return `${p?.name || fallback} 胜`;
+  }
+
+  function renderHistory() {
+    clear(histList);
+    const history = S.match?.history || [];
+    if (!history.length) {
+      histList.append(el('div', { class: 'dim small', text: '还没有已保存的比赛。点「结束本局并保存」后会出现在这里。' }));
+      return;
+    }
+    for (const h of history) {
+      const winnerText = winnerLabel(h, h.players);
+      const resClass = h.winner === 'draw' ? 'draw' : h.winner === 'left' ? 'left' : h.winner === 'right' ? 'right' : '';
+      histList.append(el('div', { class: 'hist-item' },
+        el('span', { class: 'when', text: formatDate(h.finishedAt) }),
+        el('span', { class: 'nm truncate', text: h.name }),
+        el('span', { class: 'meta', text: h.mode === 'wins' ? '小局制' : '总分制' }),
+        el('span', { class: 'meta', text: `${h.songsCount || 0} 首` }),
+        el('span', { class: `res ${resClass}`, text: winnerText }),
+        el('span', { class: 'small muted', text: `${h.players?.left?.name || 'P1'} vs ${h.players?.right?.name || 'P2'}` }),
+        el('span', { class: 'spacer' }),
+        el('button', { class: 'btn ghost sm', text: '查看', onclick: () => viewHistory(h.id) }),
+      ));
+    }
+  }
+
+  async function viewHistory(id) {
+    let data;
+    try { data = await api(`/api/match/history/${encodeURIComponent(id)}`); }
+    catch (e) { cmdError(e, '读取历史'); return; }
+    const h = data.match;
+    const songs = (h.songs || []).filter((s) => s.musicId || Number.isFinite(s.scoreLeft) || Number.isFinite(s.scoreRight));
+    const tbl = el('table', { class: 'hist-table' },
+      el('thead', null, el('tr', null,
+        el('th', { text: '#' }), el('th', { text: '曲目' }), el('th', { text: '难度' }),
+        el('th', { text: 'P1' }), el('th', { text: 'P2' }), el('th', { text: '结果' }),
+      )),
+      el('tbody', null, songs.map((s) => {
+        const win = Number.isFinite(s.scoreLeft) && Number.isFinite(s.scoreRight)
+          ? (s.scoreLeft > s.scoreRight ? 'P1 胜' : s.scoreLeft < s.scoreRight ? 'P2 胜' : '平')
+          : '—';
+        return el('tr', { class: win.startsWith('P1') || win.startsWith('P2') ? 'win' : '' },
+          el('td', { text: String((s.index ?? 0) + 1).padStart(2, '0') }),
+          el('td', null,
+            el('div', { class: 'bold', text: s.title || '—' }),
+            el('div', { class: 'small muted', text: s.artist || '' }),
+          ),
+          el('td', { text: s.difficultyName ? `${s.difficultyName} ${s.level ?? ''}` : '—' }),
+          el('td', { class: 'num', text: Number.isFinite(s.scoreLeft) ? s.scoreLeft : '—' }),
+          el('td', { class: 'num', text: Number.isFinite(s.scoreRight) ? s.scoreRight : '—' }),
+          el('td', { text: win }),
+        );
+      })),
+    );
+    const r = h.result || {};
+    const body = el('div', null,
+      el('div', { class: 'match-summary' },
+        el('span', { text: h.mode === 'wins' ? '小局制' : '总分制' }),
+        el('span', { text: formatDate(h.finishedAt) }),
+        el('span', { text: `${h.players?.left?.name || 'P1'} vs ${h.players?.right?.name || 'P2'}` }),
+        el('span', { class: 'gold', text: winnerLabel(h, h.players) }),
+        el('span', { text: h.mode === 'wins' ? `胜局 ${r.leftWins ?? 0} : ${r.rightWins ?? 0}` : `总分 ${r.totalLeft ?? 0} : ${r.totalRight ?? 0}` }),
+      ),
+      el('div', { class: 'mt12', style: { overflowX: 'auto' } }, tbl),
+      (h.bans || []).length ? el('div', { class: 'note mt12', text: `本局 ban：${h.bans.map((b) => b.name).join('、')}` }) : null,
+    );
+    const m = modal({ title: h.name || '比赛记录', wide: true, body, footer: [el('button', { class: 'btn ghost', text: '关闭', onclick: () => m.close() })] });
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 操作
+  // ═══════════════════════════════════════════════════════════════
+  nameBtn.onclick = async () => {
+    try {
+      const r = await api('/api/match/name', { method: 'POST', body: { name: nameInput.value } });
+      applyMatchState(r.state);
+      ok('比赛名称已更新');
+    } catch (e) { cmdError(e, '修改比赛名称'); }
+  };
+  nameInput.onkeydown = (e) => { if (e.key === 'Enter') nameBtn.click(); };
+
+  modeSel.onchange = async () => {
+    const mode = modeSel.value;
+    const complete = S.match?.current?.derived?.completeRows || 0;
+    if (complete > 0) {
+      const yes = await confirm({
+        title: '切换计分模式',
+        message: `本局已经录入了 ${complete} 首完整分数，切换模式会改变胜负判定。`,
+        confirmText: '切换',
+      });
+      if (!yes) { modeSel.value = S.match?.current?.mode || 'total'; return; }
+    }
+    try { const r = await api('/api/match/mode', { method: 'POST', body: { mode } }); applyMatchState(r.state); }
+    catch (e) { cmdError(e, '切换计分模式'); renderHead(); }
+  };
+
+  finishBtn.onclick = async () => {
+    const yes = await confirm({
+      title: '结束本局并保存',
+      message: '结算胜负并写入比赛历史。结束后本局的曲目与分数会被锁定，比分条显示最终结果。',
+      confirmText: '结束并保存',
+    });
+    if (!yes) return;
+    try {
+      const r = await api('/api/match/finish', { method: 'POST', body: {} });
+      applyMatchState(r.state);
+      const w = r.state?.current?.winner;
+      ok(w === 'draw' ? '本局已结束：平局' : w === 'left' ? '本局已结束：P1 获胜' : w === 'right' ? '本局已结束：P2 获胜' : '本局已结束');
+    } catch (e) { cmdError(e, '结束本局'); }
+  };
+
+  newBtn.onclick = async () => {
+    const nextNo = (S.match?.historyTotal || S.match?.history?.length || 0) + 1;
+    const name = await prompt({ title: '开启新一轮', label: '比赛名称', value: `第 ${nextNo} 局`, placeholder: '如：决赛 第 2 局' });
+    if (name === null) return;
+    const cur = S.match?.current;
+    let force = false;
+    if (cur?.status === 'live' && (cur.derived?.filledCount || 0) > 0) {
+      const yes = await confirm({
+        title: '当前局还没结束',
+        message: '开启新一轮会把当前局作为「未完成」存档，然后清空曲目与分数。',
+        danger: true, confirmText: '仍然开启',
+      });
+      if (!yes) return;
+      force = true;
+    }
+    try {
+      const r = await api('/api/match/start', { method: 'POST', body: { name, mode: cur?.mode || 'total', force } });
+      applyMatchState(r.state);
+      nameInput.value = r.state?.current?.name || name;
+      ok(`已开启：${r.state?.current?.name || name}`);
+    } catch (e) { cmdError(e, '开启新一轮'); }
+  };
+
+  randomBtn.onclick = async () => {
+    // 目标行与 server 的 randomPick 一致：先找完全空行，否则用当前行
+    const rows = S.match?.current?.songs || [];
+    const empty = rows.find((r) => !r.musicId && !Number.isFinite(r.scoreLeft) && !Number.isFinite(r.scoreRight));
+    const target = empty || rows[S.match?.current?.currentIndex || 0];
+    if (target && (Number.isFinite(target.scoreLeft) || Number.isFinite(target.scoreRight))) {
+      const yes = await confirm({
+        title: '随机选曲会替换当前行',
+        message: `没有空行，随机结果会覆盖第 ${target.index + 1} 首「${target.title || '未命名'}」，已录入的分数会被清空。`,
+        danger: true, confirmText: '随机替换',
+      });
+      if (!yes) return;
+    }
+    try {
+      const r = await api('/api/match/random', { method: 'POST', body: filterParams() });
+      applyMatchState(r.state);
+      ok(`随机：${r.pick.song.name}（${r.pick.difficulty === 'we' ? "WORLD'S END" : r.pick.difficulty.toUpperCase()} ${r.pick.levelText || r.pick.level}）`);
+    } catch (e) { cmdError(e, '随机选曲'); }
+  };
+
+  srcChk.onchange = async () => {
+    const source = srcChk.checked ? 'match' : 'manual';
+    try {
+      const r = await api('/api/score/source', { method: 'POST', body: { source } });
+      applyScoreState(r.state);
+      ok(source === 'match' ? '比分条已改为跟随本局' : '比分条已改回手动比分');
+    } catch (e) { cmdError(e, '切换比分来源'); srcChk.checked = !srcChk.checked; }
+  };
+
+  async function setPlayer(side, entityId) {
+    try {
+      const r = await api('/api/score/player', { method: 'POST', body: { side, entityId } });
+      applyScoreState(r.state);
+      ok(entityId ? '选手已更新（叠加预览同步）' : '已清空该侧选手');
+    } catch (e) { cmdError(e, '选择选手'); }
+  }
+  async function setTeam(side, teamId) {
+    try { const r = await api('/api/score/team', { method: 'POST', body: { side, teamId } }); applyScoreState(r.state); }
+    catch (e) { cmdError(e, '选择队伍'); }
+  }
+  async function setColor(side, color) {
+    try { const r = await api('/api/score/color', { method: 'POST', body: { side, color } }); applyScoreState(r.state); }
+    catch (e) { cmdError(e, '设置队伍色'); }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 渲染
+  // ═══════════════════════════════════════════════════════════════
+  function fillGenre(sel) {
+    const cur = sel.value;
+    clear(sel);
+    sel.append(el('option', { value: '', text: '全部分类' }));
+    for (const g of S.musicMeta?.genres || []) sel.append(el('option', { value: g.name, text: `${g.label}（${g.count}）` }));
+    sel.value = cur || '';
+  }
+  function fillDiff(sel) {
+    const cur = sel.value;
+    clear(sel);
+    sel.append(el('option', { value: 'any', text: '全部难度' }));
+    sel.append(el('option', { value: 'random', text: '随机难度（随机选曲）' }));
+    const order = S.musicMeta?.difficultyOrder || ['basic', 'advanced', 'expert', 'master', 'ultima'];
+    for (const key of order) {
+      const d = S.musicMeta?.difficulties?.[key];
+      sel.append(el('option', { value: key, text: d?.name || key.toUpperCase() }));
+    }
+    sel.append(el('option', { value: 'we', text: "WORLD'S END（特殊谱面）" }));
+    sel.value = cur && [...sel.options].some((o) => o.value === cur) ? cur : 'any';
+  }
+
+  function renderHead() {
+    const cur = S.match?.current;
+    const d = cur?.derived || {};
+    if (document.activeElement !== nameInput) nameInput.value = cur?.name || '';
+    modeSel.value = cur?.mode || 'total';
+    modeSel.disabled = cur?.status === 'finished';
+    nameBtn.disabled = cur?.status === 'finished';
+    nameInput.disabled = cur?.status === 'finished';
+    finishBtn.disabled = cur?.status === 'finished';
+    randomBtn.disabled = cur?.status === 'finished';
+
+    const finished = cur?.status === 'finished';
+    statusPill.className = `pill ${finished ? 'warn' : 'ok'}`;
+    statusPill.textContent = finished ? '已结束 · 已保存' : '进行中';
+
+    const leftName = cur?.players?.left?.name || 'P1';
+    const rightName = cur?.players?.right?.name || 'P2';
+    const leftVal = cur?.mode === 'wins' ? (d.leftWins ?? 0) : (d.totalLeft ?? 0);
+    const rightVal = cur?.mode === 'wins' ? (d.rightWins ?? 0) : (d.totalRight ?? 0);
+    clear(summaryBox);
+    const parts = [
+      el('span', { class: 'bold', text: cur?.name || '未命名比赛' }),
+      el('span', { class: 'muted', text: cur?.mode === 'wins' ? '小局制' : '总分制' }),
+      el('span', null, el('span', { class: 'left-num bold', text: leftName }), `  ${leftVal}`),
+      el('span', { class: 'muted', text: ':' }),
+      el('span', null, el('span', { class: 'right-num bold', text: rightName }), `  ${rightVal}`),
+      el('span', { class: 'muted', text: `已录入 ${d.completeRows ?? 0} / 4 首` }),
+    ];
+    if (finished) {
+      parts.push(el('span', {
+        class: 'gold bold',
+        text: cur.winner === 'draw'
+          ? '平局'
+          : cur.winner === 'left' || cur.winner === 'right'
+            ? `${cur.winner === 'left' ? leftName : rightName} 获胜`
+            : '已结束',
+      }));
+    }
+    summaryBox.append(...parts);
+
+    // 胜局 / 总分辅助信息
+    if (cur?.mode === 'wins') {
+      summaryBox.append(el('span', { class: 'muted', text: `总分 ${d.totalLeft ?? 0} : ${d.totalRight ?? 0}` }));
+    } else {
+      summaryBox.append(el('span', { class: 'muted', text: `胜局 ${d.leftWins ?? 0} : ${d.rightWins ?? 0}` }));
+    }
+  }
+
+  function renderRows() {
+    const cur = S.match?.current;
+    const songs = cur?.songs || [];
+    const finished = cur?.status === 'finished';
+    for (let i = 0; i < songRows.length; i++) {
+      const ui2 = songRows[i];
+      const data = songs[i] || { index: i, filled: false };
+      const isCurrent = cur?.currentIndex === i && data.filled;
+      ui2.rowEl.className = `song-row${data.filled ? '' : ' is-empty'}${isCurrent ? ' is-current' : ''}${finished ? ' is-locked' : ''}`;
+      ui2.rowNo.textContent = String(i + 1).padStart(2, '0');
+      ui2.rowNo.style.color = isCurrent ? '#d9a441' : '';
+
+      // 曲目按钮
+      clear(ui2.songBtn);
+      ui2.songBtn.classList.toggle('is-empty', !data.hasSong);
+      if (data.hasSong) {
+        const cover = data.cover
+          ? el('img', { class: 'cover', src: data.cover, alt: '', loading: 'lazy' })
+          : el('span', { class: 'cover ph', text: '♪' });
+        ui2.songBtn.append(
+          cover,
+          el('span', { class: 'sp' },
+            el('span', { class: 't', text: data.title || '未命名曲目' }),
+            el('span', { class: 'm', text: `${data.artist || '—'} · ${data.genreLabel || data.genre || '未分类'} · ${data.difficultyName || ''} ${data.levelText || ''}` }),
+          ),
+        );
+      } else {
+        ui2.songBtn.append(el('span', { class: 't', text: '选择曲目' }), el('span', { class: 'm', text: '点击打开曲目库' }));
+      }
+      ui2.songBtn.disabled = finished;
+
+      // 难度下拉
+      clear(ui2.rowDiff);
+      if (data.hasSong && Array.isArray(data.difficulties) && data.difficulties.length) {
+        for (const d of data.difficulties) {
+          ui2.rowDiff.append(el('option', { value: d.key, text: `${d.name} ${d.levelText || d.level}` }));
+        }
+        ui2.rowDiff.value = data.difficulty || data.difficulties[0].key;
+        ui2.rowDiff.disabled = finished;
+      } else {
+        ui2.rowDiff.append(el('option', { value: '', text: '—' }));
+        ui2.rowDiff.value = '';
+        ui2.rowDiff.disabled = true;
+      }
+
+      // 分数输入：正在输入时不要被 WS 回包覆盖
+      if (document.activeElement !== ui2.leftIn) {
+        const v = Number.isFinite(data.scoreLeft) ? String(data.scoreLeft) : '';
+        ui2.leftIn.value = v;
+        ui2.leftIn.dataset.saved = v;
+      }
+      if (document.activeElement !== ui2.rightIn) {
+        const v = Number.isFinite(data.scoreRight) ? String(data.scoreRight) : '';
+        ui2.rightIn.value = v;
+        ui2.rightIn.dataset.saved = v;
+      }
+      ui2.leftIn.disabled = finished;
+      ui2.rightIn.disabled = finished;
+
+      const win = data.both ? data.winner : null;
+      ui2.result.className = `row-result ${win === 'left' ? 'left' : win === 'right' ? 'right' : win === 'draw' ? 'draw' : ''}`;
+      ui2.result.textContent = win === 'left' ? 'P1 胜' : win === 'right' ? 'P2 胜' : win === 'draw' ? '平' : data.hasSong ? '待录入' : '空行';
+
+      ui2.curBtn.disabled = finished || !data.filled || isCurrent;
+      ui2.curBtn.textContent = isCurrent ? '当前' : '设为当前';
+      ui2.clearBtn.disabled = finished || !data.filled;
+    }
+  }
+
+  function renderBans() {
+    clear(banList);
+    const bans = S.match?.current?.bans || [];
+    if (!bans.length) {
+      banList.append(el('div', { class: 'dim small', text: '没有被 ban 的曲目。可以在选曲弹窗里点「Ban」。' }));
+      return;
+    }
+    for (const b of bans) {
+      banList.append(el('div', { class: 'ban-item' },
+        el('div', { class: 'main' },
+          el('div', { class: 't', text: b.name }),
+          el('div', { class: 'm', text: b.artist || '' }),
+        ),
+        el('button', {
+          class: 'btn ghost sm', type: 'button', text: '取消 ban',
+          disabled: S.match?.current?.status === 'finished',
+          onclick: async () => {
+            try {
+              const r = await api('/api/match/ban', { method: 'POST', body: { musicId: b.musicId, banned: false } });
+              applyMatchState(r.state);
+            } catch (e) { cmdError(e, '取消 ban'); }
+          },
+        }),
+      ));
+    }
+  }
+
+  function renderSideCards() {
+    const sides = { left: S.score?.left, right: S.score?.right };
+    for (const [key, card] of [['left', leftCard], ['right', rightCard]]) {
+      const side = sides[key];
+      if (!side) continue;
+      card.playerBtn.textContent = side.playerName
+        ? (side.teamName ? `${side.playerName} · ${side.teamName}` : side.playerName)
+        : '选择选手';
+      card.playerBtn.classList.toggle('primary', !side.playerName);
+      fillSelect(card.teamSel, S.teams, side.teamId || '', '跟随选手');
+      card.color.value = side.color || (key === 'left' ? '#d0344e' : '#3d78c9');
+      document.documentElement.style.setProperty(
+        key === 'left' ? '--left-color' : '--right-color',
+        side.color || (key === 'left' ? '#d0344e' : '#3d78c9'),
+      );
+      const wins = side.wins || 0;
+      const finished = S.match?.current?.status === 'finished';
+      card.winLine.textContent = finished
+        ? '本局已结束：画面里的选手与结果已锁定（改阵容只影响下一局）'
+        : S.score?.source === 'match'
+          ? `本局胜局 ${wins} · 总分 ${side.totalScore ?? 0}`
+          : '比分条当前为手动比分';
+    }
+  }
+
+  function renderSource() {
+    const isMatch = S.score?.source === 'match';
+    srcChk.checked = isMatch;
+    srcHint.textContent = isMatch
+      ? '比分条显示本局聚合分 / 胜局；比分页的手动 ±1 已停用。'
+      : '比分条仍显示手动 ±1 分数；本局分数只记录在比赛历史里。';
+  }
+
+  function applyScoreState(state) {
+    if (!state) return;
+    S.score = state;
+    renderSource();
+    renderSideCards();
+  }
+
+  function applyMatchState(state) {
+    if (!state) return;
+    S.match = state;
+    S.history = state.history || [];
+    renderHead();
+    renderRows();
+    renderBans();
+    renderPicks();
+    renderHistory();
+    renderSideCards();
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 初始化
+  // ═══════════════════════════════════════════════════════════════
+  async function loadPeople() {
+    try {
+      const [p, t] = await Promise.all([
+        api('/api/entities?kind=player'),
+        api('/api/entities/teams'),
+      ]);
+      S.players = p.items || [];
+      S.teams = t.items || [];
+      renderSideCards();
+    } catch (e) { console.warn('[match] 读取人物库失败', e); }
+  }
+
+  async function load() {
+    try {
+      const [m, s, meta] = await Promise.all([
+        api('/api/match/state'),
+        api('/api/score/state'),
+        api('/api/music/meta'),
+      ]);
+      S.musicMeta = meta;
+      fillGenre(genreSel);
+      fillDiff(diffSel);
+      applyScoreState(s.state);
+      applyMatchState(m.state);
+      await loadPeople();
+    } catch (e) { cmdError(e, '读取比赛状态'); }
+  }
+
+  arcadeWS.watch('match.state', (v) => { if (v) applyMatchState(v); });
+  arcadeWS.watch('score.state', (v) => { if (v) applyScoreState(v); });
+  arcadeWS.on('entities:changed', () => {
+    loadPeople();
+    if (S.musicMeta) { fillGenre(genreSel); fillDiff(diffSel); }
+  });
+  load();
+})();
+</script>
+</body>
+</html>

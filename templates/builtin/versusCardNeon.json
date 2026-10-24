@@ -1,0 +1,101 @@
+{
+  "id": "versusCardNeon",
+  "name": "对阵卡·霓虹（全屏）",
+  "category": "player",
+  "family": "versusCard",
+  "style": "neon",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "leftName",
+      "label": "左侧姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24
+    },
+    {
+      "key": "leftAvatar",
+      "label": "左侧头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "rightName",
+      "label": "右侧姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24
+    },
+    {
+      "key": "rightAvatar",
+      "label": "右侧头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "leftTeam",
+      "label": "左侧队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "leftTeamAvatar",
+      "label": "左侧队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "rightTeam",
+      "label": "右侧队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "rightTeamAvatar",
+      "label": "右侧队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "roundLabel",
+      "label": "轮次标签",
+      "type": "text",
+      "required": false,
+      "maxLength": 32,
+      "placeholder": "胜者组 决赛"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色（霓虹）",
+      "type": "color",
+      "required": false,
+      "default": "#22d3ee"
+    }
+  ],
+  "defaultAnim": {
+    "in": "scaleIn",
+    "out": "fadeOut",
+    "durationMs": 600
+  },
+  "cssVars": {
+    "--vn-cyan": "#22d3ee",
+    "--vn-magenta": "#f472b6",
+    "--vn-accent": "#22d3ee",
+    "--vn-name-size": "58px",
+    "--vn-round-size": "32px",
+    "--vn-avatar-size": "280px",
+    "--vn-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--vn-team-size": "30px",
+    "--vn-team-logo": "54px"
+  },
+  "html": "<div class=\"vn-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--vn-accent\">\n  <div class=\"vn-bg\"></div>\n  <div class=\"vn-grid\"></div>\n  <div class=\"vn-round\" data-slot=\"roundLabel\"></div>\n  <div class=\"vn-body\">\n    <div class=\"vn-side vn-left\">\n      <div class=\"vn-avatar\">\n        <img data-slot=\"leftAvatar\" data-slot-type=\"image\" alt=\"\" />\n        <span class=\"vn-fallback\">1P</span>\n      </div>\n      <div class=\"vn-team\"><span class=\"vn-team-logo\"><img data-slot=\"leftTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"vn-team-fallback\"></span></span><span class=\"vn-team-name\" data-slot=\"leftTeam\"></span></div>\n      <div class=\"vn-name\" data-slot=\"leftName\"></div>\n    </div>\n    <div class=\"vn-mid\">\n      <span class=\"vn-diamond\"></span>\n      <div class=\"vn-vs\">VS</div>\n    </div>\n    <div class=\"vn-side vn-right\">\n      <div class=\"vn-avatar\">\n        <img data-slot=\"rightAvatar\" data-slot-type=\"image\" alt=\"\" />\n        <span class=\"vn-fallback\">2P</span>\n      </div>\n      <div class=\"vn-team\"><span class=\"vn-team-logo\"><img data-slot=\"rightTeamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"vn-team-fallback\"></span></span><span class=\"vn-team-name\" data-slot=\"rightTeam\"></span></div>\n      <div class=\"vn-name\" data-slot=\"rightName\"></div>\n    </div>\n  </div>\n</div>",
+  "css": ".vn-root{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:44px;font-family:var(--vn-font);overflow:hidden;}\n.vn-bg{position:absolute;inset:0;background:radial-gradient(circle at 20% 50%,rgba(34,211,238,.22),transparent 42%),radial-gradient(circle at 80% 50%,rgba(244,114,182,.22),transparent 42%),linear-gradient(160deg,rgba(4,6,12,.97),rgba(10,5,18,.985));}\n.vn-bg:after{content:'';position:absolute;inset:0;background:repeating-linear-gradient(180deg,rgba(255,255,255,.035) 0 1px,transparent 1px 5px);}\n.vn-grid{position:absolute;inset:0;background-image:linear-gradient(rgba(34,211,238,.09) 1px,transparent 1px),linear-gradient(90deg,rgba(244,114,182,.08) 1px,transparent 1px);background-size:80px 80px;mask-image:radial-gradient(ellipse at 50% 50%,#000 20%,transparent 78%);-webkit-mask-image:radial-gradient(ellipse at 50% 50%,#000 20%,transparent 78%);opacity:.55;}\n.vn-round{position:relative;z-index:2;font-size:var(--vn-round-size);font-weight:700;letter-spacing:10px;color:var(--vn-accent);text-transform:uppercase;text-shadow:0 0 16px var(--vn-accent);}\n.vn-round:empty{display:none;}\n.vn-body{position:relative;z-index:2;display:flex;align-items:center;gap:56px;}\n.vn-side{display:flex;flex-direction:column;align-items:center;gap:26px;width:520px;}\n.vn-avatar{position:relative;width:var(--vn-avatar-size);height:var(--vn-avatar-size);border-radius:20px;overflow:hidden;background:linear-gradient(160deg,#071018,#160a1a);display:flex;align-items:center;justify-content:center;}\n.vn-left .vn-avatar{box-shadow:0 0 0 2px var(--vn-cyan),0 0 30px rgba(34,211,238,.55),inset 0 0 30px rgba(34,211,238,.18);}\n.vn-right .vn-avatar{box-shadow:0 0 0 2px var(--vn-magenta),0 0 30px rgba(244,114,182,.55),inset 0 0 30px rgba(244,114,182,.18);}\n.vn-avatar img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none;z-index:1;}\n.vn-avatar img.is-ready{display:block;}\n.vn-fallback{position:relative;z-index:0;font-size:76px;font-weight:900;color:rgba(255,255,255,.35);}\n.vn-name{font-size:var(--vn-name-size);font-weight:800;color:#fff;letter-spacing:1px;text-align:center;line-height:1.12;max-width:520px;word-break:break-word;}\n.vn-left .vn-name{text-shadow:0 0 12px rgba(34,211,238,.75),0 0 36px rgba(34,211,238,.35);}\n.vn-right .vn-name{text-shadow:0 0 12px rgba(244,114,182,.75),0 0 36px rgba(244,114,182,.35);}\n.vn-mid{position:relative;width:200px;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}\n.vn-diamond{position:absolute;width:150px;height:150px;border:2px solid rgba(255,255,255,.16);transform:rotate(45deg);box-shadow:0 0 26px rgba(34,211,238,.25),0 0 26px rgba(244,114,182,.2);}\n.vn-vs{position:relative;z-index:2;font-size:84px;font-weight:900;font-style:italic;letter-spacing:2px;color:#fff;text-shadow:0 0 14px var(--vn-cyan),0 0 36px rgba(34,211,238,.55),0 0 60px var(--vn-magenta),0 6px 26px rgba(0,0,0,.7);}\n.vn-team{display:flex;align-items:center;gap:14px;max-width:520px;}\n.vn-team:not(:has(.vn-team-name:not(:empty),img.is-ready)){display:none;}\n.vn-team-logo{position:relative;width:var(--vn-team-logo);height:var(--vn-team-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;border-radius:8px;}\n.vn-left .vn-team-logo:has(img.is-ready){overflow:hidden;background:#071018;box-shadow:0 0 0 1px var(--vn-cyan),0 0 18px rgba(34,211,238,.55);}\n.vn-right .vn-team-logo:has(img.is-ready){overflow:hidden;background:#160a1a;box-shadow:0 0 0 1px var(--vn-magenta),0 0 18px rgba(244,114,182,.55);}\n.vn-team-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.vn-team-logo img.is-ready{display:block;}\n.vn-team-fallback{width:8px;height:8px;border-radius:50%;}\n.vn-left .vn-team-fallback{background:var(--vn-cyan);box-shadow:0 0 10px var(--vn-cyan);}\n.vn-right .vn-team-fallback{background:var(--vn-magenta);box-shadow:0 0 10px var(--vn-magenta);}\n.vn-team-logo:has(img.is-ready) .vn-team-fallback{display:none;}\n.vn-team-name{font-size:var(--vn-team-size);font-weight:800;letter-spacing:3px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}\n.vn-left .vn-team-name{color:var(--vn-cyan);text-shadow:0 0 10px rgba(34,211,238,.8),0 0 26px rgba(34,211,238,.4);}\n.vn-right .vn-team-name{color:var(--vn-magenta);text-shadow:0 0 10px rgba(244,114,182,.8),0 0 26px rgba(244,114,182,.4);}\n.vn-team-name:empty{display:none;}"
+}

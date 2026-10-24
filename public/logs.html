@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>日志与提示历史 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .log-line { display: flex; gap: 8px; align-items: baseline; padding: 2.5px 10px; border-bottom: 1px solid var(--border); font-family: var(--mono); font-size: 12px; }
+  .log-line .t { color: var(--text-mute); flex: 0 0 auto; }
+  .log-line .lvl { flex: 0 0 46px; font-weight: 700; }
+  .log-line .src { flex: 0 0 92px; overflow: hidden; text-overflow: ellipsis; color: var(--text-dim); }
+  .log-line .msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .lvl.warn { color: var(--warn); } .lvl.error { color: var(--danger); } .lvl.info { color: var(--text-mute); } .lvl.debug { color: var(--text-mute); }
+  .audit-tag { color: #f5c451; border: 1px solid #7a5d13; border-radius: 5px; padding: 0 5px; font-size: 10.5px; font-family: var(--font); }
+  .stat-pill { font-family: var(--mono); color: var(--text-dim); font-size: 12px; }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+'use strict';
+const { el, $, clear, esc, ok, warn, cmdError, mount, withBusy, api } = window.ui;
+const fmt = window.fmt;
+
+const page = mount({ current: '/logs', title: '日志与提示历史', subtitle: '结构化 JSONL 审计日志 · 实时流 + 磁盘检索 + 提示历史（S-REQ-201~205 / C-REQ-510）' });
+
+/* ── Tab 结构 ── */
+const tabs = el('div', { class: 'tabs' });
+const tabLogs = el('button', { text: '实时日志' });
+const tabCueHist = el('button', { text: '提示历史' });
+tabs.append(tabLogs, tabCueHist);
+page.append(tabs);
+
+const paneLogs = el('div');
+const paneCue = el('div', { class: 'hidden' });
+page.append(paneLogs, paneCue);
+
+function switchTab(which) {
+  tabLogs.classList.toggle('active', which === 'logs');
+  tabCueHist.classList.toggle('active', which === 'cue');
+  paneLogs.classList.toggle('hidden', which !== 'logs');
+  paneCue.classList.toggle('hidden', which !== 'cue');
+  if (which === 'cue') loadCueHistory();
+}
+tabLogs.addEventListener('click', () => switchTab('logs'));
+tabCueHist.addEventListener('click', () => switchTab('cue'));
+
+/* ═══════════ 实时日志 ═══════════ */
+const MAX_LIVE = 500;
+const liveBuf = [];
+let livePaused = false;
+
+const liveSrc = el('select', { style: { width: '140px' } });
+const liveLvl = el('select', { style: { width: '120px' } });
+const pauseChk = el('input', { type: 'checkbox' });
+const liveBox = el('div', { class: 'scroll', style: { maxHeight: '52vh', overflowY: 'auto', borderTop: '1px solid var(--border)' } });
+const liveCount = el('span', { class: 'stat-pill' });
+
+const LIVE_SOURCES = ['server', 'vmix', 'obs', 'cue', 'countdown', 'orchestration', 'replay', 'overlay', 'media', 'templates', 'config', 'obs-event'];
+
+function liveFilterOptions() {
+  const curSrc = liveSrc.value || 'all';
+  const curLvl = liveLvl.value || 'all';
+  clear(liveSrc);
+  clear(liveLvl);
+  liveSrc.append(el('option', { value: 'all', text: '全部来源' }), ...LIVE_SOURCES.map((s) => el('option', { value: s, text: s })));
+  liveLvl.append(el('option', { value: 'all', text: '全部级别' }), ...['info', 'warn', 'error', 'debug'].map((l) => el('option', { value: l, text: l })));
+  liveSrc.value = curSrc;
+  liveLvl.value = curLvl;
+}
+
+function renderLive() {
+  liveFilterOptions();
+  const src = liveSrc.value, lvl = liveLvl.value;
+  const shown = liveBuf.filter((l) => (src === 'all' || l.source === src) && (lvl === 'all' || l.level === lvl));
+  liveCount.textContent = `显示 ${shown.length} / 缓冲 ${liveBuf.length}（最多 ${MAX_LIVE} 条，倒序）`;
+  const stick = !livePaused && liveBox.scrollTop + liveBox.clientHeight >= liveBox.scrollHeight - 60;
+  clear(liveBox);
+  if (!shown.length) liveBox.append(el('div', { class: 'dim small', style: { padding: '10px' }, text: '暂无日志（等待 WS 实时推送…）' }));
+  for (const l of shown) {
+    liveBox.append(el('div', { class: 'log-line' },
+      el('span', { class: 't', text: fmt.clock(l.at) }),
+      el('span', { class: 'lvl ' + (l.level || 'info'), text: l.level || 'info' }),
+      el('span', { class: 'src', text: l.source || '—', title: l.source }),
+      l.audit ? el('span', { class: 'audit-tag', text: '审计' }) : null,
+      el('span', { class: 'msg', text: (l.op ? `[${l.op}] ` : '') + l.msg, title: (l.op ? `[${l.op}] ` : '') + l.msg + (l.result ? ` => ${l.result}` : '') + (l.durationMs != null ? ` (${l.durationMs}ms)` : '') }),
+    ));
+  }
+  if (stick) liveBox.scrollTop = liveBox.scrollHeight;
+}
+
+function addLive(l) {
+  liveBuf.unshift(l);
+  if (liveBuf.length > MAX_LIVE) liveBuf.pop();
+  renderLive();
+}
+pauseChk.addEventListener('change', () => { livePaused = pauseChk.checked; });
+liveSrc.addEventListener('change', renderLive);
+liveLvl.addEventListener('change', renderLive);
+
+/* ═══════════ 历史检索（磁盘 JSONL，S-REQ-203） ═══════════ */
+const qFrom = el('input', { type: 'datetime-local' });
+const qTo = el('input', { type: 'datetime-local' });
+const qLvl = el('select', null, [['', '全部'], ['debug', 'debug'], ['info', 'info'], ['warn', 'warn'], ['error', 'error']].map(([v, t]) => el('option', { value: v, text: t })));
+const qSrc = el('select', null, el('option', { value: '', text: '全部' }), ...LIVE_SOURCES.map((s) => el('option', { value: s, text: s })));
+const qLimit = el('input', { type: 'number', value: '200', min: '1', max: '2000', style: { width: '100px' } });
+const qResult = el('div', { class: 'scroll', style: { maxHeight: '46vh', overflowY: 'auto' } });
+const qCount = el('span', { class: 'stat-pill' });
+
+async function runQuery() {
+  const params = new URLSearchParams();
+  const from = qFrom.value ? new Date(qFrom.value).getTime() : NaN;
+  const to = qTo.value ? new Date(qTo.value).getTime() : NaN;
+  if (Number.isFinite(from)) params.set('from', from);
+  if (Number.isFinite(to)) params.set('to', to);
+  if (qLvl.value) params.set('level', qLvl.value);
+  if (qSrc.value) params.set('source', qSrc.value);
+  if (qLimit.value) params.set('limit', Number(qLimit.value));
+  try {
+    const r = await api('/api/logs/query?' + params.toString());
+    const items = r.items || [];
+    qCount.textContent = `共 ${r.count ?? items.length} 条（按时间倒序，最多取 limit 条）`;
+    clear(qResult);
+    if (!items.length) { qResult.append(el('div', { class: 'dim small', style: { padding: '10px' }, text: '无匹配日志。提示：磁盘按天分文件（logs/console-YYYYMMDD.jsonl）。' })); return; }
+    const tbl = el('table', { class: 'tbl' },
+      el('thead', null, el('tr', null, ['时间', '级别', '来源', '消息', '操作', '耗时', '审计'].map((h) => el('th', { text: h })))),
+      el('tbody', null, items.map((l) => el('tr', null,
+        el('td', { class: 'nowrap small', text: fmt.datetime(l.at) }),
+        el('td', { class: 'small' }, el('span', { class: 'lvl ' + (l.level || 'info'), text: l.level })),
+        el('td', { class: 'small', text: l.source }),
+        el('td', { class: 'small pre-wrap', text: l.msg }),
+        el('td', { class: 'small mono', text: l.op || '—' }),
+        el('td', { class: 'num small', text: l.durationMs != null ? l.durationMs + 'ms' : '—' }),
+        el('td', { class: 'center' }, l.audit ? el('span', { class: 'audit-tag', text: '审计' }) : el('span', { class: 'muted', text: '—' })),
+      ))),
+    );
+    qResult.append(tbl);
+  } catch (e) { cmdError(e, '日志检索'); }
+}
+
+/* ═══════════ 提示历史（C-REQ-510 / AC-C25） ═══════════ */
+const hFrom = el('input', { type: 'datetime-local' });
+const hTo = el('input', { type: 'datetime-local' });
+const hAud = el('select', null, el('option', { value: '', text: '全部受众' }));
+const hPrio = el('select', null, [['', '全部'], ['P0', 'P0'], ['P1', 'P1'], ['P2', 'P2'], ['P3', 'P3']].map(([v, t]) => el('option', { value: v, text: t })));
+const hResult = el('div', { class: 'scroll', style: { maxHeight: '52vh', overflowY: 'auto' } });
+const hCount = el('span', { class: 'stat-pill' });
+
+async function loadCueHistory() {
+  // 受众下拉（可扩展频道）
+  if (![...hAud.options].some((o) => o.value === 'director')) {
+    const cur = hAud.value;
+    clear(hAud);
+    hAud.append(el('option', { value: '', text: '全部受众' }), ...['director', 'cast'].map((a) => el('option', { value: a, text: a })));
+    hAud.value = cur;
+  }
+  const params = new URLSearchParams();
+  const from = hFrom.value ? new Date(hFrom.value).getTime() : NaN;
+  const to = hTo.value ? new Date(hTo.value).getTime() : NaN;
+  if (Number.isFinite(from)) params.set('from', from);
+  if (Number.isFinite(to)) params.set('to', to);
+  if (hAud.value) params.set('audience', hAud.value);
+  if (hPrio.value) params.set('priority', hPrio.value);
+  try {
+    const r = await api('/api/cues/history?' + params.toString());
+    const items = r.items || [];
+    hCount.textContent = `共 ${items.length} 条（保留 ${histHours || 4} 小时，倒序）`;
+    clear(hResult);
+    if (!items.length) { hResult.append(el('div', { class: 'dim small', style: { padding: '10px' }, text: '暂无提示历史（提示被清除 / 到期后才进入历史）。' })); return; }
+    const tbl = el('table', { class: 'tbl' },
+      el('thead', null, el('tr', null, ['时间', '受众', '优先级', '标题', '状态', '回执 ack', '来源'].map((h) => el('th', { text: h })))),
+      el('tbody', null, items.map((c) => {
+        const acks = Object.entries(c.acks || {});
+        return el('tr', null,
+          el('td', { class: 'nowrap small', text: fmt.datetime(c.createdAt) }),
+          el('td', { class: 'small', text: (c.audience || []).join('、') }),
+          el('td', null, el('span', { class: 'tag ' + fmt.priorityClass(c.priority), text: c.priority })),
+          el('td', { class: 'small', text: c.title }),
+          el('td', { class: 'small' }, el('span', { class: 'tag', text: c.state || c.removedAt ? (c.state || '已移除') : '—' })),
+          el('td', { class: 'small' }, acks.length
+            ? el('span', { text: acks.map(([id, at]) => `${String(id).slice(0, 6)} @${fmt.clock(at)}`).join('；') })
+            : el('span', { class: 'muted', text: '—' })),
+          el('td', { class: 'small muted', text: c.source || '—' }),
+        );
+      })),
+    );
+    hResult.append(tbl);
+  } catch (e) { cmdError(e, '检索提示历史'); }
+}
+
+/* ── 组装 UI ── */
+/**
+ * ⚠️ 声明必须放在**首次使用之前**：下面 noteCue 在顶层就会读它，
+ * 原先声明写在文件末尾，会触发 TDZ（Cannot access 'histHours' before initialization），
+ * 整页脚本中止 —— 表现为日志页只渲染了一半，且控制台才有报错。
+ */
+let histHours = 4;
+
+const noteLive = el('div', { class: 'note info mb12' },
+  el('strong', { text: '日志格式：' }), '结构化 JSONL（每行一条，含 时间戳 / 级别 / 来源 / 操作 / 结果 / 耗时，S-REQ-201/202）；',
+  '磁盘保留 ', el('strong', { text: '30 天' }), '（logging.retainDays，可配置）；',
+  '带 ', el('span', { class: 'audit-tag', text: '审计' }), ' 徽标的是审计类日志（audit:true，所有 vMix 函数调用 / 编排执行 / 配置变更均留痕）。',
+);
+paneLogs.append(noteLive,
+  el('section', { class: 'card mb16' },
+    el('header', null, el('span', { text: '实时日志（WS 推送）' }), liveCount, el('span', { class: 'spacer' }),
+      el('label', { class: 'check', style: { marginRight: '12px' } }, pauseChk, el('span', { class: 'label', text: '暂停滚动' })),
+      el('button', { class: 'btn ghost sm', text: '清空显示', onclick: () => { liveBuf.length = 0; renderLive(); } }),
+    ),
+    el('div', { class: 'body flush' },
+      el('div', { class: 'btn-row', style: { padding: '8px 10px' } }, liveSrc, liveLvl),
+      liveBox,
+    ),
+  ),
+  el('section', { class: 'card' },
+    el('header', null, el('span', { text: '历史检索（磁盘 JSONL，S-REQ-203）' }), qCount, el('span', { class: 'spacer' })),
+    el('div', { class: 'body' },
+      el('div', { class: 'inline mb12' },
+        el('label', { text: '从' }), qFrom, el('label', { text: '到' }), qTo,
+        el('label', { text: '级别' }), qLvl, el('label', { text: '来源' }), qSrc,
+        el('label', { text: '条数' }), qLimit,
+        el('button', { class: 'btn primary', text: '检索', onclick: runQuery }),
+      ),
+      qResult,
+    ),
+  ),
+);
+
+const noteCue = el('div', { class: 'note info mb12' },
+  '提示历史保留 ', el('strong', { text: `${histHours || 4} 小时` }), '（cue.history.retainHours），可按时段 / 受众 / 优先级检索（AC-C25）；回执 ack 时间戳保留供事后复盘（C-REQ-554）。',
+);
+paneCue.append(noteCue,
+  el('section', { class: 'card' },
+    el('header', null, el('span', { text: '提示历史' }), hCount, el('span', { class: 'spacer' })),
+    el('div', { class: 'body' },
+      el('div', { class: 'inline mb12' },
+        el('label', { text: '从' }), hFrom, el('label', { text: '到' }), hTo,
+        el('label', { text: '受众' }), hAud, el('label', { text: '优先级' }), hPrio,
+        el('button', { class: 'btn primary', text: '检索', onclick: loadCueHistory }),
+      ),
+      hResult,
+    ),
+  ),
+);
+
+/* ── 配置元信息（保留期展示） ── */
+(async function init() {
+  try {
+    const r = await api('/api/config', { quiet: true });
+    const cfg = r?.config || {};
+    if (cfg.logging?.retainDays) {
+      noteLive.querySelector('strong:nth-of-type(2)').textContent = `${cfg.logging.retainDays} 天`;
+    }
+    if (cfg.cue?.history?.retainHours) {
+      histHours = cfg.cue.history.retainHours;
+      noteCue.querySelector('strong').textContent = `${histHours} 小时`;
+    }
+  } catch { /* 取不到配置用默认值展示 */ }
+  // 预填实时日志（内存环形缓冲，秒开）
+  try {
+    const r = await api('/api/logs/recent?limit=200', { quiet: true });
+    for (const l of (r.items || []).slice().reverse()) liveBuf.unshift({ at: l.at, level: l.level, source: l.source, msg: l.msg, op: l.op, result: l.result, durationMs: l.durationMs, audit: !!l.audit });
+    if (liveBuf.length > MAX_LIVE) liveBuf.length = MAX_LIVE;
+  } catch { /* WS 兜底 */ }
+  renderLive();
+})();
+
+/* ── WS ── */
+arcadeWS.on('log', (m) => {
+  addLive({ at: m.at, level: m.level, source: m.source, msg: m.msg, op: m.op, result: m.result, durationMs: m.durationMs, audit: String(m.msg || '').startsWith('AUDIT') });
+});
+arcadeWS.on('obs:event', (m) => {
+  addLive({ at: m.at || Date.now(), level: 'info', source: 'obs-event', msg: `OBS 事件 ${m.event} ${JSON.stringify(m.data || {}).slice(0, 160)}` });
+});
+arcadeWS.start();
+})();
+</script>
+</body>
+</html>

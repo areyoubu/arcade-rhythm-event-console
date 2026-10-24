@@ -1,0 +1,72 @@
+{
+  "id": "lowerThirdBold",
+  "name": "姓名条·粗排",
+  "category": "player",
+  "family": "lowerThird",
+  "style": "bold",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "name",
+      "label": "姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24,
+      "placeholder": "选手A"
+    },
+    {
+      "key": "subtitle",
+      "label": "副标题",
+      "type": "text",
+      "required": false,
+      "maxLength": 48,
+      "placeholder": "TEAM LIQUID · 1P"
+    },
+    {
+      "key": "avatar",
+      "label": "头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "teamName",
+      "label": "队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "teamAvatar",
+      "label": "队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#d9d9d9"
+    }
+  ],
+  "defaultAnim": {
+    "in": "slideUp",
+    "out": "fadeOut",
+    "durationMs": 380
+  },
+  "cssVars": {
+    "--lb-accent": "#d9d9d9",
+    "--lb-name-size": "72px",
+    "--lb-sub-size": "26px",
+    "--lb-avatar-size": "132px",
+    "--lb-dash-w": "44px",
+    "--lb-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--lb-team-size": "24px",
+    "--lb-team-logo": "32px"
+  },
+  "html": "<div class=\"lb-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--lb-accent\">\n  <div class=\"lb-avatar\">\n    <img data-slot=\"avatar\" data-slot-type=\"image\" alt=\"\" />\n    <span class=\"lb-fallback\">?</span>\n  </div>\n  <div class=\"lb-meta\">\n    <div class=\"lb-team\"><span class=\"lb-team-logo\"><img data-slot=\"teamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"lb-team-fallback\"></span></span><span class=\"lb-team-name\" data-slot=\"teamName\"></span></div>\n    <div class=\"lb-name\" data-slot=\"name\"></div>\n    <div class=\"lb-row\">\n      <span class=\"lb-dash\"></span>\n      <span class=\"lb-sub\" data-slot=\"subtitle\"></span>\n    </div>\n  </div>\n</div>",
+  "css": ".lb-root{position:absolute;left:64px;bottom:64px;display:flex;align-items:flex-end;gap:0;font-family:var(--lb-font);}\n.lb-avatar{width:var(--lb-avatar-size);height:var(--lb-avatar-size);overflow:hidden;background:#0c0c0d;border:1px solid #3a3a3f;border-right:none;display:flex;align-items:center;justify-content:center;flex:0 0 auto;}\n.lb-avatar img{width:100%;height:100%;object-fit:cover;display:none;}\n.lb-avatar img.is-ready{display:block;}\n.lb-fallback{color:#5f5f58;font-size:40px;font-weight:800;line-height:1;}\n.lb-avatar:has(img.is-ready) .lb-fallback{display:none;}\n.lb-meta{background:rgba(10,10,11,.96);padding:14px 44px 16px 20px;border-bottom:6px solid var(--lb-accent);min-width:360px;}\n.lb-team{display:flex;align-items:center;gap:8px;margin-bottom:2px;}\n.lb-team:not(:has(.lb-team-name:not(:empty),img.is-ready)){display:none;}\n.lb-team-logo{position:relative;width:var(--lb-team-logo);height:var(--lb-team-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;}\n.lb-team-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.lb-team-logo img.is-ready{display:block;}\n.lb-team-fallback{width:6px;height:6px;background:var(--lb-accent);}\n.lb-team-logo:has(img.is-ready) .lb-team-fallback{display:none;}\n.lb-team-name{color:var(--lb-accent);font-size:var(--lb-team-size);font-weight:700;letter-spacing:2px;line-height:1.2;white-space:nowrap;max-width:460px;overflow:hidden;text-overflow:ellipsis;}\n.lb-team-name:empty{display:none;}\n.lb-name{color:#f4f4f0;font-size:var(--lb-name-size);font-weight:800;letter-spacing:.5px;line-height:1.05;white-space:nowrap;}\n.lb-row{display:flex;align-items:center;gap:12px;margin-top:6px;}\n.lb-row:not(:has(.lb-sub:not(:empty))){display:none;}\n.lb-dash{width:var(--lb-dash-w);height:2px;background:var(--lb-accent);flex:0 0 auto;}\n.lb-sub{color:#bdbdb6;font-size:var(--lb-sub-size);font-weight:400;line-height:1.3;white-space:nowrap;}\n.lb-sub:empty{display:none;}"
+}

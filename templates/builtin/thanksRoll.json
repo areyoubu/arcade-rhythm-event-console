@@ -1,0 +1,88 @@
+{
+  "id": "thanksRoll",
+  "name": "滚动致谢",
+  "category": "credits",
+  "family": "thanksRoll",
+  "style": "broadcast",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "heading",
+      "label": "标题",
+      "type": "text",
+      "required": false,
+      "maxLength": 36,
+      "default": "特别感谢"
+    },
+    {
+      "key": "lines",
+      "label": "致谢条目",
+      "type": "text",
+      "required": false,
+      "multi": true,
+      "rowKeys": [
+        "text",
+        "group"
+      ],
+      "help": "每行一条。可带分组：{group:'技术支持', text:'XXX'}；纯字符串则自动归入当前分组。",
+      "placeholder": "XXX 工作室"
+    },
+    {
+      "key": "logoRow",
+      "label": "Logo 行",
+      "type": "image",
+      "required": false,
+      "multi": true,
+      "rowKeys": [
+        "src",
+        "alt"
+      ],
+      "help": "多张 Logo，自动等高对齐（A-REQ-525）"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#d9d9d9"
+    },
+    {
+      "key": "speed",
+      "label": "滚动速度（px/s）",
+      "type": "number",
+      "required": false,
+      "default": 40,
+      "runtime": "creditsSpeed",
+      "help": "不是 DOM 绑定项 —— 由渲染端的滚动引擎读取，用内容高度 ÷ 速度算出动画时长（A-REQ-522/523）。"
+    },
+    {
+      "key": "mode",
+      "label": "模式",
+      "type": "select",
+      "required": false,
+      "options": [
+        "loop",
+        "once"
+      ],
+      "default": "loop",
+      "runtime": "creditsMode",
+      "help": "不是 DOM 绑定项 —— 由渲染端的滚动引擎读取（loop=循环 / once=单次）。"
+    }
+  ],
+  "defaultAnim": {
+    "in": "fadeIn",
+    "out": "fadeOut",
+    "durationMs": 800
+  },
+  "cssVars": {
+    "--tr-accent": "#d9d9d9",
+    "--tr-heading-size": "36px",
+    "--tr-group-size": "15px",
+    "--tr-text-size": "26px",
+    "--tr-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--tr-logo-h": "52px",
+    "--tr-duration": "24s"
+  },
+  "html": "<div class=\"tr-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--tr-accent\">\n  <div class=\"tr-mask\">\n    <div class=\"tr-track\" data-credits-track>\n      <div class=\"tr-heading\" data-slot=\"heading\"></div>\n      <div class=\"tr-lines\" data-slot=\"lines\" data-slot-multi>\n        <div class=\"tr-row\"><div class=\"tr-group\">{{group}}</div><div class=\"tr-text\">{{text}}</div></div>\n      </div>\n      <div class=\"tr-logos\" data-slot=\"logoRow\" data-slot-multi>\n        <div class=\"tr-logo\"><img src=\"{{src}}\" alt=\"{{alt}}\" /></div>\n      </div>\n    </div>\n  </div>\n</div>",
+  "css": ".tr-root{position:absolute;inset:0;font-family:var(--tr-font);overflow:hidden;background:rgba(8,8,9,.94);}\n.tr-mask{position:absolute;inset:0;overflow:hidden;mask-image:linear-gradient(180deg,transparent 0%,#000 10%,#000 88%,transparent 100%);-webkit-mask-image:linear-gradient(180deg,transparent 0%,#000 10%,#000 88%,transparent 100%);}\n.tr-track{position:absolute;left:50%;transform:translateX(-50%);top:100%;width:840px;display:flex;flex-direction:column;gap:26px;padding:0 0 40px;animation:tr-roll var(--tr-duration) linear infinite;}\n.tr-track.tr-once{animation-iteration-count:1;}\n.tr-track.tr-paused{animation-play-state:paused;}\n@keyframes tr-roll{from{transform:translate(-50%,0);}to{transform:translate(-50%,calc(-100% - 100vh));}}\n.tr-heading{font-size:var(--tr-heading-size);font-weight:700;color:#f2f2ee;letter-spacing:5px;text-align:center;padding-bottom:14px;border-bottom:1px solid #2c2c30;}\n.tr-heading:empty{display:none;}\n.tr-lines{display:flex;flex-direction:column;width:100%;}\n.tr-row{display:flex;align-items:baseline;gap:22px;padding:9px 0;border-bottom:1px solid #232326;}\n.tr-group{font-size:var(--tr-group-size);font-weight:600;color:var(--tr-accent);letter-spacing:1.5px;width:170px;text-align:right;flex:0 0 auto;}\n.tr-group:empty{display:none;}\n.tr-text{font-size:var(--tr-text-size);font-weight:500;color:#e7e7e3;line-height:1.35;flex:1;min-width:0;}\n.tr-logos{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:36px;width:100%;padding-top:26px;}\n.tr-logo{display:flex;align-items:center;justify-content:center;height:var(--tr-logo-h);}\n.tr-logo img{height:100%;width:auto;object-fit:contain;opacity:.92;}"
+}

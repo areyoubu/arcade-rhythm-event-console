@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>浮窗-致谢 · 渲染端</title>
+<!--
+  OBS 浏览器源：浮窗-致谢（仅致谢用）
+  源属性与 render/main.html 完全一致：1920×1080 / 60fps / shutdown=false / restart_when_active=false
+  渲染引擎与主实例是**同一份代码**，只是 target=credits，走不同的内容通道。
+-->
+<script src="/shared/ws.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent !important; overflow: hidden; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<script>
+  // 致谢实例固定 target=credits —— 与主实例共用同一个渲染引擎
+  window.__FORCE_TARGET = 'credits';
+</script>
+<script src="/render/renderer.js"></script>
+</body>
+</html>

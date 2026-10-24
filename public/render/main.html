@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>浮窗-主 · 渲染端</title>
+<!--
+  OBS 浏览器源：浮窗-主
+  ─────────────────────────────────────────────────────────
+  OBS 源属性必须这样设（G-REQ-204 / 附录 C 清单第 1 项）：
+    宽度 × 高度：1920 × 1080
+    自定义帧率：60（或与画布一致）
+    ✅ shutdown = false              ← 必须
+    ✅ restart_when_active = false   ← 必须
+  否则源隐藏时 CEF 进程会退出，再显示时重连丢状态。
+
+  本页背景必须透明（G-REQ-205 / A-REQ-530），且**不得**显示任何错误信息（A-REQ-537）。
+
+  URL 参数：
+    ?preview=1   控制端 iframe 预览模式（会显示棋盘格底衬）
+    ?scale=0.5   适配非 1920×1080 画布
+    ?fit=1       按窗口自动缩放
+    ?guides=1    安全区参考线（仅预览可见，OBS 中不可见）
+-->
+<script src="/shared/ws.js"></script>
+<style>
+  /* 兜底：即使 JS 出错也不出现白底或滚动条 */
+  html, body { margin: 0; padding: 0; background: transparent !important; overflow: hidden; width: 100%; height: 100%; }
+</style>
+</head>
+<body>
+<script src="/render/renderer.js"></script>
+</body>
+</html>

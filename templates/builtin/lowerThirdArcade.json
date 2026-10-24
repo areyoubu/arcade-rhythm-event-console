@@ -1,0 +1,71 @@
+{
+  "id": "lowerThirdArcade",
+  "name": "姓名条·街机",
+  "category": "player",
+  "family": "lowerThird",
+  "style": "arcade",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "name",
+      "label": "姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24,
+      "placeholder": "选手A"
+    },
+    {
+      "key": "subtitle",
+      "label": "副标题",
+      "type": "text",
+      "required": false,
+      "maxLength": 48,
+      "placeholder": "中二节奏 / 1P"
+    },
+    {
+      "key": "avatar",
+      "label": "头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "teamName",
+      "label": "队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "teamAvatar",
+      "label": "队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#ff3d5a"
+    }
+  ],
+  "defaultAnim": {
+    "in": "slideLeft",
+    "out": "fadeOut",
+    "durationMs": 360
+  },
+  "cssVars": {
+    "--la-accent": "#ff3d5a",
+    "--la-name-size": "48px",
+    "--la-sub-size": "20px",
+    "--la-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--la-avatar-size": "112px",
+    "--la-team-size": "20px",
+    "--la-team-logo": "26px"
+  },
+  "html": "<div class=\"la-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--la-accent\">\n  <div class=\"la-avatar\"><img data-slot=\"avatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"la-fallback\">?</span></div>\n  <div class=\"la-panel\">\n    <span class=\"la-stripe\"></span>\n    <div class=\"la-team\"><span class=\"la-team-logo\"><img data-slot=\"teamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"la-team-fallback\"></span></span><span class=\"la-team-name\" data-slot=\"teamName\"></span></div>\n    <div class=\"la-name\" data-slot=\"name\"></div>\n    <div class=\"la-sub\" data-slot=\"subtitle\"></div>\n  </div>\n</div>",
+  "css": ".la-root{position:absolute;left:64px;bottom:72px;display:flex;align-items:flex-end;font-family:var(--la-font);}\n.la-avatar{width:var(--la-avatar-size);height:var(--la-avatar-size);overflow:hidden;background:#0d0d0f;border:3px solid var(--la-accent);display:flex;align-items:center;justify-content:center;flex:0 0 auto;}\n.la-avatar img{width:100%;height:100%;object-fit:cover;display:none;}\n.la-avatar img.is-ready{display:block;}\n.la-fallback{color:#666;font-size:40px;font-weight:900;}\n.la-avatar:has(img.is-ready) .la-fallback{display:none;}\n.la-panel{position:relative;background:#0d0d0f;padding:14px 64px 14px 26px;min-width:360px;clip-path:polygon(0 0,100% 0,92% 100%,0 100%);}\n.la-stripe{position:absolute;left:0;top:0;bottom:0;width:10px;background:var(--la-accent);}\n.la-team{display:flex;align-items:center;gap:8px;margin-bottom:2px;}\n.la-team:not(:has(.la-team-name:not(:empty),img.is-ready)){display:none;}\n.la-team-logo{position:relative;width:var(--la-team-logo);height:var(--la-team-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;}\n.la-team-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.la-team-logo img.is-ready{display:block;}\n.la-team-fallback{width:6px;height:6px;background:var(--la-accent);}\n.la-team-logo:has(img.is-ready) .la-team-fallback{display:none;}\n.la-team-name{color:var(--la-accent);font-size:var(--la-team-size);font-weight:800;letter-spacing:2px;line-height:1.2;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;}\n.la-team-name:empty{display:none;}\n.la-name{color:#fff;font-size:var(--la-name-size);font-weight:900;letter-spacing:.5px;line-height:1.06;white-space:nowrap;}\n.la-sub{color:#c9c9c9;font-size:var(--la-sub-size);font-weight:500;line-height:1.3;margin-top:3px;white-space:nowrap;min-height:1.3em;}\n.la-sub:empty{display:none;}"
+}

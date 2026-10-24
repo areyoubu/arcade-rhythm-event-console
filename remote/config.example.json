@@ -1,0 +1,16 @@
+{
+  "host": "0.0.0.0",
+  "port": 8787,
+  "upstream": "http://127.0.0.1:3000",
+  "token": "CHANGE-ME-TO-A-LONG-RANDOM-STRING",
+  "tlsCert": "",
+  "tlsKey": "",
+  "trustProxy": false,
+  "rateGeneral": 180,
+  "rateJoin": 10,
+  "ratePick": 30,
+  "rateWindowMs": 60000,
+  "maxBodyBytes": 32768,
+  "timeoutMs": 15000,
+  "quiet": false
+}

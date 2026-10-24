@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OBS 转场 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+'use strict';
+const ui = window.ui;
+const { el, $, $$, clear, esc, ok, warn, err, cmdError, confirm, prompt, modal, withBusy, api, linkStatusBar } = ui;
+const fmt = window.fmt;
+const ws = window.arcadeWS;
+
+const st = {
+  cfg: null,          // GET /api/config → config.scenes / config.transitions
+  tState: null,       // GET /api/transitions/state（含 fallback）
+  sceneSig: '', ovSig: '', driftSig: '',
+};
+
+const page = ui.mount({
+  current: '/transitions',
+  title: 'OBS 转场',
+  subtitle: '§5.13.4 · 转场时长 50–20000ms（B-REQ-3007）· 切换后立即重读确认（B-REQ-3008）· vMix 侧全部硬切，OBS 是唯一可见转场（§5.14）',
+});
+page.append(ui.linkStatusBar());
+page.append(ui.featureBanner('transitions', '回放转场', { requires: 'obs', requiresLabel: 'OBS 控制' }));
+
+function card(title, sub, cls) {
+  const c = el('div', { class: 'card' + (cls ? ' ' + cls : '') });
+  c.append(el('header', null, el('span', { text: title }), sub ? el('span', { class: 'sub', text: sub }) : null));
+  c.body = el('div', { class: 'body' });
+  c.append(c.body);
+  return c;
+}
+const T = () => ws.state && ws.state.transitions ? ws.state.transitions : {};
+const scenes = () => (ws.state && ws.state.health && ws.state.health.obs && ws.state.health.obs.scenes) || [];
+const drift = () => (ws.state && ws.state.transitions && ws.state.transitions.drift) || [];
+
+/* ─────────────────────────────────────────────────────────────
+   ① 演播室模式（B-REQ-3002/3003）
+   ───────────────────────────────────────────────────────────── */
+const smCard = card('演播室模式', 'B-REQ-3003：显示当前状态 + 模式差异说明');
+const smRow = el('div', { class: 'inline' });
+const smPill = el('span', { class: 'pill mute', text: '读取中…' });
+const smToggle = el('button', { class: 'btn', type: 'button', text: '切换', title: 'SetStudioModeEnabled（POST /api/transitions/studioMode）' });
+smToggle.addEventListener('click', () => withBusy(smToggle, async () => {
+  const on = !(T().studioMode === true);
+  try {
+    await api('/api/transitions/studioMode', { method: 'POST', body: { enabled: on } });
+    ok(on ? '演播室模式已开启' : '演播室模式已关闭（直接切节目模式）');
+  } catch (e) { cmdError(e, '演播室模式'); }
+}));
+smRow.append(smPill, smToggle);
+smCard.body.append(smRow,
+  el('div', { class: 'note info mt8', text: '开启：预览/节目分离 —— 快捷切换写入「预览场景」，按「触发转场」才上节目；SetCurrentPreviewScene 可用。关闭（默认）：直接 SetCurrentProgramScene 硬切节目（B-REQ-3002）；此时 SetCurrentPreviewScene 调用会失败（B-REQ-3004，本页会自动避开）。' }));
+
+/* ─────────────────────────────────────────────────────────────
+   ② 当前转场（B-REQ-3007 / 3008）
+   ───────────────────────────────────────────────────────────── */
+const curCard = card('当前转场', '时长校验 50–20000ms（B-REQ-3007）· 应用后立即重读确认（B-REQ-3008）');
+const curRow = el('div', { class: 'inline' });
+const curSelect = el('select', null, el('option', { value: '', text: '（加载中…）' }));
+curSelect.style.width = '240px';
+const durInput = el('input', { type: 'number', min: '50', max: '20000', step: '50', value: '300', title: '转场时长（ms，50–20000）' });
+durInput.style.width = '130px';
+const durUnit = el('span', { class: 'tiny muted', text: 'ms' });
+const applyBtn = el('button', { class: 'btn primary', type: 'button', text: '应用', title: 'SetCurrentSceneTransition + SetCurrentSceneTransitionDuration' });
+applyBtn.addEventListener('click', () => withBusy(applyBtn, async () => {
+  const name = curSelect.value;
+  if (!name) { warn('请先选择转场'); return; }
+  const raw = durInput.value;
+  const n = Number(raw);
+  /* B-REQ-3007：前端拦截 50–20000ms */
+  if (!Number.isFinite(n) || n < 50 || n > 20000) {
+    warn('时长须在 50–20000ms 之间（B-REQ-3007）');
+    durInput.style.borderColor = 'var(--danger)';
+    return;
+  }
+  durInput.style.borderColor = '';
+  try {
+    const r = await api('/api/transitions/set', { method: 'POST', body: { transitionName: name, durationMs: Math.round(n) } });
+    /* B-REQ-3008：显示重读结果与是否一致 */
+    if (r.ok) {
+      ok(`已应用「${r.actual}」${r.duration !== undefined ? '，时长 ' + r.duration + 'ms' : ''}，重读一致`);
+    } else {
+      warn(`重读不一致：请求 ${r.requested}，实际 ${r.actual}（疑似静默失败，请检查 OBS）`, { ms: 6000 });
+    }
+    setResult.textContent = `重读：${r.actual || '—'}（${r.ok ? '✓ 与请求一致' : '✗ 与请求不一致'}）· 时长 ${r.duration !== undefined ? r.duration + 'ms' : '—'}`;
+    setResult.className = 'note mt8 ' + (r.ok ? 'ok' : 'warn');
+  } catch (e) { cmdError(e, '应用转场'); }
+}));
+curRow.append(curSelect, durInput, durUnit, applyBtn);
+const curInfo = el('div', { class: 'tiny muted mt8', text: '当前：—' });
+const setResult = el('div', { class: 'note mt8 hidden' });
+curCard.body.append(curRow, curInfo, setResult);
+
+/* ─────────────────────────────────────────────────────────────
+   ③ 快捷场景切换（B-REQ-3002 非演播室模式直接切节目）
+   ───────────────────────────────────────────────────────────── */
+const quickCard = card('快捷场景切换', '非演播室模式 = 直接 SetCurrentProgramScene（B-REQ-3002）');
+const quickRow = el('div', { class: 'btn-row' });
+const sceneState = el('div', { class: 'tiny muted mt8', text: '节目场景 — / 预览场景 —' });
+const trigBtn = el('button', { class: 'btn sm', type: 'button', text: '触发转场', title: 'TriggerStudioModeTransition（仅演播室模式有意义）' });
+trigBtn.addEventListener('click', () => withBusy(trigBtn, async () => {
+  try { await api('/api/transitions/trigger', { method: 'POST', body: {} }); ok('转场已触发'); }
+  catch (e) { cmdError(e, '触发转场'); }
+}));
+const refreshBtn = el('button', { class: 'btn sm ghost', type: 'button', text: '刷新列表', title: 'POST /api/transitions/refresh —— 重读转场列表与场景覆盖' });
+refreshBtn.addEventListener('click', () => withBusy(refreshBtn, async () => {
+  try { await api('/api/transitions/refresh', { method: 'POST', body: {} }); ok('已刷新'); }
+  catch (e) { cmdError(e, '刷新'); }
+}));
+quickCard.body.append(quickRow, sceneState,
+  el('div', { class: 'btn-row mt8' }, trigBtn, refreshBtn),
+  el('div', { class: 'note info mt8', text: '演播室模式开启时，点击场景写入「预览场景」，需再按「触发转场」；关闭时直接切换节目场景。OBS 中其它场景（非 LIVE/REPLAY/CLEAN）同样支持切换。' }));
+
+function rebuildQuickScenes() {
+  const t = T();
+  const inStudio = t.studioMode === true;
+  const cfgScenes = st.cfg ? st.cfg.scenes : {};
+  const known = [cfgScenes.live, cfgScenes.replay, cfgScenes.clean].filter(Boolean);
+  const others = scenes().filter((s) => !known.includes(s));
+  const sig = `${inStudio}|${known.join(',')}|${others.join(',')}|${t.programScene}|${t.previewScene}`;
+  if (sig === st.sceneSig) return;
+  st.sceneSig = sig;
+  clear(quickRow);
+  const mk = (name, label, cls) => {
+    if (!name) return;
+    const active = inStudio ? t.previewScene === name : t.programScene === name;
+    const b = el('button', {
+      class: 'btn lg' + (cls || '') + (active ? ' on' : ''),
+      type: 'button', text: label || name,
+      title: inStudio ? `SetCurrentPreviewScene「${name}」（演播室模式）` : `SetCurrentProgramScene「${name}」（直接切节目，B-REQ-3002）`,
+    });
+    b.addEventListener('click', () => withBusy(b, async () => {
+      try {
+        if (inStudio) await api('/api/transitions/previewScene', { method: 'POST', body: { sceneName: name } });
+        else await api('/api/transitions/programScene', { method: 'POST', body: { sceneName: name } });
+        ok(`已切到 ${name}`);
+      } catch (e) { cmdError(e, `切换 ${name}`); }
+    }));
+    quickRow.append(b);
+  };
+  mk(cfgScenes.live, 'LIVE', '');
+  mk(cfgScenes.replay, 'REPLAY', ' to-output');
+  mk(cfgScenes.clean, 'CLEAN', '');
+  for (const s of others) mk(s, s, ' ghost');
+  sceneState.textContent = `节目场景：${t.programScene || '—'} · 预览场景：${t.previewScene || '—'}${inStudio ? '（演播室模式：点击写入预览）' : '（直接切节目模式）'}`;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ④ 场景转场覆盖表（B-REQ-3001 / 1103 / 3005）
+   ───────────────────────────────────────────────────────────── */
+const ovCard = card('场景转场覆盖', '行内编辑 → POST /api/transitions/override');
+const ovTable = el('table', { class: 'tbl' });
+const ovWrap = el('div', { class: 'scroll yl' }, ovTable);
+ovCard.body.append(ovWrap,
+  el('div', { class: 'note info mt8', text: 'B-REQ-1103：stinger 的 Transition Point 是实例自身属性，obs-websocket 无法修改，须在 OBS 内手动配置（B-REQ-3005）。' }),
+  el('div', { class: 'note info mt8', text: 'B-REQ-3001：场景转场覆盖的变更无法通过事件感知（SceneTransitionOverrideChanged 不存在），本系统按需重读 + 每 60s 低频轮询。不得假定覆盖值恒定。' }),
+  el('div', { class: 'mt8', id: 'drift-slot' }));
+
+const editModal = (() => {
+  const sel = el('select', null);
+  sel.style.width = '240px';
+  const dur = el('input', { type: 'number', min: '0', max: '20000', step: '50' });
+  dur.style.width = '130px';
+  const note = el('div', { class: 'tiny muted mt8', text: '时长 0 = Cut（硬切）。50–20000ms 校验（B-REQ-3007）。' });
+  let current = null;
+  const m = modal({
+    title: '编辑场景转场覆盖',
+    body: el('div', null,
+      el('div', { class: 'field' }, el('label', { text: '场景（只读）' }), el('input', { type: 'text', disabled: true, id: 'ov-scene-name' })),
+      el('div', { class: 'field' }, el('label', { text: '转场' }), sel),
+      el('div', { class: 'field' }, el('label', { text: '时长（ms，0=Cut）' }), dur),
+      note,
+    ),
+    footer: [
+      el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
+      el('button', { class: 'btn primary', text: '保存覆盖', onclick: () => withBusy(ovSave, async () => {
+        const n = Number(dur.value);
+        if (!Number.isFinite(n) || n < 0 || n > 20000) { warn('时长须在 0–20000ms 之间（0=Cut）'); return; }
+        try {
+          await api('/api/transitions/override', { method: 'POST', body: { sceneName: current, transitionName: sel.value, transitionDuration: Math.round(n) } });
+          ok(`已保存「${current}」的转场覆盖`);
+          m.close();
+        } catch (e) { cmdError(e, '保存覆盖'); }
+      }) }),
+    ],
+    onClose: () => { current = null; },
+  });
+  const ovSave = $('button.primary', m.box);
+  return {
+    open(scene, transitions, actual) {
+      current = scene;
+      $('#ov-scene-name', m.box).value = scene;
+      clear(sel);
+      for (const t of transitions) sel.append(el('option', { value: t, text: t }));
+      if (!transitions.includes('Cut')) sel.append(el('option', { value: 'Cut', text: 'Cut（硬切）' }));
+      const actName = actual && actual.transitionName;
+      if (actName && !transitions.includes(actName)) sel.append(el('option', { value: actName, text: actName + '（当前值，不在列表中）' }));
+      sel.value = actName || 'Cut';
+      dur.value = String(actual && actual.transitionDuration !== null && actual.transitionDuration !== undefined ? actual.transitionDuration : 0);
+    },
+  };
+})();
+
+function rebuildOverrides() {
+  const t = T();
+  const cfgOv = (st.cfg && st.cfg.transitions && st.cfg.transitions.sceneOverrides) || {};
+  const overrides = t.overrides || {};
+  const cfgScenes = st.cfg ? st.cfg.scenes : {};
+  const known = [cfgScenes.live, cfgScenes.replay, cfgScenes.clean].filter(Boolean);
+  const all = [...new Set([...known, ...scenes(), ...Object.keys(cfgOv), ...Object.keys(overrides)])].filter(Boolean);
+  const sig = `${all.join(',')}|${JSON.stringify(overrides)}|${JSON.stringify(cfgOv)}|${t.overridesAt || 0}`;
+  if (sig === st.ovSig) return;
+  st.ovSig = sig;
+  clear(ovTable);
+  ovTable.append(el('tr', null, el('th', { text: '场景' }), el('th', { text: '转场' }), el('th', { text: '时长' }), el('th', { text: '与配置期望' }), el('th', { text: '' })));
+  const transNames = (t.list || []).map((x) => x.transitionName);
+  for (const s of all) {
+    const act = overrides[s] || null;
+    const want = cfgOv[s] || null;
+    const driftMatch = want && act && (act.transitionName !== want.transitionName || act.transitionDuration !== want.transitionDuration);
+    const tr = el('tr', null);
+    tr.append(el('td', { text: s }));
+    tr.append(el('td', { class: 'mono', text: act ? (act.transitionName || '—') : '（未读回）' }));
+    tr.append(el('td', { class: 'num', text: act ? `${act.transitionDuration ?? '—'}ms` : '—' }));
+    tr.append(el('td', null, want
+      ? el('span', { class: 'tag ' + (driftMatch ? 'P2' : 'P3'), text: `期望 ${want.transitionName}/${want.transitionDuration}ms` + (driftMatch ? '（不一致）' : '') })
+      : el('span', { class: 'tiny muted', text: '配置无期望值' })));
+    const edit = el('button', { class: 'btn sm ghost', type: 'button', text: '编辑', title: `SetSceneSceneTransitionOverride「${s}」` });
+    edit.addEventListener('click', () => editModal.open(s, transNames, act));
+    tr.append(el('td', null, edit));
+    ovTable.append(tr);
+  }
+}
+
+/* ── drift：与配置不一致时告警 + 一键同步（B-REQ-3001） ── */
+function rebuildDrift() {
+  const slot = $('#drift-slot');
+  const d = drift();
+  const sig = JSON.stringify(d);
+  if (sig === st.driftSig) return;
+  st.driftSig = sig;
+  clear(slot);
+  if (!d || !d.length) {
+    slot.append(el('div', { class: 'note ok', text: '✓ 场景转场覆盖与配置一致（最近一次重读）' }));
+    return;
+  }
+  const box = el('div', { class: 'note warn' });
+  box.append(el('div', { class: 'bold mb8', text: '检测到场景转场覆盖与配置不一致（可能有人在 OBS 里手改过）：' }));
+  for (const item of d) {
+    box.append(el('div', { class: 'small', text: `${item.scene}：期望 ${item.expected.transitionName}/${item.expected.transitionDuration}ms，实际 ${item.actual.transitionName}/${item.actual.transitionDuration}ms` }));
+  }
+  const syncBtn = el('button', { class: 'btn sm primary mt8', type: 'button', text: '按配置同步', title: 'POST /api/transitions/applyOverrides —— 把配置期望值下发到 OBS' });
+  syncBtn.addEventListener('click', () => withBusy(syncBtn, async () => {
+    try {
+      const r = await api('/api/transitions/applyOverrides', { method: 'POST', body: {} });
+      const fails = (r.results || []).filter((x) => !x.ok);
+      if (fails.length) warn(`同步完成，${fails.length} 项失败：${fails.map((x) => `${x.scene}（${x.error}）`).join('；')}`, { ms: 6000 });
+      else ok('已按配置同步全部场景转场覆盖');
+    } catch (e) { cmdError(e, '按配置同步'); }
+  }));
+  box.append(syncBtn);
+  slot.append(box);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   ⑤ T-Bar（B-REQ-3006：官方将废弃，仅兼容保留）
+   ───────────────────────────────────────────────────────────── */
+const tbCard = card('T-Bar', '官方将废弃，仅兼容保留（B-REQ-3006）');
+const tbRow = el('div', { class: 'inline' });
+const tbSlider = el('input', { type: 'range', min: '0', max: '1', step: '0.01', value: '0', title: 'SetTBarPosition position 0.0–1.0（将废弃）' });
+tbSlider.style.flex = '1';
+const tbVal = el('span', { class: 'pill mute mono-num', text: '0.00' });
+let tbTimer = null;
+let tbBusy = false;
+tbSlider.addEventListener('input', () => {
+  tbVal.textContent = Number(tbSlider.value).toFixed(2);
+  clearTimeout(tbTimer);
+  tbTimer = setTimeout(async () => {
+    if (tbBusy) return;
+    tbBusy = true;
+    try { await api('/api/transitions/tbar', { method: 'POST', body: { position: Number(tbSlider.value) } }); }
+    catch (e) { cmdError(e, 'T-Bar'); }
+    finally { tbBusy = false; }
+  }, 120);
+});
+const tbZero = el('button', { class: 'btn sm', type: 'button', text: '归零', title: 'SetTBarPosition position=0' });
+tbZero.addEventListener('click', () => withBusy(tbZero, async () => {
+  tbSlider.value = '0'; tbVal.textContent = '0.00';
+  try { await api('/api/transitions/tbar', { method: 'POST', body: { position: 0 } }); ok('T-Bar 已归零'); }
+  catch (e) { cmdError(e, 'T-Bar 归零'); }
+}));
+tbRow.append(tbSlider, tbVal, tbZero);
+tbCard.body.append(tbRow,
+  el('div', { class: 'note warn mt8', text: 'SetTBarPosition 官方标注「将被废弃」，不作为主流程依赖，仅兼容保留（B-REQ-3006）。本项目主流程由 cutPoint 事件 + 超时兜底驱动，不依赖 T-Bar。' }));
+
+/* ─────────────────────────────────────────────────────────────
+   ⑥ 转场防穿帮说明卡（§5.14 核心原则）
+   ───────────────────────────────────────────────────────────── */
+const acCard = card('转场防穿帮（§5.14）', '只允许一个可见转场');
+const acNote = el('div', { class: 'note danger' });
+acCard.body.append(acNote);
+acNote.append(
+  el('div', { class: 'bold mb8', text: '核心原则：只允许一个可见转场，且必须有一段完全不透明的中段，中段宽度 > 回路延迟 L。' }),
+  el('div', { class: 'small', text: 'vMix 侧所有切换一律硬切（Cut）——vMix 不做任何可见转场。OBS 侧是唯一的可见转场，把实际的场景切换动作藏在它遮住屏幕的那一刻。' }),
+  el('div', { class: 'small mt8', text: '为什么：t=0 按下按钮后 0~200ms 内，OBS 的 REPLAY 场景里 NDI 源显示的仍是切换前的直播画面；t≈200ms 回放画面才走完 vMix→NDI→OBS 回路真正到位。若转场在回路延迟内露底，观众会看到「先直播画面倒退 ~200ms，再变回放」的穿帮。' }),
+  el('div', { class: 'small mt8 bold', text: '容差计算示例（§5.14.3）：遮罩 600–800ms，不透明区 200–600ms（宽 400ms），Transition Point 设在不透明区正中间 = 400ms → 容差 ±200ms。回路延迟约 200ms，够用；想要更宽松就做更长的遮罩（回放入场用 1 秒全屏遮罩完全合理）。' }),
+  el('div', { class: 'small mt8', text: '降级方案（B-REQ-1106）：stinger 不可用时用 Fade + ≥600ms 时长保证遮罩窗口。' }),
+);
+
+/* ── 布局 ── */
+const cols = el('div', { class: 'cols two mt16' });
+const colL = el('div', { class: 'flex-col' });
+const colR = el('div', { class: 'flex-col' });
+colL.append(smCard, curCard, ovCard);
+colR.append(quickCard, tbCard, acCard);
+cols.append(colL, colR);
+page.append(cols);
+
+/* ─────────────────────────────────────────────────────────────
+   状态同步
+   ───────────────────────────────────────────────────────────── */
+function sync() {
+  const t = T();
+  /* 演播室模式 */
+  smPill.className = 'pill ' + (t.studioMode ? 'info' : 'mute');
+  smPill.textContent = t.studioMode ? '演播室模式：开' : '演播室模式：关（直接切节目）';
+  smToggle.textContent = t.studioMode ? '关闭演播室模式' : '开启演播室模式';
+
+  /* 当前转场下拉（保留下拉选择，仅在列表变化时重建选项） */
+  const list = t.list || [];
+  const listSig = list.map((x) => x.transitionName).join(',');
+  if (listSig !== curSelect.dataset.sig) {
+    curSelect.dataset.sig = listSig;
+    const prev = curSelect.value;
+    clear(curSelect);
+    if (!list.length) curSelect.append(el('option', { value: '', text: '（未读到转场列表，点「刷新列表」）' }));
+    for (const x of list) curSelect.append(el('option', { value: x.transitionName, text: x.transitionName + (x.transitionKind ? `（${x.transitionKind}）` : '') }));
+    if (t.current && t.current.name) curSelect.value = t.current.name;
+    else if (prev && list.some((x) => x.transitionName === prev)) curSelect.value = prev;
+  }
+  const cur = t.current || {};
+  curInfo.textContent = `当前：${cur.name || '—'}${cur.kind ? '（' + cur.kind + '）' : ''} · 时长 ${cur.duration !== undefined ? cur.duration + 'ms' : '—'}${cur.fixed ? ' · 固定时长' : ''}${cur.configurable ? ' · 可配置' : ''}`;
+  if (cur.duration !== undefined && cur.duration !== null && !curSelect.dataset.touched) {
+    durInput.value = String(cur.duration);
+  }
+
+  rebuildQuickScenes();
+  rebuildOverrides();
+  rebuildDrift();
+}
+durInput.addEventListener('focus', () => { curSelect.dataset.touched = '1'; });
+
+ws.on('hello', sync);
+ws.on('patch', sync);
+ws.start({ audience: 'director' });
+
+(async function init() {
+  try {
+    const [ts, cfg] = await Promise.all([
+      api('/api/transitions/state'),
+      api('/api/config'),
+    ]);
+    st.tState = ts;
+    st.cfg = cfg.config || null;
+    /* B-REQ-1106 降级方案提示 */
+    if (ts.fallback && ts.fallback.degraded) {
+      warn(ts.fallback.note || 'stinger 不可用，已降级为 Fade', { ms: 8000 });
+    }
+    sync();
+    /* 主动重读转场列表 —— 后台执行，OBS 未连接时可能长时间挂起，不得阻塞页面 */
+    api('/api/transitions/refresh', { method: 'POST', body: {} })
+      .then(() => { ok('转场列表已刷新'); })
+      .catch(() => { /* 列表稍后由 WS patch 或「刷新列表」按钮更新 */ });
+  } catch (e) {
+    cmdError(e, '初始化');
+    err('页面初始化失败：' + e.message, { title: '初始化失败', ms: 8000 });
+  }
+})();
+
+})();
+</script>
+</body>
+</html>

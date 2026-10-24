@@ -1,0 +1,586 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>模板管理与编辑 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+  'use strict';
+  const { el, $, $$, clear, ok, warn, err, toast, confirm, prompt, modal, withBusy, api, esc, cmdError } = window.ui;
+  const ws = window.arcadeWS;
+
+  const page = window.ui.mount({
+    current: '/templates',
+    title: '模板管理与编辑',
+    subtitle: '实时校验（A-REQ-215，错误按字段路径显示）· 实时预览（A-REQ-214）· 复制为自定义（A-REQ-210）· 热重载（A-REQ-213）',
+  });
+  ws.start();
+
+  const SLOT_TYPES = ['text', 'image', 'color', 'select', 'number'];
+  const ANIM_NAMES = ['none', 'fadeIn', 'fadeUp', 'fadeDown', 'slideLeft', 'slideRight', 'slideUp', 'scaleIn', 'wipeRight', 'blurIn'];
+  const CAT_LABEL = { player: '选手', talent: '解说', credits: '致谢', custom: '自定义' };
+
+  const S = {
+    styleFilter: '', list: [], cur: null };
+  let valTimer = null;
+  let pvTimer = null;
+  let dirty = false;   // 编辑器有未保存改动时，外部热重载不覆盖本地编辑
+
+  /** 字段容器：校验错误按 data-path 挂到对应控件下方（A-REQ-215 的核心） */
+  function fld(path, label, ctrl) {
+    return el('div', { class: 'field', dataset: { path } }, el('label', { text: label }), ctrl);
+  }
+
+  // ═══════════════════ 左侧模板列表 ═══════════════════
+  const listBox = el('div');
+  const newBtn = el('button', { class: 'btn primary sm', text: '＋ 新建模板' });
+  const listCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '模板列表' }), el('span', { class: 'spacer' }), newBtn),
+    el('div', { class: 'body flush' },
+      el('div', { class: 'scroll yl' }, listBox),
+    ),
+    el('div', { class: 'body tight' },
+      el('div', { class: 'note info small', text: 'OBS 浏览器源必须设 shutdown=false 与 restart_when_active=false，否则源隐藏时 CEF 进程退出、再显示时丢状态。' }),
+    ),
+  );
+
+  // 风格筛选：让十多个模板按风格分开看，而不是堆成一长条
+  const styleFilter = el('select', {
+    style: { margin: '8px 10px 0', width: 'calc(100% - 20px)' },
+    onchange: (e) => { S.styleFilter = e.target.value; renderList(); },
+  });
+  function syncStyleFilter() {
+    const cur = styleFilter.value;
+    clear(styleFilter);
+    styleFilter.append(el('option', { value: '', text: '全部风格' }));
+    const styles = [...new Set(S.list.map((t) => t.style || 'classic'))];
+    for (const st of styles) {
+      const label = (S.list.find((t) => (t.style || 'classic') === st) || {}).styleLabel || st;
+      styleFilter.append(el('option', { value: st, text: `${label}（${S.list.filter((t) => (t.style || 'classic') === st).length}）` }));
+    }
+    styleFilter.value = cur || S.styleFilter || '';
+  }
+  listCard.querySelector('.body.flush').prepend(styleFilter);
+
+  function renderList() {
+    clear(listBox);
+    syncStyleFilter();
+    if (!S.list.length) {
+      listBox.append(el('div', { class: 'muted small', text: '模板未加载 —— 服务端未连接？' }));
+      return;
+    }
+    const filtered = S.styleFilter ? S.list.filter((t) => (t.style || 'classic') === S.styleFilter) : S.list;
+
+    // 按 category → family 分组，同族的风格变体挨在一起
+    const groups = new Map();
+    for (const t of filtered) {
+      const key = `${t.category}::${t.family || t.id}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(t);
+    }
+    for (const [key, items] of groups) {
+      const [cat, fam] = key.split('::');
+      listBox.append(el('div', {
+        class: 'small bold dim',
+        style: { padding: '10px 12px 4px', borderTop: '1px solid var(--border)' },
+        text: `${CAT_LABEL[cat] || cat} · ${items[0].familyLabel || fam}`,
+      }));
+      for (const t of items) {
+      const badge = t.overridden
+        ? el('span', { class: 'tag P3', text: '已覆盖' })
+        : t.builtin
+          ? el('span', { class: 'tag', text: '内置' })
+          : el('span', { class: 'tag P2', text: '自定义' });
+      const sel = S.cur?.id === t.id;
+      listBox.append(el('div', {
+        class: 'list-row', dataset: { tplId: t.id }, style: { cursor: 'pointer', ...(sel ? { background: 'rgba(255,255,255,.06)', borderLeft: '3px solid var(--accent)' } : {}) },
+        onclick: () => selectTpl(t.id),
+      },
+        el('div', { class: 'grow' },
+          el('div', { class: 'name', text: t.name }),
+          el('div', { class: 'sub mono', text: `${t.id} · ${t.styleLabel || t.style || '标准'} · ${t.slots?.length || 0} 槽位` }),
+        ),
+        badge,
+      ));
+      }
+    }
+  }
+
+  function selectTpl(id) {
+    const t = S.list.find((x) => x.id === id);
+    S.cur = t ? JSON.parse(JSON.stringify(t)) : null;
+    renderEditor();
+    renderList();
+    clear(errBox);
+    scheduleValidate();
+    dirty = false;   // 注意要在 scheduleValidate()（会把 dirty 置位）之后复位
+  }
+
+  newBtn.onclick = () => withBusy(newBtn, async () => {
+    const id = await prompt({
+      title: '新建自定义模板',
+      label: '模板 id（必须稳定 —— 之后改名不得改 id，A-REQ-202）',
+      placeholder: '以字母开头，仅限字母数字下划线连字符，如 myLowerThird',
+    });
+    if (id === null || !id.trim()) return;
+    if (S.list.some((t) => t.id === id.trim())) { warn(`模板 id「${id.trim()}」已存在`); return; }
+    S.cur = {
+      id: id.trim(),
+      name: id.trim(),
+      category: 'custom',
+      builtin: false,
+      overridden: false,
+      slots: [],
+      defaultAnim: { in: 'fadeIn', out: 'fadeIn', durationMs: 400 },
+      cssVars: {},
+      css: '',
+      html: '',
+    };
+    renderEditor();
+    renderList();
+    clear(errBox);
+    scheduleValidate();
+    ok('已创建草稿 —— 记得保存（POST /api/templates 会写入 templates/custom/）');
+  });
+
+  // ═══════════════════ 工具栏 ═══════════════════
+  const saveBtn = el('button', { class: 'btn primary', text: '保存' });
+  const dupBtn = el('button', { class: 'btn', text: '复制为自定义' });
+  const delBtn = el('button', { class: 'btn danger', text: '删除' });
+  const reloadBtn = el('button', { class: 'btn ghost', text: '⟳ 手动重载' });
+  const valState = el('span', { class: 'small muted', text: '' });
+  const errBox = el('div');
+  const toolbarCard = el('div', { class: 'card' },
+    el('div', { class: 'body tight' },
+      el('div', { class: 'inline' },
+        saveBtn, dupBtn, delBtn,
+        el('span', { class: 'grow' }),
+        valState, reloadBtn,
+      ),
+      errBox,
+      el('div', { class: 'help mt8', text: '模板变更会热重载到渲染端：服务端只推送受影响的模板定义，渲染端原地替换结构并保留当前数据 —— 不整页刷新、不黑屏（A-REQ-213）。保存后通常 ≤500ms 生效。' }),
+    ),
+  );
+
+  saveBtn.onclick = (e) => withBusy(e.target, async () => {
+    if (!S.cur) { warn('请先选择模板'); return; }
+    try {
+      const r = await api('/api/templates', { method: 'POST', body: toBody() });
+      ok(`已保存「${r.id}」→ templates/custom/${r.id}.json（热重载已触发）`);
+      reloadList(S.cur.id);
+    } catch (ex) {
+      if (ex.data?.errors) {
+        showErrors(ex.data.errors);
+        err('保存失败：' + (Object.values(ex.data.errors)[0] || ex.message), { ms: 6000 });
+      } else {
+        err(ex.message);
+      }
+    }
+  });
+
+  dupBtn.onclick = (e) => withBusy(e.target, async () => {
+    if (!S.cur) { warn('请先选择模板'); return; }
+    const newId = await prompt({
+      title: '复制为自定义（A-REQ-210）',
+      label: '新模板 id —— 必须稳定，之后改名不得改 id（A-REQ-202）',
+      value: `${S.cur.id}Copy`,
+      placeholder: '以字母开头，仅限字母数字下划线连字符',
+    });
+    if (newId === null || !newId.trim()) return;
+    const newName = await prompt({
+      title: '复制为自定义',
+      label: '新模板名称（仅显示用，与 id 无关）',
+      value: `${S.cur.name} 副本`,
+    });
+    if (newName === null || !newName.trim()) return;
+    try {
+      const r = await api(`/api/templates/${S.cur.id}/duplicate`, { method: 'POST', body: { newId: newId.trim(), newName: newName.trim() } });
+      ok(`已复制为自定义模板「${r.id}」—— 不改内置文件，副本存于 templates/custom/`);
+      reloadList(r.id);
+    } catch (ex) { err(ex.message || '复制失败'); }
+  });
+
+  delBtn.onclick = (e) => withBusy(e.target, async () => {
+    const t = S.cur;
+    if (!t) { warn('请先选择模板'); return; }
+    if (t.builtin && !t.overridden) { warn('内置模板不可删除；可先「复制为自定义」再改（A-REQ-210）'); return; }
+    const yes = await confirm({
+      danger: true,
+      title: '删除模板',
+      message: t.overridden
+        ? `删除「${t.name}」的自定义覆盖后将恢复内置版本。确认删除？`
+        : `删除自定义模板「${t.name}」后无法恢复。确认删除？`,
+    });
+    if (!yes) return;
+    try {
+      await api(`/api/templates/${t.id}`, { method: 'DELETE' });
+      ok('已删除');
+      reloadList(null);
+    } catch (ex) { err(ex.message); }
+  });
+
+  reloadBtn.onclick = (e) => withBusy(e.target, async () => {
+    try {
+      const r = await api('/api/templates/reload', { method: 'POST' });
+      ok(`已手动触发热重载（共 ${r.count} 个模板，A-REQ-213）`);
+    } catch (ex) { err(ex.message); }
+  });
+
+  // ═══════════════════ 编辑器 ═══════════════════
+  const editorBox = el('div', { class: 'cols' });
+
+  function renderEditor() {
+    clear(editorBox);
+    if (!S.cur) {
+      editorBox.append(el('div', { class: 'card' }, el('div', { class: 'body' },
+        el('div', { class: 'muted', text: '在左侧选择模板开始编辑。内置模板可「复制为自定义」后再改；直接保存内置 id 会以自定义覆盖形式写入 templates/custom/（A-REQ-210）。' }),
+      )));
+      saveBtn.disabled = true; dupBtn.disabled = true; delBtn.disabled = true;
+      return;
+    }
+    const t = S.cur;
+    saveBtn.disabled = false;
+    dupBtn.disabled = false;
+    const deletable = !t.builtin || t.overridden;
+    delBtn.disabled = !deletable;
+    delBtn.title = deletable ? '' : '内置模板不可删除；可先「复制为自定义」（A-REQ-210）';
+    delBtn.textContent = t.builtin && !t.overridden ? '删除（内置不可删）' : (t.overridden ? '删除覆盖（恢复内置）' : '删除');
+
+    editorBox.append(
+      el('div', { class: 'card' },
+        el('header', null,
+          el('span', { text: `基础信息` }),
+          el('span', { class: 'spacer' }),
+          badgeOf(t),
+        ),
+        el('div', { class: 'body' },
+          el('div', { class: 'cols two' },
+            fld('id', 'id（必须稳定，改名不得改 id —— A-REQ-202）',
+              el('input', { type: 'text', value: t.id, class: 'mono', oninput: (e) => { t.id = e.target.value; scheduleValidate(); schedulePreview(); } })),
+            fld('name', 'name（显示名，可随时改）',
+              el('input', { type: 'text', value: t.name, oninput: (e) => { t.name = e.target.value; scheduleValidate(); } })),
+          ),
+          fld('category', 'category',
+            el('select', { onchange: (e) => { t.category = e.target.value; scheduleValidate(); } },
+              ['player', 'talent', 'credits', 'custom'].map((c) => el('option', { value: c, text: `${c}（${CAT_LABEL[c]}）`, selected: t.category === c })),
+            )),
+          fld('family', '图形族（family）',
+            el('input', { type: 'text', class: 'mono', value: t.family || '', placeholder: '如 lowerThird',
+              oninput: (e) => { t.family = e.target.value.trim(); scheduleValidate(); } }),
+            '同一族的模板会在控制台里并排显示（例如 lowerThird 的 标准/霓虹/极简/粗描边）。'),
+          fld('style', '风格（style）',
+            el('select', { onchange: (e) => { t.style = e.target.value; scheduleValidate(); } },
+              [['broadcast','转播'],['neon','霓虹'],['glass','磨砂'],['arcade','街机'],['contrast','高对比'],['bold','粗排'],['minimal','极简'],['split','斜切'],['classic','标准（旧）']]
+                .map(([v, l]) => el('option', { value: v, text: l, selected: (t.style || 'classic') === v })),
+            ),
+            '决定它在模板列表里归到哪个风格。'),
+          t.overridden ? el('div', { class: 'note info small', text: `已覆盖内置「${t.id}」（基于 ${t.baseName || '内置版本'}）：未覆盖的字段沿用内置。` }) : null,
+        ),
+      ),
+      slotsCardEditor(),
+      animVarsCard(),
+      el('div', { class: 'card' },
+        el('header', null, el('span', { text: 'CSS 片段（A-REQ-212）' })),
+        el('div', { class: 'body tight' },
+          fld('css', 'css —— 注入渲染端 Shadow DOM，可覆盖模板样式',
+            el('textarea', { class: 'mono', spellcheck: 'false', style: { minHeight: '160px' }, text: t.css || '', oninput: (e) => { t.css = e.target.value; scheduleValidate(); schedulePreview(); } })),
+        ),
+      ),
+      el('div', { class: 'card' },
+        el('header', null, el('span', { text: 'HTML 结构' })),
+        el('div', { class: 'body tight' },
+          fld('html', 'html —— 槽位用 {{key}} 插值 / data-slot="key" 绑定；多值槽位用行字段（rowKeys）',
+            el('textarea', { class: 'mono', spellcheck: 'false', style: { minHeight: '220px' }, text: t.html || '', oninput: (e) => { t.html = e.target.value; scheduleValidate(); schedulePreview(); } })),
+          el('div', { class: 'help', text: '校验会拦截 html 中引用未声明的槽位（{{xxx}} / data-slot），避免「渲染端永远拿不到值」的静默故障（A-REQ-215）。' }),
+        ),
+      ),
+    );
+  }
+
+  function badgeOf(t) {
+    return t.overridden
+      ? el('span', { class: 'tag P3', text: '已覆盖（内置副本 + 自定义）' })
+      : t.builtin
+        ? el('span', { class: 'tag', text: '内置' })
+        : el('span', { class: 'tag P2', text: '自定义' });
+  }
+
+  // ── slots 编辑 ──
+  function slotsCardEditor() {
+    const t = S.cur;
+    const body = el('div', { class: 'body tight' });
+    const card = el('div', { class: 'card' },
+      el('header', null,
+        el('span', { text: `槽位（slots · ${t.slots?.length || 0} 个）` }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          class: 'btn sm', text: '＋ 添加槽位',
+          onclick: () => {
+            t.slots = t.slots || [];
+            t.slots.push({ key: `slot${t.slots.length + 1}`, label: '新槽位', type: 'text', required: false });
+            rerender();
+            scheduleValidate();
+            schedulePreview();
+          },
+        }),
+      ),
+      body,
+    );
+    const rerender = () => {
+      clear(body);
+      (t.slots || []).forEach((sl, i) => body.append(slotRow(sl, i, rerender)));
+      if (!(t.slots || []).length) body.append(el('div', { class: 'muted small', text: '该模板没有槽位 —— 点「＋ 添加槽位」' }));
+    };
+    rerender();
+    return card;
+  }
+
+  function slotRow(sl, i, rerender) {
+    const p = `slots[${i}]`;
+    const set = (k, v) => { sl[k] = v; scheduleValidate(); schedulePreview(); };
+    return el('div', { class: 'card mt12', dataset: { path: p } },
+      el('div', { class: 'body tight' },
+        el('div', { class: 'inline mb8' },
+          el('span', { class: 'bold small', text: `#${i + 1}` }),
+          el('span', { class: 'grow' }),
+          el('button', {
+            class: 'btn ghost sm', text: '✕ 删除槽位',
+            onclick: () => { S.cur.slots.splice(i, 1); rerender(); scheduleValidate(); schedulePreview(); },
+          }),
+        ),
+        el('div', { class: 'cols two' },
+          fld(`${p}.key`, 'key（html 里 {{key}} / data-slot 引用）',
+            el('input', { type: 'text', class: 'mono', value: sl.key || '', oninput: (e) => set('key', e.target.value) })),
+          fld(`${p}.label`, 'label（控制端显示名）',
+            el('input', { type: 'text', value: sl.label || '', oninput: (e) => set('label', e.target.value) })),
+        ),
+        el('div', { class: 'cols two' },
+          fld(`${p}.type`, 'type',
+            el('select', { onchange: (e) => { sl.type = e.target.value; scheduleValidate(); schedulePreview(); rerender(); } },
+              SLOT_TYPES.map((x) => el('option', { value: x, text: x, selected: sl.type === x })),
+            )),
+          fld(`${p}.required`, 'required',
+            el('label', { class: 'check' },
+              el('input', { type: 'checkbox', checked: !!sl.required, onchange: (e) => set('required', e.target.checked) }),
+              el('span', { class: 'label', text: '必填槽位（显示前必须填）' }),
+            )),
+        ),
+        sl.type === 'text' ? fld(`${p}.maxLength`, 'maxLength（text 长度上限，留空不限）',
+          el('input', { type: 'number', min: '1', value: sl.maxLength ?? '', oninput: (e) => set('maxLength', e.target.value === '' ? undefined : Number(e.target.value)) })) : null,
+        sl.type === 'select' ? fld(`${p}.options`, 'options（逗号分隔的可选项）',
+          el('input', { type: 'text', value: (sl.options || []).join(','), oninput: (e) => set('options', e.target.value.split(',').map((s) => s.trim()).filter(Boolean)) })) : null,
+        (sl.type === 'text' || sl.type === 'image') ? fld(`${p}.multi`, 'multi',
+          el('label', { class: 'check' },
+            el('input', { type: 'checkbox', checked: !!sl.multi, onchange: (e) => { sl.multi = e.target.checked; scheduleValidate(); schedulePreview(); rerender(); } }),
+            el('span', { class: 'label', text: '多值槽位（渲染端按行渲染，行字段见 rowKeys）' }),
+          )) : null,
+        sl.multi ? fld(`${p}.rowKeys`, 'rowKeys（行字段，逗号分隔；通用字段 item / alt / index 无需声明）',
+          el('input', { type: 'text', class: 'mono', value: (sl.rowKeys || []).join(','), oninput: (e) => set('rowKeys', e.target.value.split(',').map((s) => s.trim()).filter(Boolean)) })) : null,
+        fld(`${p}.entitySource`, 'entitySource（实体一键填充的来源）',
+          el('select', { onchange: (e) => set('entitySource', e.target.value || undefined) },
+            ['', 'player', 'talent', 'sponsor'].map((x) => el('option', { value: x, text: x === '' ? '（无）' : x, selected: (sl.entitySource || '') === x })),
+          )),
+      ),
+    );
+  }
+
+  // ── 动画 / CSS 变量 ──
+  function animVarsCard() {
+    const t = S.cur;
+    const varsBox = el('div');
+    const card = el('div', { class: 'card' },
+      el('header', null, el('span', { text: '动画与 CSS 变量（A-REQ-211）' })),
+      el('div', { class: 'body' },
+        el('div', { class: 'cols two' },
+          fld('defaultAnim.in', '入场动画 in',
+            el('select', { onchange: (e) => { t.defaultAnim.in = e.target.value; scheduleValidate(); schedulePreview(); } },
+              ANIM_NAMES.map((x) => el('option', { value: x, text: x, selected: (t.defaultAnim?.in || 'fadeUp') === x })),
+            )),
+          fld('defaultAnim.out', '出场动画 out',
+            el('select', { onchange: (e) => { t.defaultAnim.out = e.target.value; scheduleValidate(); schedulePreview(); } },
+              ANIM_NAMES.map((x) => el('option', { value: x, text: x, selected: (t.defaultAnim?.out || 'fadeDown') === x })),
+            )),
+          fld('defaultAnim.durationMs', '动画时长 durationMs（毫秒）',
+            el('input', { type: 'number', min: '0', value: t.defaultAnim?.durationMs ?? 400, oninput: (e) => { t.defaultAnim.durationMs = Number(e.target.value) || 0; scheduleValidate(); } })),
+        ),
+        el('div', { class: 'mt12' },
+          el('label', { class: 'small bold dim', text: 'CSS 变量（cssVars）—— 模板 CSS 中以 var(--x) 引用，渲染端热改时原地生效' }),
+          varsBox,
+          el('button', { class: 'btn sm ghost mt8', text: '＋ 添加变量', onclick: () => { addVar(); } }),
+        ),
+      ),
+    );
+    const rerenderVars = () => {
+      clear(varsBox);
+      const entries = Object.entries(t.cssVars || {});
+      for (const [k, v] of entries) {
+        varsBox.append(el('div', { class: 'inline mb8', dataset: { path: `cssVars.${k}` } },
+          el('input', {
+            type: 'text', value: k, class: 'mono',
+            style: { width: '180px', flex: '0 0 auto' },
+            oninput: (e) => {
+              const nk = e.target.value;
+              if (nk === k) return;
+              const val = t.cssVars[k];
+              delete t.cssVars[k];
+              if (nk) t.cssVars[nk] = val;
+              scheduleValidate();
+              schedulePreview();
+            },
+          }),
+          el('input', { type: 'text', value: v, class: 'grow', oninput: (e) => { t.cssVars[k] = e.target.value; scheduleValidate(); schedulePreview(); } }),
+          el('button', { class: 'btn ghost sm', text: '✕', onclick: () => { delete t.cssVars[k]; rerenderVars(); scheduleValidate(); } }),
+        ));
+      }
+      if (!entries.length) varsBox.append(el('div', { class: 'muted small', text: '无 CSS 变量 —— 例：--accent: #d9d9d9（变量名必须以 -- 开头）' }));
+    };
+    const addVar = () => {
+      t.cssVars = t.cssVars || {};
+      t.cssVars[`--var${Object.keys(t.cssVars).length + 1}`] = '';
+      rerenderVars();
+      scheduleValidate();
+    };
+    rerenderVars();
+    return card;
+  }
+
+  // ═══════════════════ 实时校验（A-REQ-215） ═══════════════════
+  function scheduleValidate() {
+    dirty = true;
+    clearTimeout(valTimer);
+    valTimer = setTimeout(runValidate, 650);
+  }
+
+  async function runValidate() {
+    if (!S.cur) return;
+    let errors = {};
+    try {
+      const r = await api('/api/templates/validate', { method: 'POST', body: toBody(), quiet: true });
+      errors = r.errors || {};
+    } catch (e) {
+      errors = e.data?.errors || {};
+    }
+    showErrors(errors);
+    valState.textContent = Object.keys(errors).length
+      ? `${Object.keys(errors).length} 处问题（A-REQ-215）`
+      : '校验通过';
+    valState.style.color = Object.keys(errors).length ? 'var(--danger)' : 'var(--ok)';
+  }
+
+  function showErrors(errors) {
+    for (const n of $$('.err', editorBox)) n.remove();
+    for (const n of $$('.field.error', editorBox)) n.classList.remove('error');
+    clear(errBox);
+    for (const [path, msg] of Object.entries(errors || {})) {
+      const holder = editorBox.querySelector(`[data-path="${path}"]`);
+      if (holder) {
+        holder.classList.add('error');
+        holder.append(el('div', { class: 'err', text: `${msg}` }));
+      } else {
+        errBox.append(el('div', { class: 'err', text: `${path}: ${msg}` }));
+      }
+    }
+  }
+
+  // ═══════════════════ 实时预览（A-REQ-214） ═══════════════════
+  const pvFrame = el('iframe', {
+    src: '/render/main?preview=1&fit=1',
+    title: '模板实时预览',
+    style: { width: '100%', height: '100%', border: '0', display: 'block', background: '#05070d' },
+  });
+  const pvCard = el('div', { class: 'card' },
+    el('header', null,
+      el('span', { text: '实时预览（临时）' }),
+      el('span', { class: 'spacer' }),
+      el('button', { class: 'btn ghost sm', text: '⟳ 重新加载预览', onclick: () => { pvFrame.src = `/render/main?preview=1&fit=1&t=${Date.now()}`; } }),
+      el('button', { class: 'btn sm', text: '用当前数据预览', onclick: (e) => withBusy(e.target, previewWithData) }),
+    ),
+    el('div', { class: 'body tight' },
+      el('div', { style: { aspectRatio: '16/9', background: '#05070d', borderRadius: '8px', overflow: 'hidden' } }, pvFrame),
+      el('div', { class: 'help mt8', text: '临时预览：iframe 渲染的是服务端已加载的模板定义。编辑停止 1.2s 后自动刷新；未保存的改动不会出现 —— 保存后自动热重载生效，或点「用当前数据预览」把编辑器的示例槽位值推上去。' }),
+    ),
+  );
+
+  function schedulePreview() {
+    clearTimeout(pvTimer);
+    pvTimer = setTimeout(() => { pvFrame.src = `/render/main?preview=1&fit=1&t=${Date.now()}`; }, 1200);
+  }
+
+  async function previewWithData() {
+    if (!S.cur) return;
+    if (!S.list.some((t) => t.id === S.cur.id)) {
+      warn('该模板 id 尚未保存到服务端 —— 先保存再预览');
+      return;
+    }
+    const values = {};
+    for (const s of S.cur.slots || []) {
+      if (s.default !== undefined && s.default !== null) { values[s.key] = s.default; continue; }
+      if (s.type === 'text') values[s.key] = s.placeholder || '示例文本';
+      else if (s.type === 'select') values[s.key] = s.options?.[0] || '';
+      else if (s.type === 'color') values[s.key] = '#d9d9d4';
+      else if (s.type === 'number') values[s.key] = 0;
+      else values[s.key] = '';
+    }
+    try {
+      await ws.cmd('overlay.show', { template: S.cur.id, values });
+      ok('已用当前编辑器的示例槽位值推到预览（overlay.show）');
+    } catch (e) { cmdError(e, '预览推送'); }
+  }
+
+  // ═══════════════════ 数据 ═══════════════════
+  function toBody() {
+    const t = S.cur;
+    const body = {
+      id: t.id,
+      name: t.name,
+      category: t.category,
+      // 图形族 + 风格：决定它在控制台里和哪些模板归为一组
+      family: t.family || t.id,
+      style: t.style || 'classic',
+      slots: (t.slots || []).map((s) => ({ ...s })),
+      defaultAnim: { ...(t.defaultAnim || {}) },
+      cssVars: { ...(t.cssVars || {}) },
+      css: t.css || '',
+      html: t.html || '',
+    };
+    if (t.preview) body.preview = t.preview;
+    return body;
+  }
+
+  async function reloadList(selectId) {
+    try {
+      const r = await api('/api/templates/full');
+      S.list = r.items || [];
+      if (selectId) {
+        selectTpl(selectId);
+      } else if (S.cur) {
+        const fresh = S.list.find((x) => x.id === S.cur.id);
+        if (fresh && !dirty) selectTpl(fresh.id);   // 有未保存改动时不覆盖编辑器
+        else if (!fresh) S.cur = null;
+      }
+      renderList();
+      if (!S.cur) renderEditor();
+    } catch (e) { console.warn('[templates] 列表拉取失败', e.message); }
+  }
+
+  ws.on('templates:changed', () => reloadList(null));
+  ws.on('hello', () => reloadList(null));
+  window.ui.poll(() => { if (!ws.connected) reloadList(null); }, 20000);
+
+  page.append(el('div', { class: 'cols side' },
+    listCard,
+    el('div', { class: 'cols' }, toolbarCard, editorBox, pvCard),
+  ));
+
+  reloadList(null);
+})();
+</script>
+</body>
+</html>

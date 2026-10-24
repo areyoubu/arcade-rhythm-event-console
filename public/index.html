@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .hero {
+    padding: 20px 22px; border-radius: var(--radius-lg);
+    background: var(--surface);
+    border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    margin-bottom: 14px;
+  }
+  .hero h1 { font-size: 22px; margin-bottom: 6px; }
+  .hero p { color: var(--text-dim); font-size: 12.5px; margin: 0; max-width: 900px; line-height: 1.65; }
+
+  .nav-grid { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); }
+  .nav-card {
+    display: block; padding: 12px 14px; border-radius: var(--radius);
+    background: var(--surface); border: 1px solid var(--border);
+    transition: border-color .12s, background .12s;
+  }
+  .nav-card:hover { border-color: var(--border-strong); background: #30333a; text-decoration: none; }
+  .nav-card .t { font-weight: 700; font-size: 13px; margin-bottom: 3px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .nav-card .d { font-size: 11.5px; color: var(--text-mute); line-height: 1.55; }
+  .nav-card .badge-src {
+    margin-left: auto; font-size: 10px; font-weight: 600; padding: 0 5px; border-radius: 2px;
+    background: transparent; border: 1px solid var(--border-strong); color: var(--text-mute);
+    letter-spacing: .04em;
+  }
+  .nav-card.feature-off { opacity: .55; }
+  .nav-card.urgent { border-color: #6d2d2d; }
+  .nav-card.urgent:hover { border-color: var(--danger); }
+
+  .check-row { display: flex; align-items: flex-start; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+  .check-row:last-child { border-bottom: none; }
+  .check-row .ico { flex: 0 0 auto; width: 20px; text-align: center; font-weight: 800; }
+  .check-row .nm { font-weight: 700; min-width: 0; }
+  .check-row .ms { color: var(--text-mute); font-size: 12.5px; }
+  .check-row.ok .ico { color: var(--ok); }
+  .check-row.warn .ico { color: var(--warn); }
+  .check-row.error .ico { color: var(--danger); }
+  .check-row.unknown .ico { color: var(--text-mute); }
+  .check-row.manual { opacity: .85; }
+
+  .arch { font-family: var(--mono); font-size: 11.5px; line-height: 1.6; white-space: pre; overflow-x: auto;
+    background: #17181b; border: 1px solid var(--border); border-radius: 3px; padding: 14px; color: #9ea3a9; }
+
+  /* 当前赛事 */
+  .match-overview { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  .mo-main { min-width: 220px; flex: 1 1 260px; }
+  .mo-name { font-size: 18px; font-weight: 800; letter-spacing: .01em; }
+  .mo-sub { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 5px; }
+  .mo-score { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+  .mo-side { display: flex; flex-direction: column; gap: 1px; min-width: 90px; }
+  .mo-side.right { text-align: right; }
+  .mo-side .nm { font-size: 12px; font-weight: 700; color: var(--text-dim); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mo-side .val { font-family: var(--mono); font-size: 27px; font-weight: 800; line-height: 1.05; }
+  .mo-side.left .val { color: var(--left-color, #d0344e); }
+  .mo-side.right .val { color: var(--right-color, #3d78c9); }
+  .mo-vs { font-family: var(--mono); font-size: 12px; color: var(--text-mute); }
+  .mo-actions { display: flex; gap: 6px; flex-wrap: wrap; flex: 0 0 auto; }
+  .mo-song { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-mute); }
+  .mo-song b { color: var(--text-dim); font-weight: 700; }
+
+  /* 功能地图 */
+  .group-head { display: flex; align-items: baseline; gap: 10px; margin: 16px 0 8px; }
+  .group-head:first-child { margin-top: 0; }
+  .group-head .t { font-size: 14px; font-weight: 800; letter-spacing: .04em; }
+  .group-head .d { font-size: 11.5px; color: var(--text-mute); }
+  .nav-card .badge-public { color: var(--accent); border-color: var(--accent-dim); }
+</style>
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, clear } = ui;
+  const page = ui.mount({ current: '/', title: null });
+
+  // ── Hero ──
+  const hero = el('div', { class: 'hero' },
+    el('h1', { text: '街机音游赛事控制软件' }),
+    el('p', { html: 'OBS 做节目总切换，vMix 做视频回放机，浏览器做图形叠加、比赛计分与现场互动。各模块解耦：任一模块崩溃或停止，<strong>不得</strong>影响其余模块。' }),
+    el('div', { class: 'btn-row mt12' },
+      el('a', { class: 'btn primary', href: '/match', text: '比赛计分' }),
+      el('a', { class: 'btn ghost', href: '/scoreboard', text: '比分条' }),
+      el('a', { class: 'btn ghost', href: '/outputs', text: '输出与场景' }),
+      el('a', { class: 'btn ghost', href: '/director', text: '导播页' }),
+      el('a', { class: 'btn ghost', href: '/settings', text: '设置' }),
+    ),
+  );
+  page.append(hero);
+
+
+  // ── 当前赛事 ──
+  const matchBody = el('div', { class: 'body' });
+  const matchCard = el('div', { class: 'card mb16' },
+    el('header', null,
+      el('span', { text: '当前赛事' }),
+      el('span', { class: 'spacer' }),
+      el('a', { class: 'btn ghost sm', href: '/match', text: '打开比赛页' }),
+      el('a', { class: 'btn ghost sm', href: '/outputs', text: '输出与场景' }),
+    ),
+    matchBody,
+  );
+  page.append(matchCard);
+
+  function renderMatchOverview() {
+    const m = arcadeWS.state?.match?.state?.current;
+    const s = arcadeWS.state?.score?.state;
+    clear(matchBody);
+    const d = m?.derived || {};
+    const hasData = !!d.hasData;
+    if (!m || !hasData) {
+      matchBody.append(
+        el('div', { class: 'dim small', text: '还没有开始比赛。到「比赛计分」选好 P1/P2、选曲并录入分数后，这里会显示实时聚合分。' }),
+        el('div', { class: 'btn-row mt12' },
+          el('a', { class: 'btn primary sm', href: '/match', text: '开始比赛' }),
+          el('a', { class: 'btn ghost sm', href: '/scoreboard', text: '设置比分条' }),
+        ),
+      );
+      return;
+    }
+    const leftName = m.players?.left?.name || 'P1';
+    const rightName = m.players?.right?.name || 'P2';
+    const finished = m.status === 'finished';
+    const cur = (m.songs || []).find((x) => x.filled && x.index === m.currentIndex)
+      || (m.songs || []).find((x) => x.filled);
+    matchBody.append(
+      el('div', { class: 'match-overview' },
+        el('div', { class: 'mo-main' },
+          el('div', { class: 'mo-name', text: m.name || '未命名比赛' }),
+          el('div', { class: 'mo-sub' },
+            el('span', { class: `pill ${finished ? 'warn' : 'ok'}`, text: finished ? '已结束' : '进行中' }),
+            el('span', { class: 'pill mute', text: d.modeLabel || (m.mode === 'wins' ? '小局制' : '总分制') }),
+            el('span', { class: 'pill mute', text: s?.source === 'match' ? '比分条：跟随本局' : '比分条：手动比分' }),
+            el('span', { class: 'pill mute', text: `已录入 ${d.completeRows || 0} / 4 首` }),
+          ),
+        ),
+        el('div', { class: 'mo-score' },
+          el('div', { class: 'mo-side left' }, el('span', { class: 'nm', text: leftName }), el('span', { class: 'val', text: d.displayLeft ?? 0 })),
+          el('span', { class: 'mo-vs', text: ':' }),
+          el('div', { class: 'mo-side right' }, el('span', { class: 'nm', text: rightName }), el('span', { class: 'val', text: d.displayRight ?? 0 })),
+        ),
+        el('div', { class: 'mo-actions' },
+          el('a', { class: 'btn sm', href: '/match', text: '比赛计分' }),
+          el('a', { class: 'btn ghost sm', href: '/scoreboard', text: '比分条' }),
+          el('a', { class: 'btn ghost sm', href: '/render/match', target: '_blank', text: '总比分画面' }),
+          el('a', { class: 'btn ghost sm', href: '/outputs', text: '输出地址' }),
+        ),
+      ),
+      cur ? el('div', { class: 'mo-song' },
+        '当前曲目：', el('b', { text: cur.title || '未命名' }),
+        cur.difficultyName ? ` · ${cur.difficultyName} ${cur.levelText || ''}` : '',
+        cur.scoreLeft !== null || cur.scoreRight !== null
+          ? ` · 本轮 ${cur.scoreLeft ?? '—'} : ${cur.scoreRight ?? '—'}`
+          : ' · 待录入',
+      ) : null,
+    );
+  }
+
+  // ── 功能地图（按工作流分组，目录与顶栏 / 输出页共用） ──
+  const mapBody = el('div', { class: 'body' });
+  const mapCard = el('div', { class: 'card' },
+    el('header', null,
+      el('span', { text: '功能地图' }),
+      el('span', { class: 'spacer' }),
+      el('span', { class: 'sub', text: '按工作流分组 · OBS 地址统一在「输出与场景」' }),
+    ),
+    mapBody,
+  );
+  for (const group of ui.CATALOG) {
+    const items = group.items.filter((i) => i.kind !== 'render');
+    if (!items.length) continue;
+    mapBody.append(el('div', { class: 'group-head' },
+      el('span', { class: 't', text: group.label }),
+      el('span', { class: 'd', text: group.desc }),
+    ));
+    const grid = el('div', { class: 'nav-grid' });
+    for (const n of items) {
+      const isPublic = n.kind === 'public';
+      const offBadge = n.feature
+        ? el('span', { class: 'badge-src badge-off', text: '未启用', style: { display: 'none', color: 'var(--warn)', borderColor: 'var(--warn)' } })
+        : null;
+      grid.append(el('a', {
+        class: 'nav-card', href: n.href,
+        dataset: n.feature ? { feature: n.feature } : null,
+        title: n.desc || '',
+      },
+        el('div', { class: 't' },
+          el('span', { text: n.title }),
+          el('span', { class: `badge-src${isPublic ? ' badge-public' : ''}`, text: isPublic ? '公共' : (n.badge || '') }),
+          offBadge,
+        ),
+        el('div', { class: 'd', text: n.desc || '' }),
+      ));
+    }
+    mapBody.append(grid);
+  }
+  page.append(mapCard);
+
+  /** 未启用的功能在首页仍然可见，但标灰 + 「未启用」角标（点进去有说明与跳转） */
+  function syncFeatureCards() {
+    const feats = arcadeWS.state?.config?.features || {};
+    for (const a of mapBody.querySelectorAll('[data-feature]')) {
+      const off = !feats[a.dataset.feature];
+      a.classList.toggle('feature-off', off);
+      const b = a.querySelector('.badge-off');
+      if (b) b.style.display = off ? '' : 'none';
+    }
+  }
+
+  // ── 状态 + 自检 ──
+  const cols = el('div', { class: 'cols two mt16' });
+  const statusCard = el('div', { class: 'card' }, el('header', null, '链路状态'), el('div', { class: 'body' }));
+  const checkCard = el('div', { class: 'card' },
+    el('header', null, el('span', { text: '开播检查清单' }), el('span', { class: 'spacer' }),
+      el('button', { class: 'btn ghost sm', text: '↻ 重新自检', onclick: () => runCheck(true) })),
+    el('div', { class: 'body' }),
+  );
+  cols.append(statusCard, checkCard);
+  page.append(cols);
+
+  // ── 架构说明 ──
+  page.append(el('div', { class: 'card mt16' },
+    el('header', null, '信号流（SRS §2.2）'),
+    el('div', { class: 'body' },
+      el('div', { class: 'arch', text: `【视频】
+游戏采集 ──┐
+选手摄像头 ─┤→ [CLEAN 场景] ─NDI Dedicated Output─→ vMix ─→ [Replay 输入]
+计分条    ─┘        │                                   │
+                    │                                   ├─→ Output 2 (Source=Replay)
+                    │                                   │        │ NDI
+                    │                                   │        ▼
+                    │                                   │  [vMix 回放源] ──┐
+                    └───────────────┐                   │                   │
+                                    ▼                   │                   ▼
+                            [LIVE 场景]            [REPLAY 场景] ◄───────────┘
+                              + 浮窗                  + REPLAY 标识
+                                    │                  + 浮窗(共享实例)
+                                    └────────┬─────────┘
+                                             ▼
+                                        直播 / 录制
+
+【导播 / 解说端（不使用媒体服务器）】
+/ director、/cast 页面 ──OBS 浏览器源──► OBS 场景 ──NDI / HDMI──► 监视器
+
+【控制】
+所有控制台 ──WebSocket──► 中转服务 ──┬──► OBS WebSocket
+                                     └──► vMix HTTP API` }),
+      el('div', { class: 'note info mt12', html:
+        '导播端与解说端已改为 <strong>OBS 浏览器源 + NDI / HDMI</strong> 输出，<strong>不再需要 MediaMTX 等媒体服务器</strong>。'
+        + '把 /director 与 /cast 分别加为 OBS 浏览器源（建议 1920×1080、60fps、shutdown=false），再用 NDI 或 HDMI 送到监视器即可。' }),
+    ),
+  ));
+
+
+  // ══════════════════════════════════════════════════════
+  // 链路状态
+  // ══════════════════════════════════════════════════════
+  const statusBody = statusCard.querySelector('.body');
+  function renderStatus() {
+    const s = arcadeWS.state || {};
+    const h = s.health || {};
+    const cfg = s.config || {};
+    clear(statusBody);
+    const rows = [
+      ['vMix HTTP API', h.vmix?.connected, h.vmix?.connected ? `已连接 · RTT ${h.vmix.rttMs ?? 0}ms` : (h.vmix?.lastErr || '未连接'), h.vmix?.failCount ? `连续失败 ${h.vmix.failCount} 次（≥5 次将停用回放宏）` : null],
+      ['OBS WebSocket', h.obs?.connected, h.obs?.connected ? `已连接 · ${h.obs.version?.obsWebSocketVersion || ''}` : (h.obs?.lastErr || '未连接'), null],
+      ['OBS 浏览器源', (h.overlayClients ?? 0) > 0,
+        `${h.overlayClients ?? 0} 个已连接（主叠加 / 致谢 / 比分条 / 总比分 / 选曲 / 抽奖）`,
+        (h.overlayClients ?? 0) === 0
+          ? '浏览器源未加载：到「输出与场景」核对地址与 shutdown=false'
+          : '逐路地址与连接状态见「输出与场景」'],
+      ['解说端接入', (s.cue?.counts?.cast ?? 0) > 0, `解说端 ${s.cue?.counts?.cast ?? 0} · 导播端 ${s.cue?.counts?.director ?? 0}`, (s.cue?.counts?.cast ?? 0) === 0 ? '把 /cast 作为 OBS 浏览器源加入场景' : null],
+      ['回放录制', s.replay?.recording, s.replay?.recording ? 'recording = true' : 'recording = false（回放宏不可用）', null],
+      ['回放相位', null, window.fmt.phaseLabel(s.replay?.phase || 'IDLE'), null],
+      ['受众客户端', null, Object.entries(s.cue?.counts || {}).map(([k, v]) => `${k}:${v}`).join('  ·  ') || '无', null],
+      ['服务端口', null, `${cfg.server?.overlayPort || '—'} / ${cfg.server?.controlPort || '—'}`, s.config?.restartPending ? '端口已改，需重启服务' : null],
+    ];
+    for (const [name, good, text, hint] of rows) {
+      statusBody.append(el('div', { class: 'check-row' },
+        el('span', { class: 'ico', text: good === true ? '●' : good === false ? '●' : '○', style: { color: good === true ? 'var(--ok)' : good === false ? 'var(--danger)' : 'var(--text-mute)' } }),
+        el('div', { class: 'grow' },
+          el('div', { class: 'nm', text: name }),
+          el('div', { class: 'ms', text: text }),
+          hint ? el('div', { class: 'ms', style: { color: 'var(--warn)' }, text: hint }) : null,
+        ),
+      ));
+    }
+    // 配置错误
+    const errs = cfg.errors || {};
+    if (Object.keys(errs).length) {
+      statusBody.append(el('div', { class: 'note danger mt12', html: `<strong>配置有 ${Object.keys(errs).length} 处问题</strong>（已回退默认值）<br>${ui.esc(Object.entries(errs).map(([k, v]) => `${k}: ${v}`).join('\n'))}` }));
+      statusBody.append(el('div', { class: 'btn-row mt8' }, el('a', { class: 'btn sm', href: '/settings', text: '前往设置修正' })));
+    }
+  }
+  arcadeWS.start({});
+  arcadeWS.on('hello', renderStatus);
+  arcadeWS.on('patch', renderStatus);
+  arcadeWS.on('hello', renderMatchOverview);
+  arcadeWS.on('patch', (m) => {
+    const p = String(m.path || '');
+    if (!p || p.startsWith('match.') || p.startsWith('score.') || p.startsWith('overlay.lineup')) renderMatchOverview();
+  });
+  arcadeWS.on('hello', syncFeatureCards);
+  arcadeWS.on('patch', (m) => {
+    if (m.path === 'config.features' || String(m.path || '').startsWith('config.features.')) syncFeatureCards();
+  });
+  setTimeout(syncFeatureCards, 50);
+  setTimeout(renderStatus, 200);
+  setTimeout(renderMatchOverview, 120);
+  setInterval(renderStatus, 2000);
+  setInterval(renderMatchOverview, 3000);
+
+  // ══════════════════════════════════════════════════════
+  // 开播检查清单
+  // ══════════════════════════════════════════════════════
+  const checkBody = checkCard.querySelector('.body');
+  async function runCheck(verbose) {
+    clear(checkBody);
+    checkBody.append(el('div', { class: 'muted small', text: '自检中…' }));
+    try {
+      const d = await ui.api('/api/checklist', { quiet: true });
+      clear(checkBody);
+      const s = d.summary;
+      checkBody.append(el('div', { class: 'inline mb12' },
+        el('span', { class: 'pill ok', text: `正常 ${s.ok}` }),
+        el('span', { class: 'pill warn', text: `警告 ${s.warn}` }),
+        el('span', { class: 'pill err', text: `错误 ${s.error}` }),
+        el('span', { class: 'pill mute', text: `须人工确认 ${s.manual}` }),
+      ));
+      const ICONS = { ok: '✔', warn: '!', error: '✖', unknown: '?' };
+      for (const it of d.items) {
+        const cls = it.manual ? 'manual' : it.status;
+        checkBody.append(el('div', { class: `check-row ${cls}` },
+          el('span', { class: 'ico', text: ICONS[it.status] || '·' }),
+          el('div', { class: 'grow' },
+            el('div', { class: 'nm' }, it.name, it.manual ? el('span', { class: 'badge-src', style: { marginLeft: '8px' }, text: '须人工' }) : null),
+            el('div', { class: 'ms', text: it.detail || '' }),
+          ),
+        ));
+      }
+      if (verbose) ui.ok(`自检完成：${s.error} 个错误、${s.warn} 个警告`);
+    } catch (e) {
+      clear(checkBody);
+      checkBody.append(el('div', { class: 'note danger', text: `自检失败：${e.message}` }));
+    }
+  }
+  runCheck(false);
+})();
+</script>
+</body>
+</html>

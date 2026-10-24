@@ -1,0 +1,42 @@
+# dependencies
+node_modules/
+
+# runtime logs
+logs/*
+!logs/.gitkeep
+
+# runtime media (uploaded / generated assets)
+media/*
+!media/.gitkeep
+
+# runtime data (created on first run)
+data/entities.json
+data/entities.json.bak
+data/lottery.json
+data/match.json
+data/music.json
+chunithm_songs.json
+data/covers/
+data/scoreboard.json
+data/media-index.json
+data/*.tmp
+data/*.bak
+
+# local config with secrets
+config/config.json
+config/*密钥*.txt
+
+# real remote configs with tokens
+remote/edge.config.json
+remote/agent.config.json
+remote/config.json
+
+# local / IDE / OS
+.env
+.env.*
+*.local
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.log

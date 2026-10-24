@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>比分条 · 街机音游赛事控制软件</title>
+<!--
+  比赛用常驻叠加：顶部比分条 + 左右两块选手牌，**同一个浏览器源**。
+
+  为什么合成一个页面：
+    OBS 里每多一个浏览器源，就多一份 Chromium 渲染开销与内存占用。
+    比分条、P1、P2 三块内容一次性画完，OBS 只需要加这一路。
+
+  硬性约定：
+    · 背景完全透明（不得有整页底色，否则会盖住比赛画面）
+    · 1920×1080，OBS 浏览器源按同尺寸添加，shutdown=false / restart_when_active=false
+    · WS 断开时保持最后一帧，绝不显示错误文案
+-->
+<style>
+  :root {
+    --left-color: #d0344e;
+    --right-color: #3d78c9;
+    --plate-bg: rgba(10, 10, 12, .96);
+    --plate-border: #33333a;
+    --ink: #ffffff;
+    --ink-dim: #b9b9b9;
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: transparent !important;
+    overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  /* 预览模式：棋盘格底衬，方便在控制台里看清透明区域 */
+  body.preview {
+    background: repeating-conic-gradient(#191a1d 0% 25%, #121316 0% 50%) 50% / 32px 32px !important;
+  }
+  /* 独立窗口输出（普通浏览器窗口没有透明通道） */
+  body.windowed { background: #0b0b0b !important; }
+
+  #stage {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    pointer-events: none;
+  }
+  .hidden-part { display: none !important; }
+  body.is-hidden #stage { display: none; }
+
+  /*
+   * 分件输出模式（?part=bar|left|right）
+   * 画布固定为「设计尺寸 × 布局缩放」，元件在画布左上角 1:1 摆放，
+   * 整张画布再居中到 OBS 源里 —— 与合并输出中同一 scale 下的像素大小完全一致。
+   */
+  body.part #stage { left: 50%; top: 50%; transform-origin: center center; }
+  body.part .bar { left: 0; top: 0; transform: none; }
+  body.part .plates { position: static; }
+  body.part .plate { left: 0; top: 0; transform: none; }
+  body.part-bar #plates { display: none !important; }
+  body.part-left #bar, body.part-right #bar { display: none !important; }
+  body.part-left .plate-right, body.part-right .plate-left { display: none !important; }
+
+  /* 控制台预览里可拖动（?edit=1）；OBS 里不要带这个参数 */
+  body.edit .bar, body.edit .plate {
+    pointer-events: auto; cursor: move;
+    outline: 1px dashed rgba(255, 255, 255, .45); outline-offset: 2px;
+  }
+
+  /* ── 顶部比分条（设计尺寸 1180×104，位置/缩放由布局状态驱动）── */
+  .bar {
+    position: absolute;
+    left: 370px; top: 44px;
+    width: 1180px; height: 104px;
+    transform-origin: top left;
+    display: flex; align-items: stretch;
+    box-sizing: border-box;
+    filter: drop-shadow(0 10px 26px rgba(0, 0, 0, .45));
+  }
+  .team {
+    position: relative;
+    display: flex; align-items: center; gap: 16px;
+    flex: 1 1 0; min-width: 0;
+    padding: 0 26px;
+    background: var(--plate-bg);
+    border: 1px solid var(--plate-border);
+    box-sizing: border-box;
+  }
+  /* 比赛结束后标记胜方 —— 只用一条内侧金线 + WIN，不改变比分数字颜色 */
+  .team.is-winner { box-shadow: inset 0 0 0 2px rgba(217, 164, 65, .62); }
+  .team.is-winner::after {
+    content: 'WIN';
+    position: absolute; top: 5px;
+    font-family: var(--mono); font-size: 11px; font-weight: 800;
+    letter-spacing: 2px; color: #d9a441;
+  }
+  .team-left.is-winner::after { left: 16px; }
+  .team-right.is-winner::after { right: 16px; }
+  .team.is-draw { box-shadow: inset 0 0 0 2px rgba(160, 160, 170, .35); }
+  .team-left {
+    justify-content: flex-end;
+    border-left: 6px solid var(--left-color);
+    border-right: none;
+  }
+  .team-right {
+    justify-content: flex-start;
+    border-right: 6px solid var(--right-color);
+    border-left: none;
+  }
+  .logo { width: 48px; height: 48px; flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
+  .logo img { max-width: 100%; max-height: 100%; object-fit: contain; display: none; }
+  .logo img.is-ready { display: block; }
+  .logo-fb { width: 8px; height: 8px; background: var(--ink-dim); display: block; }
+  .logo img.is-ready + .logo-fb { display: none; }
+
+  .team-name {
+    flex: 1 1 auto; min-width: 0;
+    font-size: 30px; font-weight: 700; color: var(--ink);
+    letter-spacing: 1px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  .team-left .team-name { text-align: right; }
+  .team-right .team-name { text-align: left; }
+  .team-name:empty { display: none; }
+
+  .score {
+    font-family: var(--mono);
+    font-size: 52px; font-weight: 800; line-height: 1;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+    min-width: 96px; text-align: center;
+    letter-spacing: -1px;
+    transition: font-size .12s ease-out;
+  }
+  /*
+   * 总分制下分会到 7 位（例如 1,008,432）。固定 52px 会把队名挤没，
+   * 这里按位数缩字号；胜局制仍是 0–4，保持最大的 52px。
+   */
+  .score[data-digits="4"] { font-size: 46px; }
+  .score[data-digits="5"] { font-size: 40px; min-width: 124px; }
+  .score[data-digits="6"] { font-size: 34px; min-width: 142px; letter-spacing: -1.5px; }
+  .score[data-digits="7"] { font-size: 29px; min-width: 158px; letter-spacing: -1.5px; }
+  .score[data-digits="8"] { font-size: 25px; min-width: 172px; letter-spacing: -2px; }
+  .team-left .score { margin-left: 12px; color: var(--left-color); }
+  .team-right .score { margin-right: 12px; color: var(--right-color); }
+
+  .mid {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 3px;
+    width: 170px; flex: 0 0 auto;
+    padding: 0 16px;
+    background: #ecebe6;
+    color: #121212;
+    box-sizing: border-box;
+  }
+  .mid-label {
+    font-size: 18px; font-weight: 700; letter-spacing: 1px;
+    max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mid-label:empty { display: none; }
+  .mid-meta {
+    font-family: var(--mono); font-size: 10.5px; font-weight: 700;
+    letter-spacing: 1px; color: #5f5f64; line-height: 1;
+    max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .mid-meta:empty { display: none; }
+  .mid-vs { font-size: 12px; font-weight: 700; letter-spacing: 3px; color: #5a5a5a; }
+
+  /* ── 选手牌（设计尺寸 470×116）── */
+  .plates { position: static; }
+  .plate {
+    position: absolute;
+    display: flex; align-items: center; gap: 16px;
+    width: 470px; height: 116px;
+    padding: 0 28px 0 0;
+    background: var(--plate-bg);
+    border: 1px solid var(--plate-border);
+    box-sizing: border-box;
+    transform-origin: top left;
+    filter: drop-shadow(0 10px 24px rgba(0, 0, 0, .42));
+  }
+  .plate-left { left: 64px; top: 172px; border-left: 5px solid var(--left-color); }
+  .plate-right {
+    left: 1386px; top: 172px;
+    flex-direction: row-reverse; border-right: 5px solid var(--right-color);
+    padding: 0 0 0 28px;
+  }
+  .plate.is-winner { box-shadow: inset 0 0 0 2px rgba(217, 164, 65, .55); }
+  .plate.is-winner::after {
+    content: 'WIN';
+    position: absolute; top: 7px;
+    font-family: var(--mono); font-size: 10px; font-weight: 800;
+    letter-spacing: 2px; color: #d9a441;
+  }
+  .plate-left.is-winner::after { right: 12px; }
+  .plate-right.is-winner::after { left: 12px; }
+
+  .pbadge {
+    align-self: stretch;
+    display: flex; align-items: center; justify-content: center;
+    width: 68px; flex: 0 0 auto;
+    font-family: var(--mono);
+    font-size: 26px; font-weight: 800; letter-spacing: 1px;
+    color: #fff;
+  }
+  .plate-left .pbadge { background: var(--left-color); }
+  .plate-right .pbadge { background: var(--right-color); }
+
+  .pavatar { width: 76px; height: 76px; flex: 0 0 auto; overflow: hidden; background: #17171b; border: 1px solid #3a3a42; }
+  .pavatar img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .pavatar img.is-ready { display: block; }
+  .pavatar-fb { display: block; width: 100%; height: 100%; background: #17171b; }
+  .pavatar img.is-ready + .pavatar-fb { display: none; }
+
+  .pmeta { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 auto; }
+  .plate-right .pmeta { align-items: flex-end; text-align: right; }
+  .pname {
+    font-size: 36px; font-weight: 700; color: var(--ink);
+    line-height: 1.1; white-space: nowrap;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pteam {
+    font-size: 18px; font-weight: 500; color: var(--ink-dim);
+    letter-spacing: 1px; white-space: nowrap;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  }
+  .pteam:empty { display: none; }
+</style>
+</head>
+<body>
+<div id="stage">
+  <div class="bar" id="bar" data-part="bar">
+    <div class="team team-left">
+      <span class="logo"><img id="leftLogo" alt="" /><span class="logo-fb"></span></span>
+      <span class="team-name" id="leftTeam"></span>
+      <span class="score" id="leftScore">0</span>
+    </div>
+    <div class="mid">
+      <span class="mid-label" id="label"></span>
+      <span class="mid-meta" id="meta"></span>
+      <span class="mid-vs">VS</span>
+    </div>
+    <div class="team team-right">
+      <span class="score" id="rightScore">0</span>
+      <span class="team-name" id="rightTeam"></span>
+      <span class="logo"><img id="rightLogo" alt="" /><span class="logo-fb"></span></span>
+    </div>
+  </div>
+
+  <div class="plates" id="plates">
+    <div class="plate plate-left" data-part="left">
+      <span class="pbadge">P1</span>
+      <span class="pavatar"><img id="leftPlayerImg" alt="" /><span class="pavatar-fb"></span></span>
+      <span class="pmeta">
+        <span class="pname" id="leftPlayerName"></span>
+        <span class="pteam" id="leftTeamName"></span>
+      </span>
+    </div>
+    <div class="plate plate-right" data-part="right">
+      <span class="pbadge">P2</span>
+      <span class="pavatar"><img id="rightPlayerImg" alt="" /><span class="pavatar-fb"></span></span>
+      <span class="pmeta">
+        <span class="pname" id="rightPlayerName"></span>
+        <span class="pteam" id="rightTeamName"></span>
+      </span>
+    </div>
+  </div>
+</div>
+<script src="/shared/ws.js"></script>
+<script src="/render/score.js"></script>
+</body>
+</html>

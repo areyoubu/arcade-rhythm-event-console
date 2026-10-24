@@ -1,0 +1,14 @@
+{
+  "name": "arcade-live-remote",
+  "private": true,
+  "type": "module",
+  "description": "赛事直播控制台 · 公网远端入口 / 内网 Agent（可单独复制到公网机器运行）",
+  "scripts": {
+    "edge": "node edge.mjs",
+    "agent": "node agent.mjs",
+    "direct": "node index.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

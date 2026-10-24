@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>解说端叠加 · 街机音游赛事控制软件</title>
+<!--
+  解说端 —— **透明背景的 OBS 浏览器源**。
+
+  用途：把本页加进 OBS 场景，作为叠加层盖在送给解说的画面上，
+        再由 OBS 用 NDI 或 HDMI 输出到解说的监视器。
+
+  硬性约定（与 /render/main 一致）：
+    · 背景必须透明（不能有任何不透明的整页底色，否则会挡住画面）
+    · 页面尺寸 1920×1080，OBS 浏览器源按同尺寸添加
+    · close/shutdown = false、restart_when_active = false
+    · 不得显示任何报错文案（解说会看到）
+
+  URL 参数：
+    ?preview=1   控制端 iframe 预览（显示棋盘格底衬，方便看透明区域）
+    ?scale=0.5   等比缩放
+    ?fit=1       按窗口自适应缩放
+    ?ack=1       显示「收到」按钮（在普通浏览器里给解说点；OBS 里点不了，默认关闭）
+  ⚠️ 本页没有导航栏、没有状态栏 —— 它是要直接投到监视器上的。
+-->
+<style>
+  :root {
+    --cue-p0: #bd4b4b;
+    --cue-p1: #c97a3f;
+    --cue-p2: #c7a044;
+    --cue-p3: #7f8fa6;
+    --cast-accent: #d9d9d4;
+  }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: transparent !important;
+    overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #stage {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    overflow: hidden;
+    pointer-events: none;          /* 叠加层不吃鼠标事件 */
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 28px;
+    padding: 60px 90px; box-sizing: border-box;
+  }
+  #stage.has-ack { pointer-events: auto; }
+
+  /* 预览模式：棋盘格底衬，让操作员看清哪里是透明的（OBS 里不会出现） */
+  body.preview { background:
+    repeating-conic-gradient(#191d28 0% 25%, #141821 0% 50%) 50% / 32px 32px !important; }
+
+  /* ── 提示卡 ── */
+  .cue-card {
+    position: relative;
+    max-width: 86%;
+    min-width: 46%;
+    padding: 34px 64px;
+    border-radius: 6px;
+    background: rgba(8, 8, 9, .88);
+    border: 2px solid rgba(255, 255, 255, .14);
+    display: flex; flex-direction: column; align-items: center; gap: 18px;
+    text-align: center;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
+  }
+  .cue-card.P0 { border-color: var(--cue-p0); background: rgba(24, 8, 10, .92); }
+  .cue-card.P1 { border-color: var(--cue-p1); background: rgba(24, 16, 8, .92); }
+  .cue-card.P2 { border-color: var(--cue-p2); background: rgba(22, 19, 8, .92); }
+  .cue-card.P3 { border-color: var(--cue-p3); background: rgba(10, 12, 16, .92); }
+
+  /* P0 脉冲边框 */
+  .cue-card.P0::after {
+    content: ''; position: absolute; inset: -2px; border-radius: 6px; pointer-events: none;
+    border: 2px solid rgba(189, 75, 75, .85);
+    animation: cast-pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes cast-pulse { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
+  .cue-card.flash { animation: cast-flash 1s ease-in-out 3; }
+  @keyframes cast-flash { 0%, 100% { filter: none } 50% { filter: brightness(1.6) } }
+
+  .cue-title {
+    font-size: 76px; font-weight: 900; line-height: 1.15;
+    color: #fff; letter-spacing: .01em;
+    text-shadow: 0 3px 18px rgba(0, 0, 0, .85), 0 0 2px rgba(0, 0, 0, .95);
+    max-width: 100%; word-break: break-word;
+  }
+  .cue-body {
+    font-size: 40px; font-weight: 600; color: #d7deec; line-height: 1.35;
+    text-shadow: 0 2px 12px rgba(0, 0, 0, .8);
+  }
+
+  /* 倒计时数字：≥ 20vh 等效（1080 画布下约 220px） */
+  .cue-count { display: flex; align-items: baseline; gap: 22px; }
+  .cue-count .num {
+    font-size: 220px; font-weight: 900; line-height: .9;
+    font-variant-numeric: tabular-nums; letter-spacing: -.03em;
+    color: var(--cast-accent);
+    text-shadow: 0 6px 26px rgba(0, 0, 0, .9);
+  }
+  .cue-count.P0 .num { color: #d97a7a; text-shadow: 0 6px 26px rgba(0,0,0,.9); }
+  .cue-count.P1 .num { color: #d99a62; }
+  .cue-count.P2 .num { color: #d9bd6a; }
+  .cue-count .unit { font-size: 52px; font-weight: 700; color: #c9d3e4; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
+
+  .ack-btn {
+    pointer-events: auto;
+    margin-top: 6px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 16px;
+    min-width: 520px; min-height: 108px; padding: 0 44px;
+    font-size: 46px; font-weight: 900; font-family: inherit;
+    color: #0c1a12; background: #4f9b6d;
+    border: 2px solid #62b183; border-radius: 6px; cursor: pointer;
+    box-shadow: none;
+  }
+  .ack-btn:disabled { filter: grayscale(1) brightness(.7); cursor: default; box-shadow: none; }
+
+  .ack-hint { font-size: 24px; color: #93a0b6; font-weight: 600; }
+
+  .empty { display: none; }        /* 没有提示时**什么都不画**（保持完全透明） */
+
+  body.preview .empty {
+    display: block; position: fixed; right: 20px; bottom: 16px;
+    padding: 8px 14px; border-radius: 8px;
+    background: rgba(0, 0, 0, .6); color: #8d9bb2;
+    font-size: 14px; font-family: ui-monospace, Consolas, monospace;
+  }
+
+  /* 声音解锁提示：只在预览模式下显示，避免投到监视器上 */
+  .sound-hint { display: none; }
+  body.preview .sound-hint {
+    display: flex; position: fixed; left: 20px; bottom: 16px;
+    align-items: center; gap: 10px;
+    padding: 8px 14px; border-radius: 8px;
+    background: rgba(0, 0, 0, .65); color: #f5c451; font-size: 15px; font-weight: 700;
+  }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div class="empty" id="emptyHint">透明叠加 · 当前无提示</div>
+<div class="sound-hint" id="soundHint"><span>声音未启用（点击页面可尝试启用）</span></div>
+
+<script src="/shared/format.js"></script>
+<script src="/shared/audio.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const Q = new URLSearchParams(location.search);
+  const PREVIEW = Q.get('preview') === '1';
+  const SHOW_ACK = Q.get('ack') === '1';
+  const CANVAS = { width: 1920, height: 1080 };
+
+  if (PREVIEW) document.body.classList.add('preview');
+
+  const $stage = document.getElementById('stage');
+  const $empty = document.getElementById('emptyHint');
+  const $sound = document.getElementById('soundHint');
+
+  // 画布缩放（?scale= / ?fit=）
+  (function applyScale() {
+    const sc = Q.get('scale');
+    const fit = Q.get('fit') === '1';
+    let s = sc ? Number(sc) || 1 : 1;
+    if (!sc && fit) s = Math.min(window.innerWidth / CANVAS.width, window.innerHeight / CANVAS.height);
+    $stage.style.width = `${CANVAS.width}px`;
+    $stage.style.height = `${CANVAS.height}px`;
+    if (s !== 1) { $stage.style.transformOrigin = 'top left'; $stage.style.transform = `scale(${s})`; }
+    window.addEventListener('resize', () => { if (fit) location.reload(); });
+  })();
+
+  // 身份：audience='cast'。服务端只把 cast 频道的提示推给本页。
+  arcadeWS.start({ audience: 'cast' });
+
+  // ── 声音（C-REQ-560 / 564）──
+  const audio = window.audioCue;
+  function unlockOnce() {
+    audio.unlock().then(() => {
+      $sound.style.display = audio.status().unlocked ? 'none' : '';
+      // 视觉提示始终独立生效，与声音是否解锁无关（C-REQ-564）
+    });
+  }
+  document.addEventListener('click', unlockOnce, { once: true });
+  document.addEventListener('keydown', unlockOnce, { once: true });
+  unlockOnce();
+
+  arcadeWS.on('cue:sound', (m) => {
+    if (!m || !m.sound || m.sound === 'none') return;
+    const played = audio.play(m.sound);
+    if (!played && !audio.status().unlocked) {
+      const top = $stage.firstElementChild;
+      if (top) { top.classList.remove('flash'); void top.offsetWidth; top.classList.add('flash'); }
+    }
+  });
+
+  // ── 提示渲染（C-REQ-822：最多 2 条）──
+  let cues = [];
+  const ranked = { P0: 0, P1: 1, P2: 2, P3: 3 };
+
+  arcadeWS.on('cue:set', (m) => {
+    cues = (m.cues || []).slice().sort((a, b) => (ranked[a.priority] - ranked[b.priority]) || (b.createdAt - a.createdAt));
+    render();
+    if (cues.some((c) => c.priority === 'P0')) {
+      const top = $stage.firstElementChild;
+      if (top) { top.classList.remove('flash'); void top.offsetWidth; top.classList.add('flash'); }
+    }
+  });
+
+  // 倒计时本地插值（C-REQ-528）
+  const cdState = new Map();
+  arcadeWS.on('cue:tick', (m) => {
+    if (m.state && m.state !== 'running') { cdState.delete(m.countdownId); return; }
+    cdState.set(m.countdownId || m.cueId, { remainAtRecv: m.remainingMs, recvAt: performance.now(), title: m.title });
+  });
+  arcadeWS.on('countdown:cancel', (m) => cdState.delete(m.countdownId));
+  arcadeWS.on('countdown:zero', () => cdState.clear());
+
+  function currentRemaining() {
+    let best = null;
+    for (const [, v] of cdState) {
+      const remain = Math.max(0, v.remainAtRecv - (performance.now() - v.recvAt));
+      if (best === null || remain < best.remain) best = { remain };
+    }
+    return best;
+  }
+
+  function frameLoop() {
+    requestAnimationFrame(frameLoop);
+    const node = $stage.querySelector('[data-cd-num]');
+    if (!node) return;
+    const cur = currentRemaining();
+    const txt = cur ? String(Math.max(0, Math.ceil(cur.remain / 1000))) : '0';
+    if (node.textContent !== txt) node.textContent = txt;
+  }
+  requestAnimationFrame(frameLoop);
+
+  function render() {
+    const show = cues.slice(0, 2);
+    $empty.style.display = show.length ? 'none' : (PREVIEW ? 'block' : 'none');
+
+    // 用 replaceChildren 一次性替换，避免残留
+    const frag = document.createDocumentFragment();
+    for (const c of show) frag.append(renderCue(c));
+    $stage.replaceChildren(frag);
+
+    const hasAck = SHOW_ACK && show.some((c) => c.requiresAck);
+    $stage.classList.toggle('has-ack', hasAck);
+  }
+
+  function el(tag, attrs, ...kids) {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs || {})) {
+      if (v === null || v === undefined || v === false) continue;
+      if (k === 'class') n.className = v;
+      else if (k === 'text') n.textContent = v;
+      else if (k === 'dataset') Object.assign(n.dataset, v);
+      else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2).toLowerCase(), v);
+      else n.setAttribute(k, v === true ? '' : v);
+    }
+    for (const kid of kids.flat()) {
+      if (kid === null || kid === undefined || kid === false) continue;
+      n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+    }
+    return n;
+  }
+
+  function renderCue(c) {
+    const card = el('div', { class: `cue-card ${c.priority}` });
+    const cd = cdState.get(c.id) || [...cdState.values()].find((v) => v.title === c.title);
+
+    if (c.kind === 'countdown' && cd) {
+      card.append(el('div', { class: `cue-count ${c.priority}` },
+        el('div', { class: 'num', dataset: { cdNum: '1' }, text: String(Math.ceil(cd.remainAtRecv / 1000)) }),
+        el('div', { class: 'unit', text: '秒' }),
+      ));
+      if (c.title) card.append(el('div', { class: 'cue-title', style: { fontSize: '52px' }, text: c.title }));
+    } else {
+      card.append(el('div', { class: 'cue-title', text: c.title }));
+      if (c.body) card.append(el('div', { class: 'cue-body', text: c.body }));
+    }
+
+    // 回执按钮只在 ?ack=1 时出现 —— OBS 浏览器源里点不了，默认不显示
+    if (SHOW_ACK && c.requiresAck) {
+      const btn = el('button', {
+        class: 'ack-btn', type: 'button',
+        onclick: () => {
+          if (btn.disabled) return;
+          arcadeWS.notify('ack', { cueId: c.id, at: Date.now() });
+          btn.disabled = true;
+          btn.textContent = '已确认';
+          cues = cues.filter((x) => x.id !== c.id);
+          setTimeout(render, 200);
+        },
+      }, el('span', { text: '收到' }));
+      card.append(btn);
+      card.append(el('div', { class: 'ack-hint', text: '按 空格 / 回车 也可以确认' }));
+    }
+    return card;
+  }
+
+  // ?ack=1 时支持键盘确认
+  if (SHOW_ACK) {
+    document.addEventListener('keydown', (e) => {
+      if (e.key !== ' ' && e.key !== 'Enter') return;
+      if (e.target && /INPUT|TEXTAREA|BUTTON/.test(e.target.tagName)) return;
+      const target = cues.find((c) => c.requiresAck);
+      if (!target) return;
+      e.preventDefault();
+      const btn = $stage.querySelector('.ack-btn');
+      if (btn && !btn.disabled) btn.click();
+    });
+  }
+
+  // 握手日志，便于在 OBS 日志里排查（与渲染端一致）
+  console.log('[cast] ready');
+})();
+</script>
+</body>
+</html>

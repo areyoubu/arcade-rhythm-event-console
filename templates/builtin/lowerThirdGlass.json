@@ -1,0 +1,71 @@
+{
+  "id": "lowerThirdGlass",
+  "name": "姓名条·磨砂",
+  "category": "player",
+  "family": "lowerThird",
+  "style": "glass",
+  "builtin": true,
+  "slots": [
+    {
+      "key": "name",
+      "label": "姓名",
+      "type": "text",
+      "required": true,
+      "maxLength": 24,
+      "placeholder": "选手A"
+    },
+    {
+      "key": "subtitle",
+      "label": "副标题",
+      "type": "text",
+      "required": false,
+      "maxLength": 48,
+      "placeholder": "中二节奏 / 1P"
+    },
+    {
+      "key": "avatar",
+      "label": "头像",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1",
+      "entitySource": "player"
+    },
+    {
+      "key": "teamName",
+      "label": "队伍名",
+      "type": "text",
+      "required": false,
+      "maxLength": 32
+    },
+    {
+      "key": "teamAvatar",
+      "label": "队伍 Logo",
+      "type": "image",
+      "required": false,
+      "aspectRatio": "1:1"
+    },
+    {
+      "key": "accentColor",
+      "label": "强调色",
+      "type": "color",
+      "required": false,
+      "default": "#e8e8e8"
+    }
+  ],
+  "defaultAnim": {
+    "in": "fadeUp",
+    "out": "fadeOut",
+    "durationMs": 420
+  },
+  "cssVars": {
+    "--lg-accent": "#e8e8e8",
+    "--lg-name-size": "44px",
+    "--lg-sub-size": "20px",
+    "--lg-font": "'Noto Sans SC','Microsoft YaHei',system-ui,sans-serif",
+    "--lg-avatar-size": "104px",
+    "--lg-team-size": "20px",
+    "--lg-team-logo": "26px"
+  },
+  "html": "<div class=\"lg-root\" data-slot=\"accentColor\" data-slot-type=\"stylevar:--lg-accent\">\n  <div class=\"lg-avatar\"><img data-slot=\"avatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"lg-fallback\">?</span></div>\n  <div class=\"lg-panel\">\n    <div class=\"lg-team\"><span class=\"lg-team-logo\"><img data-slot=\"teamAvatar\" data-slot-type=\"image\" alt=\"\" /><span class=\"lg-team-fallback\"></span></span><span class=\"lg-team-name\" data-slot=\"teamName\"></span></div>\n    <div class=\"lg-name\" data-slot=\"name\"></div>\n    <div class=\"lg-sub\" data-slot=\"subtitle\"></div>\n  </div>\n</div>",
+  "css": ".lg-root{position:absolute;left:64px;bottom:72px;display:flex;align-items:flex-end;font-family:var(--lg-font);}\n.lg-avatar{width:var(--lg-avatar-size);height:var(--lg-avatar-size);border-radius:12px;overflow:hidden;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.25);backdrop-filter:blur(10px);display:flex;align-items:center;justify-content:center;flex:0 0 auto;}\n.lg-avatar img{width:100%;height:100%;object-fit:cover;display:none;}\n.lg-avatar img.is-ready{display:block;}\n.lg-fallback{color:rgba(255,255,255,.4);font-size:34px;font-weight:700;}\n.lg-avatar:has(img.is-ready) .lg-fallback{display:none;}\n.lg-panel{background:rgba(20,20,24,.52);backdrop-filter:blur(18px) saturate(130%);border:1px solid rgba(255,255,255,.16);border-radius:12px;padding:14px 40px 15px 20px;min-width:320px;box-shadow:0 12px 36px rgba(0,0,0,.4);}\n.lg-team{display:flex;align-items:center;gap:8px;margin-bottom:4px;}\n.lg-team:not(:has(.lg-team-name:not(:empty),img.is-ready)){display:none;}\n.lg-team-logo{position:relative;width:var(--lg-team-logo);height:var(--lg-team-logo);flex:0 0 auto;display:flex;align-items:center;justify-content:center;}\n.lg-team-logo img{width:100%;height:100%;object-fit:contain;display:none;}\n.lg-team-logo img.is-ready{display:block;}\n.lg-team-fallback{width:6px;height:6px;background:var(--lg-accent);}\n.lg-team-logo:has(img.is-ready) .lg-team-fallback{display:none;}\n.lg-team-name{color:var(--lg-accent);font-size:var(--lg-team-size);font-weight:600;letter-spacing:1.5px;line-height:1.2;white-space:nowrap;max-width:420px;overflow:hidden;text-overflow:ellipsis;}\n.lg-team-name:empty{display:none;}\n.lg-name{color:#fff;font-size:var(--lg-name-size);font-weight:700;letter-spacing:.4px;line-height:1.12;white-space:nowrap;}\n.lg-sub{color:rgba(255,255,255,.7);font-size:var(--lg-sub-size);font-weight:400;line-height:1.35;margin-top:3px;white-space:nowrap;min-height:1.35em;}\n.lg-sub:empty{display:none;}"
+}
