@@ -21,6 +21,7 @@
     "music:cn": "node tools/import-chunithm-json.mjs"
   },
   "dependencies": {
+    "@tootallnate/hca": "^0.0.1",
     "express": "^4.21.2",
     "multer": "^2.4.0",
     "qrcode": "^1.5.4",

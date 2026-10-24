@@ -51,7 +51,8 @@ function run(req) {
 
 test('★ 输出路径识别（大小写不敏感）', () => {
   for (const p of ['/render/score', '/RENDER/match', '/assets/liveroom-background.png',
-    '/media/abc.png', '/covers/3.webp', '/COVERS/3.webp', '/api/render/bootstrap', '/API/MATCH/PICKURL']) {
+    '/media/abc.png', '/covers/3.webp', '/COVERS/3.webp', '/api/render/bootstrap',
+    '/API/MATCH/PICKURL', '/api/match/qr', '/API/LOTTERY/QR']) {
     assert.equal(isProtectedOutputPath(p), true, `${p} 应受保护`);
   }
   for (const p of ['/join', '/pick', '/shared/style.css', '/api/music', '/api/match/public', '/']) {

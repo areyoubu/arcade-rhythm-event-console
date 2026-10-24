@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>随机选曲大屏 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .rp-grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(340px, .9fr); gap: 12px; align-items: start; }
+  @media (max-width: 1100px) { .rp-grid { grid-template-columns: minmax(0, 1fr); } }
+  .rp-frame {
+    position: relative; width: 100%; aspect-ratio: 16 / 9;
+    background: #08090b; border: 1px solid var(--border); overflow: hidden;
+  }
+  .rp-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+  .rp-url-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .rp-url {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-dim); background: #17181b; border: 1px solid var(--border);
+    border-radius: 3px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .rp-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .rp-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 9px 12px; }
+  .rp-field > label { display: block; font-size: 11.5px; font-weight: 700; color: var(--text-dim); margin-bottom: 4px; }
+  .rp-field input, .rp-field select {
+    width: 100%; min-height: 32px; padding: 5px 8px;
+    background: #17181b; color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: 3px; font-family: inherit; font-size: 12px;
+  }
+  .rp-checks { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding-top: 18px; }
+  .rp-level { display: flex; align-items: center; gap: 6px; }
+  .rp-result { display: flex; gap: 14px; align-items: center; }
+  .rp-cover {
+    width: 172px; height: 172px; flex: 0 0 auto; object-fit: cover;
+    background: #111; border: 1px solid var(--border-strong);
+  }
+  .rp-cover.ph { display: flex; align-items: center; justify-content: center; color: var(--text-mute); font-size: 40px; }
+  .rp-detail { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 5px; }
+  .rp-title { font-size: 22px; font-weight: 800; line-height: 1.2; word-break: break-word; }
+  .rp-artist { font-size: 12.5px; color: var(--text-mute); }
+  .rp-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 3px; }
+  .rp-tag { font-size: 10.5px; padding: 2px 6px; border: 1px solid var(--border-strong); color: var(--text-dim); border-radius: 2px; }
+  .rp-tag.cn { color: #8fc7a2; border-color: #345641; }
+  .rp-tag.we { color: #c98bff; border-color: #5b3a78; }
+  .rp-diff { font-family: var(--mono); font-size: 12px; font-weight: 800; color: var(--accent); }
+  .rp-spin-status { font-size: 12px; color: var(--text-mute); min-height: 18px; }
+  .rp-spin-status.live { color: var(--accent); }
+  .rp-empty { padding: 20px 0; color: var(--text-mute); font-size: 12.5px; }
+  .rp-apply { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  .rp-apply select { min-height: 32px; padding: 4px 8px; background: #17181b; color: var(--text); border: 1px solid var(--border-strong); border-radius: 3px; }
+</style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+'use strict';
+const { el, api, ok, warn, cmdError, confirm, mount, clear } = ui;
+
+const page = mount({
+  current: '/random',
+  title: '随机选曲大屏',
+  subtitle: '全屏滚动随机 · 缓停后放大曲绘与曲目信息 · 动态 / 静态背景可选',
+});
+
+/* ── 顶部说明 ───────────────────────────────────────── */
+page.append(el('section', { class: 'card mb12' },
+  el('header', null, el('span', { text: '全屏随机选曲' }), el('span', { class: 'spacer' }),
+    el('a', { class: 'btn ghost sm', href: '/music', text: '曲目库' }),
+    el('a', { class: 'btn ghost sm', href: '/match', text: '比赛计分' }),
+    el('a', { class: 'btn ghost sm', href: '/outputs', text: '输出与场景' })),
+  el('div', { class: 'body' },
+    el('div', { class: 'note info', html:
+      '这是独立整屏场景。把 <code>/render/random</code> 加进 OBS 浏览器源，'
+      + '在这里点「开始随机」即可让大屏滚动抽选。背景默认动态，可切换为静态 PNG。' }),
+  ),
+));
+
+/* ── 预览 + 源地址 ───────────────────────────────────── */
+let staticBg = false;
+let lastState = null;
+let spinUntil = 0;
+let statusTimer = null;
+
+const previewFrame = el('iframe', { title: '随机选曲大屏预览', loading: 'lazy' });
+const sourceUrl = el('code', { class: 'rp-url', text: '' });
+const sourcePill = el('span', { class: 'pill mute', text: '未接入' });
+const phaseEl = el('span', { class: 'pill mute', text: '待机' });
+const bgDynamicBtn = el('button', { class: 'btn sm primary', type: 'button', text: '动态背景' });
+const bgStaticBtn = el('button', { class: 'btn sm ghost', type: 'button', text: '静态背景' });
+
+function sourcePath() {
+  return `/render/random${staticBg ? '?static=1' : ''}`;
+}
+function previewSrc() {
+  return `/render/random?preview=1&fit=1${staticBg ? '&static=1' : ''}&t=${Date.now()}`;
+}
+function syncBg() {
+  bgDynamicBtn.className = `btn sm ${staticBg ? 'ghost' : 'primary'}`;
+  bgStaticBtn.className = `btn sm ${staticBg ? 'primary' : 'ghost'}`;
+  previewFrame.src = previewSrc();
+  sourceUrl.textContent = `${location.origin}${sourcePath()}`;
+}
+bgDynamicBtn.onclick = () => { staticBg = false; syncBg(); };
+bgStaticBtn.onclick = () => { staticBg = true; syncBg(); };
+
+function copySource() {
+  const url = `${location.origin}${sourcePath()}`;
+  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(url).then(() => ok('已复制大屏地址')).catch(fallback); return; }
+  fallback();
+  function fallback() {
+    const ta = el('textarea', { style: { position: 'fixed', left: '-9999px' } });
+    ta.value = url; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); ok('已复制大屏地址'); } catch { warn('复制失败，请手动复制'); }
+    ta.remove();
+  }
+}
+
+syncBg();
+
+const previewCard = el('section', { class: 'card' },
+  el('header', null,
+    el('span', { text: '大屏预览' }), el('span', { class: 'spacer' }),
+    phaseEl, sourcePill),
+  el('div', { class: 'body' },
+    el('div', { class: 'rp-frame' }, previewFrame),
+    el('div', { class: 'rp-url-row' }, sourceUrl),
+    el('div', { class: 'rp-actions' },
+      el('button', { class: 'btn sm primary', type: 'button', text: '开始随机', onclick: spin }),
+      el('button', { class: 'btn sm', type: 'button', text: '重新加载预览', onclick: () => { previewFrame.src = previewSrc(); } }),
+      el('button', { class: 'btn sm ghost', type: 'button', text: '复制 OBS 地址', onclick: copySource }),
+      bgDynamicBtn, bgStaticBtn,
+    ),
+    el('div', { class: 'note info mt8', html:
+      '预览使用独立 target，不计入 OBS 源连接数；右下角状态只统计真实 <code>/render/random</code> 源。' }),
+  ),
+);
+page.append(previewCard);
+
+/* ── 筛选 + 结果 ─────────────────────────────────────── */
+const genreSel = el('select');
+const diffSel = el('select', null,
+  el('option', { value: '', text: '全部难度' }),
+  el('option', { value: 'random', text: '随机难度' }),
+  ...['basic', 'advanced', 'expert', 'master', 'ultima'].map((k) =>
+    el('option', { value: k, text: k.toUpperCase() })),
+  el('option', { value: 'we', text: "WORLD'S END" }),
+);
+const cnChk = el('input', { type: 'checkbox' });
+const weChk = el('input', { type: 'checkbox' });
+const audioChk = el('input', { type: 'checkbox', checked: true });
+try { audioChk.checked = localStorage.getItem('random.audio') !== '0'; } catch { /* ignore */ }
+audioChk.onchange = () => {
+  try { localStorage.setItem('random.audio', audioChk.checked ? '1' : '0'); } catch { /* ignore */ }
+};
+const minLevel = el('input', { type: 'number', min: '1', max: '16', step: '0.1', placeholder: '最低' });
+const maxLevel = el('input', { type: 'number', min: '1', max: '16', step: '0.1', placeholder: '最高' });
+const spinStatus = el('div', { class: 'rp-spin-status', text: '' });
+const resultBox = el('div', { class: 'rp-empty', text: '还没有随机结果。' });
+const applyRow = el('select', null, [1, 2, 3, 4].map((n) => el('option', { value: String(n - 1), text: `第 ${n} 首` })));
+const applyBtn = el('button', { class: 'btn sm primary', type: 'button', text: '应用到比赛', disabled: true });
+applyBtn.onclick = applyToMatch;
+const syncMatchChk = el('input', { type: 'checkbox' });
+try { syncMatchChk.checked = localStorage.getItem('random.syncMatch') === '1'; } catch { /* ignore */ }
+syncMatchChk.onchange = () => {
+  try { localStorage.setItem('random.syncMatch', syncMatchChk.checked ? '1' : '0'); } catch { /* ignore */ }
+};
+const clearBtn = el('button', { class: 'btn sm ghost', type: 'button', text: '清空大屏', onclick: clearScene });
+
+diffSel.onchange = () => { if (diffSel.value === 'we') weChk.checked = true; };
+
+const controlCard = el('section', { class: 'card mb12' },
+  el('header', null, el('span', { text: '随机条件' })),
+  el('div', { class: 'body' },
+    el('div', { class: 'rp-filters' },
+      el('div', { class: 'rp-field' }, el('label', { text: '分类' }), genreSel),
+      el('div', { class: 'rp-field' }, el('label', { text: '难度' }), diffSel),
+      el('div', { class: 'rp-field' }, el('label', { text: '等级范围' }),
+        el('div', { class: 'rp-level' }, minLevel, el('span', { class: 'muted', text: '–' }), maxLevel)),
+      el('div', { class: 'rp-field' }, el('label', { text: '选项' }),
+        el('div', { class: 'rp-checks' },
+          el('label', { class: 'check' }, cnChk, el('span', { class: 'label', text: '仅国服' })),
+          el('label', { class: 'check' }, weChk, el('span', { class: 'label', text: '含 WE' })),
+          el('label', { class: 'check' }, audioChk, el('span', { class: 'label', text: '预览音频' })))),
+    ),
+    el('div', { class: 'rp-actions' },
+      el('button', { class: 'btn primary', type: 'button', text: '开始随机', onclick: spin }),
+      clearBtn,
+    ),
+    spinStatus,
+  ),
+);
+page.append(controlCard);
+
+const resultCard = el('section', { class: 'card' },
+  el('header', null, el('span', { text: '本次结果' })),
+  el('div', { class: 'body' },
+    resultBox,
+    el('div', { class: 'rp-apply' },
+      el('span', { class: 'small muted', text: '应用到比赛：' }), applyRow, applyBtn,
+      el('label', { class: 'check' }, syncMatchChk,
+        el('span', { class: 'label', text: '同步比赛随机选曲（抽完自动写入该行）' })),
+    ),
+    el('div', { class: 'help', style: { marginTop: '6px' },
+      text: '关闭时只在大屏展示、不改比赛，方便测试。开启后动画结束会自动写入所选行；该行已有分数时会跳过并提示。' }),
+  ),
+);
+page.append(resultCard);
+
+/* ── 数据 ───────────────────────────────────────────── */
+async function loadMeta() {
+  try {
+    const m = await api('/api/music/meta');
+    clear(genreSel);
+    genreSel.append(el('option', { value: '', text: '全部分类' }));
+    for (const g of m.genres || []) {
+      genreSel.append(el('option', { value: g.name, text: `${g.label || g.name}（${g.count}）` }));
+    }
+  } catch (e) { cmdError(e, '读取曲库分类'); }
+}
+
+function readFilters() {
+  const num = (v) => (v === '' ? null : Number(v));
+  return {
+    genre: genreSel.value,
+    difficulty: diffSel.value,
+    minLevel: num(minLevel.value),
+    maxLevel: num(maxLevel.value),
+    cnOnly: cnChk.checked,
+    includeWe: weChk.checked || diffSel.value === 'we',
+  };
+}
+
+let syncTimer = null;
+
+function rowHasScores(index) {
+  const row = arcadeWS.state?.match?.state?.current?.songs?.[index];
+  return !!(row && (Number.isFinite(row.scoreLeft) || Number.isFinite(row.scoreRight)));
+}
+
+function queueMatchSync(state) {
+  clearTimeout(syncTimer);
+  syncTimer = null;
+  if (!syncMatchChk.checked || !state?.picked) return;
+  // 等大屏动画结束、结果出现后再写入比赛，避免提前剧透
+  syncTimer = setTimeout(() => {
+    if (syncMatchChk.checked) applyPicked(state.picked, { auto: true });
+  }, (state.spinMs || 6400) + 1200);
+}
+
+async function spin() {
+  const filters = readFilters();
+  try {
+    spinStatus.textContent = '抽取中…';
+    spinStatus.className = 'rp-spin-status live';
+    const r = await api('/api/random/spin', {
+      method: 'POST',
+      body: { filters, audio: audioChk.checked },
+      quiet: true,
+    });
+    applyState(r.state);
+    queueMatchSync(r.state);
+    ok(`已随机：${r.state.picked.title}`);
+  } catch (e) {
+    spinStatus.textContent = '';
+    spinStatus.className = 'rp-spin-status';
+    cmdError(e, '开始随机');
+  }
+}
+
+function applyState(state) {
+  lastState = state;
+  renderResult(state);
+  clearTimeout(statusTimer);
+  const until = state ? (state.at || 0) + (state.spinMs || 6400) + 1200 : 0;
+  spinUntil = until > Date.now() ? until : 0;
+  refreshSpinStatus();
+  if (spinUntil) {
+    statusTimer = setTimeout(refreshSpinStatus, spinUntil - Date.now() + 100);
+  }
+}
+
+function refreshSpinStatus() {
+  if (!lastState) {
+    spinStatus.textContent = '';
+    phaseEl.className = 'pill mute';
+    phaseEl.textContent = '待机';
+    return;
+  }
+  const spinning = Date.now() < spinUntil;
+  phaseEl.className = `pill ${spinning ? 'warn' : 'ok'}`;
+  phaseEl.textContent = spinning ? '抽取中' : '已选中';
+  spinStatus.textContent = spinning
+    ? `抽取中… ${lastState.picked?.title || ''}`
+    : `已选中：${lastState.picked?.title || '—'}`;
+  spinStatus.className = `rp-spin-status ${spinning ? 'live' : ''}`;
+}
+
+function renderResult(state) {
+  const p = state?.picked;
+  applyBtn.disabled = !p;
+  if (!p) {
+    clear(resultBox);
+    resultBox.className = 'rp-empty';
+    resultBox.textContent = '还没有随机结果。';
+    return;
+  }
+  resultBox.className = 'rp-result';
+  const cover = p.cover
+    ? el('img', { class: 'rp-cover', src: p.cover, alt: '', loading: 'lazy' })
+    : el('div', { class: 'rp-cover ph', text: '♪' });
+  const meta = el('div', { class: 'rp-meta' },
+    el('span', { class: `rp-tag ${p.cn ? 'cn' : ''}`, text: p.cn ? '国服' : '日服' }),
+    p.genreLabel || p.genre ? el('span', { class: 'rp-tag', text: p.genreLabel || p.genre }) : null,
+    p.we ? el('span', { class: 'rp-tag we', text: `WE ${p.weText || ''}`.trim() }) : null,
+  );
+  const detail = el('div', { class: 'rp-detail' },
+    el('div', { class: 'rp-title', text: p.title }),
+    el('div', { class: 'rp-artist', text: p.artist || '—' }),
+    el('div', { class: 'rp-diff', text: `${p.difficultyName || ''} ${p.levelText || ''}`.trim() }),
+    meta,
+  );
+  clear(resultBox);
+  resultBox.append(cover, detail);
+}
+
+async function applyToMatch() {
+  if (!lastState?.picked) return;
+  await applyPicked(lastState.picked, { auto: false });
+}
+
+async function applyPicked(picked, { auto = false } = {}) {
+  if (!picked) return;
+  const index = Number(applyRow.value) || 0;
+  const hasScores = rowHasScores(index);
+  if (hasScores) {
+    if (auto) {
+      warn(`第 ${index + 1} 首已有分数，已跳过自动同步`);
+      return;
+    }
+    const yes = await confirm({
+      title: '这一行已经有分数',
+      message: `写入随机结果会清空第 ${index + 1} 首已录入的 P1 / P2 分数。`,
+      danger: true, confirmText: '仍然写入',
+    });
+    if (!yes) return;
+  }
+  try {
+    await api('/api/match/song', {
+      method: 'POST',
+      body: { index, musicId: picked.id, difficulty: picked.difficulty },
+    });
+    ok(`${auto ? '已同步' : '已写入'}比赛第 ${index + 1} 首：${picked.title}`);
+  } catch (e) { cmdError(e, auto ? '同步到比赛' : '应用到比赛'); }
+}
+
+async function clearScene() {
+  try {
+    await api('/api/random/clear', { method: 'POST', body: {} });
+    clearTimeout(syncTimer);
+    syncTimer = null;
+    applyState(null);
+    spinUntil = 0;
+    refreshSpinStatus();
+    ok('大屏已清空');
+  } catch (e) { cmdError(e, '清空大屏'); }
+}
+
+/* ── WS 状态 ────────────────────────────────────────── */
+function refreshSource() {
+  const c = arcadeWS.state?.overlay?.clients?.random;
+  sourcePill.className = `pill ${c ? 'ok' : 'mute'}`;
+  sourcePill.textContent = c ? 'OBS 源已接入' : 'OBS 源未接入';
+}
+arcadeWS.on('hello', () => {
+  applyState(arcadeWS.state?.random?.state);
+  refreshSource();
+});
+arcadeWS.watch('random.state', (v) => applyState(v));
+arcadeWS.watch('overlay.clients', refreshSource);
+refreshSource();
+
+loadMeta();
+})();
+</script>
+</body>
+</html>

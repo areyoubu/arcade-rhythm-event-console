@@ -40,3 +40,6 @@ remote/config.json
 .DS_Store
 Thumbs.db
 *.log
+
+# 本地游戏音频预览缓存
+data/audio-cache/

@@ -78,6 +78,23 @@ export const DEFAULT_CONFIG = {
    *   publicPickBaseUrl 公网地址（隧道），填了优先用它
    *   defaultDifficulty 随机选曲时优先使用的难度
    */
+  /**
+   * 本地游戏音频预览。
+   *
+   * 只读用户指定的游戏安装目录（包含 data / option 的根目录），按曲目 ID
+   * 查找 cueFile 下的 AWB / ACB，解码成短 WAV 供随机选曲与选手选曲展示播放。
+   * 缓存写在 <项目>/data/audio-cache，不会修改游戏目录。
+   */
+  gameAudio: {
+    enabled: false,
+    gameDir: '',
+    previewSeconds: 25,
+    useGamePreview: true,
+    fallbackStartSec: 0,
+    volume: 0.8,
+    cacheLimitMB: 512,
+  },
+
   match: {
     pickBaseUrl: '',
     publicPickBaseUrl: '',
@@ -186,6 +203,58 @@ export const DEFAULT_CONFIG = {
     templates: {},   // 空 = 使用附录 E 内置话术模板库
   },
 
+  /**
+   * 解说页（/cast）的显示模板。
+   *
+   * /cast 仍是 OBS 浏览器源：默认背景透明，只画提示与比赛信息。
+   * cue 输出不再铺满整屏，而是收进 `template` 指定的「提示预览」区域，
+   * 这样解说看得到画面，也能同时看到导播提示。
+   *
+   * background = transparent 时是叠加层；dark / dynamic 时是独立整屏场景，
+   * 可直接在浏览器或第二块 HDMI 屏上打开给解说看。
+   */
+  cast: {
+    template: 'panel',        // panel | ticker | minimal | classic
+    position: 'bottom',       // bottom | top | left | right（classic 固定居中）
+    title: '解说提示',
+    cueTitle: '提示预览',
+    accent: '#d9a441',
+    opacity: 0.9,             // 预览面板背景不透明度 0.35–1
+    scale: 1,                 // 提示文字整体缩放 0.7–1.5
+    maxCues: 2,               // 预览区最多同时显示几条
+    showMatch: true,          // 顶部比赛 / 比分 / 当前曲目条
+    showClock: true,
+    showBrand: true,
+    showAudio: false,         // 是否在解说页显示声音状态
+    ackButton: false,         // 普通浏览器里显示「收到」按钮（OBS 源点不了）
+    background: 'transparent',// transparent | dark | dynamic
+
+    /**
+     * 解说摄像头叠加（/render/castcam）。
+     *
+     * 这是一张**铺满 1920×1080 的透明 UI**：OBS 里摄像头画面放在最底层，
+     * 本页叠在它上面。UI 包含比赛 Logo、图片轮播位、底部赛程提示条。
+     * 底部提示条的「正在进行 / 即将进行」直接读比赛计分的 name / upcoming。
+     */
+    camLogo: '',               // 比赛 Logo 图片地址（/media/... 或 http(s)）
+    camLogoWidth: 220,         // Logo 最大宽度（px）
+    camLogoPosition: 'top-left', // top-left | top-right
+    camEventTitle: '解说机位',   // 没有 Logo 时显示的文字；有 Logo 时作为标题
+    camEventSub: 'COMMENTARY',  // 标题下方英文副标题
+    camCarouselImages: [],     // 轮播图片地址数组（/media/... 或 http(s)）
+    camCarouselWidth: 300,     // 轮播位宽度（px）
+    camCarouselPosition: 'top-right', // top-right | top-left | bottom-right | bottom-left
+    camCarouselIntervalMs: 6000, // 轮播间隔
+    camTickerShow: true,       // 底部赛程提示条
+    camTickerPosition: 'bottom', // bottom | top
+    camTickerOpacity: 0.88,    // 提示条背景不透明度
+    camTickerCurrentLabel: '正在进行',
+    camTickerUpcomingLabel: '即将进行',
+    camTickerShowUpcoming: true,
+    camTickerShowLive: true,
+    camAccent: '#d9a441',
+  },
+
   countdown: {
     leadPresetsMs: [60000, 30000, 15000, 10000, 5000, 3000],
     defaultLeadMs: 15000,
@@ -264,12 +333,14 @@ export const CONFIG_GROUPS = [
   { id: 'obs',       label: 'OBS WebSocket',   icon: '🎬', desc: 'OBS 的 WebSocket 服务（工具 → WebSocket 服务器设置）。双机模式下填 OBS 机 IP。需先开启「功能开关 → OBS 控制」。' },
   { id: 'vmix',      label: 'vMix HTTP API',   icon: '⏪', desc: 'vMix 的 Web API 端口（设置 → Web Controller，默认 8088）。⚠️ vMix API 无鉴权，切勿暴露到公网。需先开启「功能开关 → vMix 控制」。' },
   { id: 'competition', label: '比赛模式',      icon: '🏆', desc: '团队赛 / 单人赛切换。团队赛的叠加会显示「队伍 + 选手名」，单人赛只显示选手名。' },
+  { id: 'gameAudio', label: '游戏音频',        icon: '🔊', desc: '从本地游戏目录读取曲目预览音频：随机选曲与选手选曲展示会在 OBS 里播放短预览。程序只读游戏目录、不修改游戏文件；不同版本/区服的音频密钥可能不同。' },
   { id: 'match',     label: '比赛计分与选曲',  icon: '🎼', desc: '扫码选曲的局域网 / 公网地址，以及随机选曲默认使用的难度。' },
   { id: 'scenes',    label: '场景与源',        icon: '🎞', desc: 'OBS 场景名与源名，必须与 OBS 中完全一致。' },
   { id: 'clip',      label: '裁切参数',        icon: '✂️', desc: '回溯量 XX、预设、微调步长与缓冲容量约束。' },
   { id: 'replay',    label: '回放与时序',      icon: '⏱', desc: '打点补偿、轮询与超时参数。需先开启「功能开关 → 回放功能」。' },
   { id: 'transitions', label: '转场',          icon: '🔀', desc: 'OBS 转场名称与场景覆盖。stinger 的 Transition Point 无法通过 API 修改，须在 OBS 内手动设置。' },
   { id: 'cue',       label: '提示',            icon: '💬', desc: '提示优先级、可见数量、声音与回执策略。' },
+  { id: 'cast',      label: '解说页',          icon: '🎙', desc: '解说视角模板：提示预览的位置、尺寸、颜色与显示内容。修改后 /cast 立即生效，无需重开 OBS 源。' },
   { id: 'countdown', label: '倒计时与编排',    icon: '⏳', desc: '提前量预设、渐进升级梯度、自动执行开关（高危）。' },
   { id: 'lottery',   label: '抽奖与签到',      icon: '🎁', desc: '现场扫码签到地址、抽奖动画时长，以及可选的第三方中继（在线表单 → 内网抽奖池）。' },
   { id: 'render',    label: '叠加渲染',        icon: '🖼', desc: 'OBS 浏览器源的分辨率、重连行为与动画默认值。' },
@@ -328,6 +399,23 @@ export const FIELD_SCHEMA = [
     options: ['basic', 'advanced', 'expert', 'master', 'ultima'],
     help: '随机选曲时优先使用该难度；该谱面不存在时自动退到可用难度。' },
 
+  // ── 游戏音频预览 ──
+  { path: 'gameAudio.enabled', label: '启用游戏音频预览', type: 'boolean', group: 'gameAudio',
+    help: '开启后，随机选曲结果与选手选曲展示可以播放本地游戏里的曲目预览。关闭时不会读取任何游戏文件。' },
+  { path: 'gameAudio.gameDir', label: '游戏安装根目录', type: 'string', group: 'gameAudio',
+    placeholder: '例如 D:\\CHUNITHM\\bin 或 D:\\chuni',
+    help: '填包含 data 与 option（或 bin/option）的目录。程序按曲目 ID 读取 <根>/data/A000/cueFile/cueFileXXXXXX/ 与 <根>/option/<资源>/cueFile/... 下的 .awb/.acb；只读、不修改游戏文件。保存后点下方「扫描游戏目录」确认能读到曲目。' },
+  { path: 'gameAudio.previewSeconds', label: '预览时长', type: 'number', group: 'gameAudio', min: 3, max: 120, step: 1, unit: '秒',
+    help: '每首曲目最多播放多久。游戏 ACB 里如果记录了官方预览片段，会从该片段开始截取。' },
+  { path: 'gameAudio.useGamePreview', label: '使用游戏内预览片段', type: 'boolean', group: 'gameAudio',
+    help: '开启时优先读取 ACB 中记录的预览起止时间（通常是副歌）；关闭时统一从下方「无标记起点」开始。' },
+  { path: 'gameAudio.fallbackStartSec', label: '无预览标记起点', type: 'number', group: 'gameAudio', min: 0, max: 3600, step: 1, unit: '秒',
+    help: 'ACB 没有找到预览时间时，从第几秒开始截取。默认 0（从歌曲开头）。' },
+  { path: 'gameAudio.volume', label: '预览音量', type: 'number', group: 'gameAudio', min: 0, max: 1, step: 0.05,
+    help: '浏览器源内的音频音量（仍受 OBS 该源音量控制）。' },
+  { path: 'gameAudio.cacheLimitMB', label: '预览缓存上限', type: 'number', group: 'gameAudio', min: 64, max: 8192, step: 64, unit: 'MB', advanced: true,
+    help: '解码后的 WAV 缓存在 data/audio-cache，超出上限会删除最旧的缓存。' },
+
   // ── 场景与源 ──
   { path: 'scenes.live',   label: 'LIVE 场景名',   type: 'string', group: 'scenes', help: '直播场景 = CLEAN + 浮窗。' },
   { path: 'scenes.replay', label: 'REPLAY 场景名', type: 'string', group: 'scenes', help: '回放场景 = vMix 回传 NDI + REPLAY 标识 + 浮窗。' },
@@ -384,6 +472,46 @@ export const FIELD_SCHEMA = [
   { path: 'cue.ack.maxRepeats',      label: '未回执重复上限', type: 'number', group: 'cue', min: 0, max: 30, step: 1, help: '超过后停止声音并升级为导播页告警。' },
   { path: 'cue.history.retainHours', label: '提示历史保留', type: 'number', group: 'cue', min: 1, max: 72, step: 1 },
   { path: 'cue.templates',           label: '自定义话术模板', type: 'json', group: 'cue', help: '如 {"T20":{"name":"局间提示","template":"第 {n} 局开始","audience":["cast"],"priority":"P2","sound":"beep"}}。内置的 T1–T14 用同 id 即可覆盖（C-REQ-1102）。也可在 /cues 页用表格编辑。' },
+
+  // ── 解说页模板 ──
+  { path: 'cast.template', label: '提示模板', type: 'select', group: 'cast', options: ['panel', 'ticker', 'minimal', 'classic'],
+    help: 'panel = 带标题的提示面板；ticker = 底部单行横条；minimal = 无面板底色的浮动卡片；classic = 原来的全屏大提示。' },
+  { path: 'cast.position', label: '提示预览位置', type: 'select', group: 'cast', options: ['bottom', 'top', 'left', 'right'],
+    help: '提示预览在画面中的停靠位置。classic 模板固定居中，ticker 固定底部。' },
+  { path: 'cast.title', label: '解说页标题', type: 'string', group: 'cast', placeholder: '解说提示' },
+  { path: 'cast.cueTitle', label: '预览区标题', type: 'string', group: 'cast', placeholder: '提示预览' },
+  { path: 'cast.accent', label: '强调色', type: 'color', group: 'cast', help: '标题、预览区上沿等使用的颜色；P0–P3 仍保留各自的警示色。' },
+  { path: 'cast.opacity', label: '面板不透明度', type: 'number', group: 'cast', min: 0.35, max: 1, step: 0.05 },
+  { path: 'cast.scale', label: '提示文字缩放', type: 'number', group: 'cast', min: 0.7, max: 1.5, step: 0.05 },
+  { path: 'cast.maxCues', label: '最多显示条数', type: 'number', group: 'cast', min: 1, max: 3, step: 1 },
+  { path: 'cast.showMatch', label: '显示比赛 / 比分条', type: 'boolean', group: 'cast', help: '显示当前局、双方总分与当前曲目。' },
+  { path: 'cast.showClock', label: '显示时钟', type: 'boolean', group: 'cast' },
+  { path: 'cast.showBrand', label: '显示左上角标识与标题', type: 'boolean', group: 'cast' },
+  { path: 'cast.showAudio', label: '显示声音状态', type: 'boolean', group: 'cast', help: '在解说页右上角显示声音是否已解锁。OBS 源里通常关闭，避免干扰。' },
+  { path: 'cast.ackButton', label: '显示「收到」按钮', type: 'boolean', group: 'cast', help: '用于普通浏览器 / 平板上的解说确认；OBS 浏览器源里点击不了，建议关闭。等价于 URL 加 ?ack=1。' },
+  { path: 'cast.background', label: '背景', type: 'select', group: 'cast', options: ['transparent', 'dark', 'dynamic'],
+    help: 'transparent = OBS 透明叠加（默认）；dark = 深色整屏；dynamic = 复用直播间动态背景，适合第二块 HDMI 屏。' },
+
+  // ── 解说摄像头叠加（/render/castcam）：全屏 UI ──
+  { path: 'cast.camLogo', label: '摄像头 · 比赛 Logo', type: 'string', group: 'cast', placeholder: '/media/xxx.png',
+    help: '1920×1080 透明 UI 左上角（或右上角）的比赛 Logo。可从 /media 复制图片地址。' },
+  { path: 'cast.camLogoWidth', label: '摄像头 · Logo 宽度', type: 'number', group: 'cast', min: 80, max: 480, step: 10, unit: 'px' },
+  { path: 'cast.camLogoPosition', label: '摄像头 · Logo 位置', type: 'select', group: 'cast', options: ['top-left', 'top-right'] },
+  { path: 'cast.camEventTitle', label: '摄像头 · 赛事标题', type: 'string', group: 'cast', placeholder: '解说机位' },
+  { path: 'cast.camEventSub', label: '摄像头 · 标题副文案', type: 'string', group: 'cast', placeholder: 'COMMENTARY' },
+  { path: 'cast.camCarouselImages', label: '摄像头 · 轮播图片', type: 'list', group: 'cast',
+    help: '逗号分隔的图片地址（/media/... 或 http(s)）。留空不显示轮播位。' },
+  { path: 'cast.camCarouselWidth', label: '摄像头 · 轮播宽度', type: 'number', group: 'cast', min: 120, max: 600, step: 10, unit: 'px' },
+  { path: 'cast.camCarouselPosition', label: '摄像头 · 轮播位置', type: 'select', group: 'cast', options: ['top-right', 'top-left', 'bottom-right', 'bottom-left'] },
+  { path: 'cast.camCarouselIntervalMs', label: '摄像头 · 轮播间隔', type: 'ms', group: 'cast', min: 1000, max: 60000, step: 500 },
+  { path: 'cast.camTickerShow', label: '摄像头 · 显示赛程提示条', type: 'boolean', group: 'cast' },
+  { path: 'cast.camTickerPosition', label: '摄像头 · 提示条位置', type: 'select', group: 'cast', options: ['bottom', 'top'] },
+  { path: 'cast.camTickerOpacity', label: '摄像头 · 提示条不透明度', type: 'number', group: 'cast', min: 0.35, max: 1, step: 0.05 },
+  { path: 'cast.camTickerCurrentLabel', label: '摄像头 · 「正在进行」文案', type: 'string', group: 'cast', placeholder: '正在进行' },
+  { path: 'cast.camTickerUpcomingLabel', label: '摄像头 · 「即将进行」文案', type: 'string', group: 'cast', placeholder: '即将进行' },
+  { path: 'cast.camTickerShowUpcoming', label: '摄像头 · 显示即将进行', type: 'boolean', group: 'cast' },
+  { path: 'cast.camTickerShowLive', label: '摄像头 · 显示 LIVE', type: 'boolean', group: 'cast' },
+  { path: 'cast.camAccent', label: '摄像头 · 强调色', type: 'color', group: 'cast' },
 
   // ── 倒计时与编排 ──
   { path: 'countdown.leadPresetsMs',   label: '提前量预设', type: 'list-number', group: 'countdown', help: '逗号分隔（毫秒）。默认 60/30/15/10/5/3 秒。' },

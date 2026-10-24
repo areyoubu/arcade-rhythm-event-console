@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>解说控制台 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .cc-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
+  .cc-frame {
+    position: relative; width: 100%; aspect-ratio: 16 / 9;
+    background: repeating-conic-gradient(#1b1f27 0% 25%, #151920 0% 50%) 50% / 28px 28px;
+    border: 1px solid var(--border); overflow: hidden;
+  }
+  .cc-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+  .cc-combo { max-width: 980px; margin: 0 auto; }
+  .cc-combo .cue-layer { z-index: 1; }
+  .cc-combo .cam-layer { z-index: 2; }
+  .cc-url-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .cc-url {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-dim); background: #17181b; border: 1px solid var(--border);
+    border-radius: 3px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .cc-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .cc-note { margin-top: 8px; font-size: 11.5px; color: var(--text-mute); line-height: 1.6; }
+  .cc-note b { color: var(--text-dim); }
+  .cc-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px 14px; }
+  .cc-field { min-width: 0; }
+  .cc-field > label { display: block; font-size: 11.5px; font-weight: 700; color: var(--text-dim); margin-bottom: 4px; }
+  .cc-field input, .cc-field select, .cc-field textarea {
+    width: 100%; min-height: 32px; padding: 5px 8px;
+    background: #17181b; color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: 3px; font-family: inherit; font-size: 12px;
+  }
+  .cc-field textarea { resize: vertical; min-height: 62px; line-height: 1.5; }
+  .cc-field input[type="checkbox"] { width: auto; min-height: 0; accent-color: var(--accent); }
+  .cc-field input[type="color"] { padding: 2px; height: 32px; }
+  .cc-field input[type="range"] { padding: 0; accent-color: var(--accent); }
+  .cc-field .help { margin-top: 3px; font-size: 10.5px; color: var(--text-mute); line-height: 1.5; }
+  .cc-check { display: flex; align-items: center; gap: 7px; min-height: 32px; font-size: 12px; color: var(--text-dim); }
+  .cc-save-status { min-height: 18px; font-size: 11.5px; color: var(--text-mute); }
+  .cc-save-status.ok { color: #8fc7a2; }
+  .cc-save-status.err { color: var(--danger); }
+  .cc-overlap {
+    display: none; margin-top: 8px; padding: 7px 10px;
+    font-size: 11.5px; font-weight: 700; color: #f0c675;
+    background: rgba(217, 164, 65, .10); border: 1px solid #5a4a22;
+  }
+  .cc-overlap.on { display: block; }
+  .cc-subhead { margin: 16px 0 8px; font-size: 12px; font-weight: 800; letter-spacing: 1px; color: var(--accent); }
+  .cc-subhead:first-child { margin-top: 0; }
+</style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+'use strict';
+const { el, api, ok, warn, cmdError, mount, clear } = ui;
+
+const page = mount({
+  current: '/commentary',
+  title: '解说控制台',
+  subtitle: '解说提示叠加 + 解说摄像头叠加 · 两路 OBS 源统一预览与配置',
+});
+
+/* ── 顶部说明 ───────────────────────────────────────── */
+page.append(el('section', { class: 'card mb12' },
+  el('header', null, el('span', { text: '两路解说源' }), el('span', { class: 'spacer' }),
+    el('a', { class: 'btn ghost sm', href: '/settings#cast', text: '全部设置' }),
+    el('a', { class: 'btn ghost sm', href: '/outputs', text: '输出与场景' })),
+  el('div', { class: 'body' },
+    el('div', { class: 'note info', html:
+      '<b>解说提示叠加</b>（<code>/cast</code>）与 <b>解说摄像头叠加</b>（<code>/render/castcam</code>）'
+      + ' 是两路独立的透明浏览器源。摄像头叠加现在是**铺满 1920×1080 的全屏 UI**：'
+      + 'OBS 里摄像头画面源放最底层，本页叠在它上面，显示比赛 Logo、图片轮播和底部赛程条。' }),
+    el('div', { class: 'note warn mt8', html:
+      '合并预览里的棋盘格代表透明区域；<b>摄像头画面本身不会出现在网页里</b>，它由 OBS 提供。'
+      + '这里用来检查 Logo / 轮播 / 赛程条与提示面板是否互相遮挡。' }),
+  ),
+));
+
+/* ── 赛程（与比赛计分双向同步） ─────────────────────── */
+const scheduleCurrent = el('input', {
+  type: 'text', maxlength: '60', placeholder: '如：八强赛 A 组 第 1 场',
+});
+const scheduleUpcoming = el('input', {
+  type: 'text', maxlength: '60', placeholder: '如：第 12 局 / 败者组决赛',
+});
+const scheduleStatus = el('span', { class: 'small muted', text: '' });
+const scheduleSave = el('button', { class: 'btn primary', type: 'button', text: '同步赛程' });
+
+const scheduleCard = el('section', { class: 'card mb12' },
+  el('header', null,
+    el('span', { text: '赛程 / 当前与即将进行' }),
+    el('span', { class: 'spacer' }),
+    scheduleStatus,
+  ),
+  el('div', { class: 'body' },
+    el('div', { class: 'cc-fields' },
+      el('div', { class: 'cc-field' },
+        el('label', { text: '正在进行（= 比赛计分的本局名称）' }),
+        scheduleCurrent,
+      ),
+      el('div', { class: 'cc-field' },
+        el('label', { text: '即将进行（显示在摄像头底部提示条）' }),
+        scheduleUpcoming,
+      ),
+    ),
+    el('div', { class: 'cc-actions' },
+      scheduleSave,
+      el('span', { class: 'small muted', text: '两端共用同一份数据：这里改，比赛计分页同步；比赛页改，这里和摄像头条同步。' }),
+    ),
+  ),
+);
+page.append(scheduleCard);
+
+function syncSchedule() {
+  const t = arcadeWS.state?.match?.ticker || {};
+  if (document.activeElement !== scheduleCurrent) scheduleCurrent.value = t.current || '';
+  if (document.activeElement !== scheduleUpcoming) scheduleUpcoming.value = t.upcoming || '';
+  scheduleCurrent.disabled = t.status === 'finished';
+  scheduleStatus.textContent = t.status === 'finished' ? '当前局已结束（即将进行仍可编辑）' : '与比赛计分实时同步';
+}
+async function saveSchedule() {
+  const current = scheduleCurrent.value.trim();
+  const upcoming = scheduleUpcoming.value.trim();
+  let nameErr = null;
+  if (current) {
+    try { await api('/api/match/name', { method: 'POST', body: { name: current }, quiet: true }); }
+    catch (e) { nameErr = e; }
+  }
+  try {
+    await api('/api/match/upcoming', { method: 'POST', body: { name: upcoming }, quiet: true });
+  } catch (e) {
+    cmdError(e, '保存即将进行');
+    return;
+  }
+  if (nameErr) warn(`当前局名称未更新：${nameErr.message}`);
+  else ok('赛程已同步到比赛计分与解说摄像头');
+  syncSchedule();
+}
+scheduleSave.addEventListener('click', saveSchedule);
+for (const input of [scheduleCurrent, scheduleUpcoming]) {
+  input.addEventListener('keydown', (e) => { if (e.key === 'Enter') saveSchedule(); });
+}
+arcadeWS.on('hello', syncSchedule);
+arcadeWS.on('patch', syncSchedule);
+arcadeWS.watch('match.ticker', syncSchedule);
+arcadeWS.watch('match.state', syncSchedule);
+syncSchedule();
+
+/* ── 预览 ───────────────────────────────────────────── */
+// 默认显示真实提示；示例数据只在手动切换时启用，避免一眼假数据 / 重载后误以为倒计时重开
+let cueDemo = false;
+const cuePreviewFrames = [];
+
+function cueSrc(bare) {
+  return `/cast?preview=1&fit=1${bare ? '&bare=1' : ''}&t=${Date.now()}${cueDemo ? '&demo=1' : ''}`;
+}
+function refreshCuePreviews() {
+  for (const it of cuePreviewFrames) it.iframe.src = cueSrc(it.bare);
+}
+
+function sourceCard({ title, desc, target, sourcePath, previewPath, demoable = false }) {
+  const frame = el('div', { class: 'cc-frame' });
+  const iframe = el('iframe', { title: `${title}预览`, loading: 'lazy' });
+  frame.append(iframe);
+
+  const status = el('span', { class: 'pill mute', text: '未接入' });
+  const setSrc = () => {
+    if (demoable) { refreshCuePreviews(); return; }
+    iframe.src = `${previewPath}${previewPath.includes('?') ? '&' : '?'}t=${Date.now()}`;
+  };
+  if (demoable) {
+    cuePreviewFrames.push({ iframe, bare: false });
+    iframe.src = cueSrc(false);
+  } else {
+    setSrc();
+  }
+
+  const copy = () => {
+    const url = location.origin + sourcePath;
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(url).then(() => ok('已复制源地址')).catch(fallback);
+    else fallback();
+    function fallback() {
+      const ta = el('textarea', { style: { position: 'fixed', left: '-9999px' } });
+      ta.value = url;
+      document.body.append(ta);
+      ta.select();
+      try { document.execCommand('copy'); ok('已复制源地址'); } catch { /* ignore */ }
+      ta.remove();
+    }
+  };
+
+  const actions = el('div', { class: 'cc-actions' },
+    el('button', { class: 'btn sm', type: 'button', text: '刷新预览', onclick: setSrc }),
+    el('button', { class: 'btn sm primary', type: 'button', text: '复制 OBS 地址', onclick: copy }),
+    demoable ? el('button', {
+      class: 'btn sm ghost', type: 'button', text: `示例提示：${cueDemo ? '开' : '关'}`,
+      onclick: (e) => { cueDemo = !cueDemo; e.target.textContent = `示例提示：${cueDemo ? '开' : '关'}`; setSrc(); },
+    }) : null,
+    el('a', { class: 'btn sm ghost', href: previewPath, target: '_blank', text: '单独打开' }),
+  );
+
+  const card = el('section', { class: 'card out-card' },
+    el('header', null, el('span', { text: title }), el('span', { class: 'spacer' }), status),
+    el('div', { class: 'body' },
+      frame,
+      el('div', { class: 'cc-url-row' },
+        el('code', { class: 'cc-url', text: location.origin + sourcePath }),
+      ),
+      actions,
+      el('div', { class: 'cc-note', text: desc }),
+    ),
+  );
+  return { card, status, target };
+}
+
+const cueCard = sourceCard({
+  title: '解说提示叠加',
+  desc: '透明源：提示预览面板 / 比赛比分 / 当前曲目。这里的预览显示实时提示；状态只统计真实 OBS 源。',
+  target: 'cast',
+  sourcePath: '/cast',
+  previewPath: '/cast?preview=1&fit=1',
+  demoable: true,
+});
+const camCard = sourceCard({
+  title: '解说摄像头叠加',
+  desc: '全屏透明 UI：比赛 Logo / 图片轮播 / 底部「正在进行 / 即将进行」赛程条；摄像头画面由 OBS 垫在下面。',
+  target: 'castcam',
+  sourcePath: '/render/castcam',
+  previewPath: '/render/castcam?preview=1&fit=1',
+});
+
+/* 合并预览：两路透明源叠在一起，用来检查提示面板和摄像头是否互相遮挡 */
+const comboCue = el('iframe', { class: 'cue-layer', title: '提示叠加（合并预览）' });
+cuePreviewFrames.push({ iframe: comboCue, bare: true });
+comboCue.src = cueSrc(true);
+
+const comboCam = el('iframe', { class: 'cam-layer', title: '摄像头叠加（合并预览）' });
+const comboCamSrc = () => { comboCam.src = `/render/castcam?preview=1&fit=1&bare=1&t=${Date.now()}`; };
+comboCamSrc();
+
+const comboFrame = el('div', { class: 'cc-frame cc-combo' }, comboCue, comboCam);
+const comboWarn = el('div', { class: 'cc-overlap', text: '' });
+const comboCard = el('section', { class: 'card mb12' },
+  el('header', null, el('span', { text: '合并预览（提示 + 摄像头）' }), el('span', { class: 'spacer' }),
+    el('button', { class: 'btn sm', type: 'button', text: '刷新预览', onclick: () => { refreshCuePreviews(); comboCamSrc(); } }),
+    el('button', { class: 'btn sm primary', type: 'button', text: '推荐组合布局：提示左 / 隐藏重复层', onclick: applyRecommendedLayout }),
+  ),
+  el('div', { class: 'body' },
+    comboFrame,
+    comboWarn,
+    el('div', { class: 'cc-note', html:
+      '这里只用于检查遮挡关系：<b>棋盘格</b>代表透明区域。'
+      + '摄像头 UI 的赛程条是通栏的，提示层默认的品牌 / 比分条 / 提示面板也都占位置；'
+      + '点「推荐组合布局」会隐藏提示层里与摄像头 UI 重复的品牌、时钟和比分条，并把提示面板移到左侧。' }),
+  ),
+);
+page.append(comboCard);
+page.append(el('div', { class: 'cc-grid mb12' }, cueCard.card, camCard.card));
+
+/**
+ * 合并预览里检测两层 UI 是否相交：
+ *   提示层：品牌 / 时钟 / 比分条 / 提示预览面板
+ *   摄像头层：赛程条 / Logo / 轮播位
+ * 两个 iframe 尺寸完全一致，所以可以直接比较各自视口里的矩形。
+ */
+function watchOverlap() {
+  try {
+    const cueDoc = comboCue.contentDocument;
+    const camDoc = comboCam.contentDocument;
+    const visibleRects = (doc, sels) => sels
+      .map((sel) => doc?.querySelector(sel))
+      .filter((node) => node && !node.classList.contains('hidden'))
+      .map((node) => node.getBoundingClientRect());
+    const cueRects = visibleRects(cueDoc, ['.cast-head', '.match-strip', '.cue-preview']);
+    const camRects = visibleRects(camDoc, ['.ticker', '.logo-block', '.carousel']);
+    const overlap = cueRects.some((a) => camRects.some((b) =>
+      a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top));
+    comboWarn.classList.toggle('on', overlap);
+    if (overlap) {
+      comboWarn.textContent = '检测到提示层与摄像头 UI 有重叠 —— 点「推荐组合布局」会隐藏提示层里重复的品牌 / 时钟 / 比分条，并把提示面板移到左侧。';
+    }
+  } catch {
+    comboWarn.classList.remove('on');
+  }
+}
+setInterval(watchOverlap, 1400);
+setTimeout(watchOverlap, 1200);
+
+async function applyRecommendedLayout() {
+  try {
+    const patch = {
+      'cast.template': 'panel',
+      'cast.position': 'left',
+      'cast.showBrand': false,
+      'cast.showClock': false,
+      'cast.showMatch': false,
+    };
+    await api('/api/config', { method: 'POST', body: patch });
+    const set = (key, value) => { const i = inputs.get(key)?.input; if (i) { if (i.type === 'checkbox') i.checked = value; else i.value = value; } };
+    set('template', 'panel');
+    set('position', 'left');
+    set('showBrand', false);
+    set('showClock', false);
+    set('showMatch', false);
+    ok('已切换推荐组合布局：提示面板在左，提示层不再重复显示品牌 / 时钟 / 比分条');
+  } catch (e) { cmdError(e, '切换推荐布局'); }
+}
+
+/* ── 状态 ───────────────────────────────────────────── */
+function setPill(node, online, onText, offText) {
+  node.className = `pill ${online ? 'ok' : 'mute'}`;
+  node.textContent = online ? onText : offText;
+}
+function refreshStatus() {
+  const cueN = arcadeWS.state?.cue?.counts?.cast || 0;
+  setPill(cueCard.status, cueN > 0, `已接入 ${cueN}`, '未接入');
+  const cam = arcadeWS.state?.overlay?.clients?.castcam;
+  setPill(camCard.status, !!cam, '已接入', '未接入');
+}
+arcadeWS.on('hello', refreshStatus);
+arcadeWS.on('patch', refreshStatus);
+arcadeWS.watch('cue.counts', refreshStatus);
+arcadeWS.watch('overlay.clients', refreshStatus);
+refreshStatus();
+
+/* ── 配置 ───────────────────────────────────────────── */
+const CUE_FIELDS = [
+  { key: 'template', label: '提示模板', type: 'select', options: [
+    ['panel', '面板（推荐）'], ['ticker', '底部横条'], ['minimal', '浮动卡片'], ['classic', '经典全屏'],
+  ], help: '提示输出在「提示预览」区域内的呈现方式。' },
+  { key: 'position', label: '提示预览位置', type: 'select', options: [
+    ['bottom', '底部居中'], ['top', '顶部居中'], ['left', '左侧'], ['right', '右侧'],
+  ] },
+  { key: 'title', label: '解说页标题', type: 'text', maxlength: 40 },
+  { key: 'cueTitle', label: '预览区标题', type: 'text', maxlength: 40 },
+  { key: 'accent', label: '强调色', type: 'color' },
+  { key: 'opacity', label: '面板不透明度', type: 'range', min: 0.35, max: 1, step: 0.05 },
+  { key: 'scale', label: '提示文字缩放', type: 'range', min: 0.7, max: 1.5, step: 0.05 },
+  { key: 'maxCues', label: '最多显示条数', type: 'select', options: [['1', '1 条'], ['2', '2 条'], ['3', '3 条']] },
+  { key: 'background', label: '背景', type: 'select', options: [
+    ['transparent', '透明叠加（OBS）'], ['dark', '深色整屏'], ['dynamic', '动态背景整屏'],
+  ], help: 'OBS 源保持 transparent；整屏模式适合第二块 HDMI 监视器。' },
+  { key: 'showMatch', label: '显示比赛 / 比分条', type: 'check' },
+  { key: 'showClock', label: '显示时钟', type: 'check' },
+  { key: 'showBrand', label: '显示标识与标题', type: 'check' },
+  { key: 'showAudio', label: '显示声音状态', type: 'check' },
+  { key: 'ackButton', label: '显示「收到」按钮', type: 'check' },
+];
+
+const CAM_FIELDS = [
+  { key: 'camLogo', label: '比赛 Logo', type: 'text', maxlength: 300, picker: 'single', help: '可直接从图片库选择，也可以手动填 http(s) 地址。' },
+  { key: 'camLogoWidth', label: 'Logo 最大宽度', type: 'number', min: 80, max: 480, step: 10, unit: 'px' },
+  { key: 'camLogoPosition', label: 'Logo 位置', type: 'select', options: [['top-left', '左上'], ['top-right', '右上']] },
+  { key: 'camEventTitle', label: '赛事标题', type: 'text', maxlength: 40 },
+  { key: 'camEventSub', label: '标题副文案', type: 'text', maxlength: 40 },
+  { key: 'camCarouselImages', label: '轮播图片', type: 'textarea', rows: 3, picker: 'multi',
+    help: '可从图片库多选，也可以一行一个手动填地址；留空则不显示轮播位。' },
+  { key: 'camCarouselWidth', label: '轮播位宽度', type: 'number', min: 120, max: 600, step: 10, unit: 'px' },
+  { key: 'camCarouselPosition', label: '轮播位置', type: 'select', options: [
+    ['top-right', '右上'], ['top-left', '左上'], ['bottom-right', '右下'], ['bottom-left', '左下'],
+  ] },
+  { key: 'camCarouselIntervalMs', label: '轮播间隔', type: 'number', min: 1000, max: 60000, step: 500, unit: 'ms' },
+  { key: 'camTickerShow', label: '显示底部赛程条', type: 'check' },
+  { key: 'camTickerPosition', label: '赛程条位置', type: 'select', options: [['bottom', '底部'], ['top', '顶部']] },
+  { key: 'camTickerOpacity', label: '赛程条不透明度', type: 'range', min: 0.35, max: 1, step: 0.05 },
+  { key: 'camTickerCurrentLabel', label: '「正在进行」文案', type: 'text', maxlength: 20 },
+  { key: 'camTickerUpcomingLabel', label: '「即将进行」文案', type: 'text', maxlength: 20 },
+  { key: 'camTickerShowUpcoming', label: '显示「即将进行」', type: 'check' },
+  { key: 'camTickerShowLive', label: '显示 LIVE', type: 'check' },
+  { key: 'camAccent', label: '摄像头强调色', type: 'color' },
+];
+
+const inputs = new Map();
+const dirty = new Set();
+const statusEl = el('div', { class: 'cc-save-status', text: '' });
+let saveTimer = null;
+let saving = false;
+let pending = false;
+
+function fieldNode(def, value) {
+  const id = `cc-${def.key}`;
+  let input;
+  if (def.type === 'select') {
+    input = el('select', { id }, def.options.map(([v, l]) => el('option', { value: v, text: l })));
+    input.value = String(value ?? def.options[0][0]);
+  } else if (def.type === 'check') {
+    input = el('input', { id, type: 'checkbox' });
+    input.checked = !!value;
+  } else if (def.type === 'color') {
+    input = el('input', { id, type: 'color' });
+    input.value = /^#[0-9a-f]{6}$/i.test(String(value || '')) ? value : '#d9a441';
+  } else if (def.type === 'range') {
+    input = el('input', { id, type: 'range', min: String(def.min), max: String(def.max), step: String(def.step) });
+    input.value = String(Number(value) || def.min);
+  } else if (def.type === 'number') {
+    input = el('input', { id, type: 'number', min: String(def.min), max: String(def.max), step: String(def.step) });
+    input.value = String(Number(value) || def.min);
+  } else if (def.type === 'textarea') {
+    input = el('textarea', { id, rows: String(def.rows || 3) });
+    input.value = Array.isArray(value) ? value.join('\n') : String(value ?? '');
+  } else {
+    input = el('input', { id, type: 'text', maxlength: String(def.maxlength || 40) });
+    input.value = value == null ? '' : String(value);
+  }
+  inputs.set(def.key, { def, input });
+  const markDirty = () => { dirty.add(def.key); queueCastSave(); };
+  input.addEventListener('input', markDirty);
+  input.addEventListener('change', markDirty);
+
+  const wrap = el('div', { class: 'cc-field' }, el('label', { for: id, text: def.label }), input);
+  if (def.picker) {
+    const multi = def.picker === 'multi';
+    wrap.append(el('button', {
+      class: 'btn sm ghost mt8', type: 'button',
+      text: multi ? '从图片库选择（可多选）' : '从图片库选择',
+      onclick: () => {
+        const current = multi
+          ? String(input.value).split(/\n/).map((s) => s.trim()).filter(Boolean)
+          : [String(input.value).trim()].filter(Boolean);
+        ui.mediaPicker({
+          multiple: multi,
+          selected: current,
+          title: multi ? '选择轮播图片' : '选择比赛 Logo',
+          onPick: (urls) => {
+            input.value = multi ? urls.join('\n') : (urls[0] || '');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+          },
+        });
+      },
+    }));
+  }
+  if (def.help) wrap.append(el('div', { class: 'help', text: def.help }));
+  if (def.unit) wrap.append(el('div', { class: 'help', text: `单位：${def.unit}` }));
+  return wrap;
+}
+
+function readValues() {
+  const out = {};
+  for (const [key, { def, input }] of inputs) {
+    if (def.type === 'check') out[key] = input.checked;
+    else if (def.type === 'range' || def.type === 'number') out[key] = Number(input.value);
+    else if (def.type === 'textarea') out[key] = String(input.value).split(/\n/).map((s) => s.trim()).filter(Boolean);
+    else out[key] = input.value;
+  }
+  return out;
+}
+
+function setStatus(text, cls = '') {
+  statusEl.textContent = text;
+  statusEl.className = `cc-save-status ${cls}`;
+}
+
+async function saveNow() {
+  if (saving) { pending = true; return; }
+  // 只提交这次真正改过的字段：多个页面同时开着时，避免用旧值覆盖另一页刚改的设置
+  if (!dirty.size) return;
+  saving = true;
+  const keys = [...dirty];
+  const values = readValues();
+  const patch = {};
+  for (const k of keys) patch[`cast.${k}`] = values[k];
+  dirty.clear();
+
+  try {
+    const r = await api('/api/config', { method: 'POST', body: patch, quiet: true });
+    setStatus(`已保存 · ${fmt.clock(Date.now())}${r.changed?.length ? ` · ${r.changed.length} 项变更` : ''}`, 'ok');
+  } catch (e) {
+    for (const k of keys) dirty.add(k);
+    setStatus(`保存失败：${e.message}`, 'err');
+  } finally {
+    saving = false;
+    if (pending) { pending = false; saveNow(); }
+  }
+}
+function queueCastSave() {
+  clearTimeout(saveTimer);
+  setStatus('正在保存…');
+  saveTimer = setTimeout(saveNow, 500);
+}
+
+function configCard(title, fields, cfg) {
+  const body = el('div', { class: 'cc-fields' });
+  for (const def of fields) body.append(fieldNode(def, cfg[def.key]));
+  return el('section', { class: 'card mb12' },
+    el('header', null, el('span', { text: title })),
+    el('div', { class: 'body' }, body),
+  );
+}
+
+async function loadConfig() {
+  try {
+    const r = await api('/api/config');
+    const cfg = r.config?.cast || {};
+    page.append(
+      configCard('解说提示叠加配置', CUE_FIELDS, cfg),
+      configCard('解说摄像头叠加配置', CAM_FIELDS, cfg),
+      el('section', { class: 'card' },
+        el('div', { class: 'body' },
+          el('div', { class: 'btn-row' },
+            el('button', {
+              class: 'btn primary', type: 'button', text: '立即保存',
+              onclick: () => {
+                if (!dirty.size) for (const key of inputs.keys()) dirty.add(key);
+                saveNow();
+              },
+            }),
+            el('a', { class: 'btn ghost', href: '/settings#cast', text: '打开完整设置' }),
+            el('a', { class: 'btn ghost', href: '/cues', text: '话术模板' }),
+            el('a', { class: 'btn ghost', href: '/director', text: '导播页' }),
+          ),
+          statusEl,
+        ),
+      ),
+    );
+    setStatus('配置已加载；修改后自动保存。');
+  } catch (e) { cmdError(e, '读取解说页配置'); }
+}
+loadConfig();
+})();
+</script>
+</body>
+</html>

@@ -770,14 +770,15 @@ async function main() {
       mBanInUse.status === 400 && mBanInUse.data.nack?.code === 'in_use',
       JSON.stringify(mBanInUse.data).slice(0, 120));
 
-    // 扫码选曲：提交 → 排队 → 导播应用
+    // 扫码选曲：同步关闭 = 先排队等导播确认；同步开启 = 直接写入下一空行
     const pickSong = await api('/api/music?q=Reach%20For%20The%20Stars&limit=5');
     const pSong = (pickSong.data.items || []).find((s) => s.difficulties?.master);
     if (pSong) {
+      await api('/api/pickshow/options', { method: 'POST', body: { sync: false } });
       const pick = await api('/api/match/pick', {
         method: 'POST', body: { side: 'left', musicId: pSong.id, difficulty: 'master' },
       });
-      check('★ 手机扫码选曲进入排队，不直接改画面',
+      check('★ 选曲结果同步关闭：手机扫码选曲进入排队，不直接改画面',
         pick.data.ok === true && (await api('/api/match/state')).data.state.picks.length === 1,
         JSON.stringify(pick.data.pick || {}));
       const applied = await api('/api/match/pick/apply', {
@@ -786,8 +787,24 @@ async function main() {
       check('★ 导播应用选曲后才写入曲目表',
         applied.data.ok === true && applied.data.state.current.songs[2].musicId === pSong.id,
         `row2=${applied.data.state?.current?.songs?.[2]?.title || '—'}`);
+
+      // 默认同步：开启后提交直接写入下一空行，不留在待确认队列
+      const pSong2 = (pickSong.data.items || []).find((s) => s.id !== pSong.id && s.difficulties?.master);
+      if (pSong2) {
+        await api('/api/pickshow/options', { method: 'POST', body: { sync: true } });
+        const auto = await api('/api/match/pick', {
+          method: 'POST', body: { side: 'right', musicId: pSong2.id, difficulty: 'master' },
+        });
+        const after = await api('/api/match/state');
+        check('★★ 选曲结果同步开启（默认）：自动写入下一空行',
+          auto.data.ok === true && auto.data.appliedIndex === 3
+          && after.data.state.picks.length === 0
+          && after.data.state.current.songs[3].musicId === pSong2.id,
+          JSON.stringify({ appliedIndex: auto.data.appliedIndex, picks: after.data.state.picks.length,
+            row3: after.data.state.current.songs[3]?.title || '—' }));
+      }
     } else {
-      check('★ 手机扫码选曲进入排队，不直接改画面', false, '曲目库里没找到测试曲目');
+      check('★ 选曲结果同步关闭：手机扫码选曲进入排队，不直接改画面', false, '曲目库里没找到测试曲目');
     }
 
     const matchQr = await api('/api/match/qr?size=256');

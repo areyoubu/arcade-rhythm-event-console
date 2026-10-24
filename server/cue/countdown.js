@@ -120,6 +120,7 @@ export function schedule(opts = {}) {
     dismissible: true,
     requiresAck: false,
     source: 'scheduler',
+    tag: `countdown:${id}`,
     playerSnapshot: cd.playerSnapshot,
     leadMs,
   });
@@ -199,6 +200,9 @@ export function cancel(id) {
   if (!cd) return { ok: false, nack: { code: 'not_found', msg: '倒计时不存在' } };
   cd.state = 'cancelled';
   timers.delete(id);
+  // C-REQ-525：取消时不能只清主卡 —— 升级提示（T-15s / T-10s / T-5s / T-3s）
+  // 都带 countdown:<id> 标签，必须一起清掉，否则会永久留在解说页队列里。
+  cueEngine.clearByTag(`countdown:${id}`, 'cancelled');
   if (cd.cueId) cueEngine.cancel(cd.cueId, 'cancelled');
   log.info('countdown', `取消倒计时：${cd.title}`, { countdownId: id });
   hub.toAudience(cd.audience, { t: 'countdown:cancel', countdownId: id });

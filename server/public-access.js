@@ -1,9 +1,10 @@
 /**
  * 外网访问 OBS 输出的总开关。
  *
- * OBS 渲染源（/render/*）、背景素材（/assets/*）、媒体库（/media/*）以及渲染端
- * 启动数据（/api/render/bootstrap、/api/match/pickUrl）都不需要登录密码 ——
- * 它们本身是给 OBS 浏览器源读的。默认**只允许内网访问**，防止有人从公网
+ * OBS 渲染源（/render/*）、背景素材（/assets/*）、媒体库（/media/*）、渲染端
+ * 启动数据（/api/render/bootstrap、/api/match/pickUrl）以及二维码 PNG
+ * （/api/match/qr、/api/lottery/qr）都不需要登录密码 —— 它们本身是给 OBS
+ * 浏览器源 / 页面 `<img>` 读的。默认**只允许内网访问**，防止有人从公网
  * 直接拿走你的画面 / 素材。
  *
  * 现场签到（/join、/pick 及其公开 API）不受影响，公网照常可用。
@@ -23,6 +24,9 @@ const OUTPUT_PATHS = [
   /^\/covers(\/|$)/,                 // 曲目封面
   /^\/api\/render\/bootstrap$/,      // 渲染端首屏模板 / 实体数据
   /^\/api\/match\/pickurl$/,         // 选曲二维码大屏用的公开地址
+  /^\/api\/match\/qr$/,              // 选曲二维码 PNG（页面 img / OBS 源）
+  /^\/api\/lottery\/qr$/,            // 签到二维码 PNG（页面 img）
+  /^\/api\/audio\/preview$/,         // 游戏曲目预览音频（OBS 浏览器源）
 ];
 
 export function isProtectedOutputPath(pathname) {

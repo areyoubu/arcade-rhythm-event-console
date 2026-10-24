@@ -99,8 +99,10 @@
         wrap.style.removeProperty('--dur');
       }
     };
+    // 立即量一次（读 scrollWidth 会强制同步布局），再在下一帧补一次：
+    // 即使页面被 OBS 判定为后台、rAF 被节流，滚动也能正常启用。
+    measure();
     if (typeof requestAnimationFrame === 'function') requestAnimationFrame(measure);
-    else setTimeout(measure, 0);
   }
   function setHidden(node, hidden) {
     if (node) node.classList.toggle('hidden', !!hidden);
@@ -160,9 +162,11 @@
     cover.className = 'song-cover hidden';
     cover.alt = '';
     cover.loading = 'lazy';
+    // 右侧配平占位：宽度与曲绘一致，让文字列的中心始终是整行中心
+    const coverSpacer = div('song-cover-spacer hidden');
     const text = div('song-text');
     text.append(tags, titleWrap, artistWrap);
-    center.append(cover, text);
+    center.append(cover, text, coverSpacer);
 
     const right = div('side-score right');
     const rightFlag = span('score-flag hidden', '胜');
@@ -172,7 +176,8 @@
     row.append(left, center, right);
     el.songs.append(row);
     rows.push({
-      row, no, now, draw, diff, title, titleWrap, artist, artistWrap, cover,
+      row, no, now, draw, diff, title, titleWrap, artist, artistWrap,
+      cover, coverSpacer,
       leftNum, rightNum, leftFlag, rightFlag,
     });
   }
@@ -204,10 +209,12 @@
     }
     setHidden(node.row, false);
     setText(node.no, String(i + 1).padStart(2, '0'));
-    setMarquee(node.titleWrap, node.title, data.title || '未命名曲目');
-    setMarquee(node.artistWrap, node.artist, data.artist || '', { artist: true });
+    // 先确定曲绘 / 配平块是否占位，再量文字宽度，避免首帧按旧列宽判断滚动
     setImage(node.cover, data.cover || '');
     setHidden(node.cover, !data.cover);
+    setHidden(node.coverSpacer, !data.cover);
+    setMarquee(node.titleWrap, node.title, data.title || '未命名曲目');
+    setMarquee(node.artistWrap, node.artist, data.artist || '', { artist: true });
 
     const color = data.difficultyColor || '#4a4e56';
     node.diff.style.background = color;

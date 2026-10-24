@@ -310,7 +310,6 @@ export function random(opts = {}) {
   const q = norm(opts.q);
   const genre = String(opts.genre || '').trim();
   const includeWe = !!opts.includeWe;
-  const randomDiff = opts.difficulty === 'random';
   const requestedWe = opts.difficulty === WE_KEY;
   if (requestedWe && !includeWe) return null;
   const requested = DIFFICULTY_ORDER.includes(opts.difficulty)
@@ -318,6 +317,10 @@ export function random(opts = {}) {
     : (requestedWe ? WE_KEY : '');
   const min = optLevel(opts.minLevel);
   const max = optLevel(opts.maxLevel);
+  // 「全部难度 + 等级范围」时，范围要落在任意可用谱面上；
+  // 否则 filterSongs 在没有指定难度时会忽略 min/max，随机到范围外的曲目。
+  const randomDiff = opts.difficulty === 'random'
+    || (!requested && !requestedWe && (min !== null || max !== null));
   const cnOnly = !!opts.cnOnly;
 
   let pool = filterSongs({

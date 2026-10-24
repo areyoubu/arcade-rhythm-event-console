@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>选手选曲展示 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .ps-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(340px, .9fr); gap: 12px; align-items: start; }
+  @media (max-width: 1100px) { .ps-grid { grid-template-columns: minmax(0, 1fr); } }
+  .ps-frame {
+    position: relative; width: 100%; aspect-ratio: 16 / 9;
+    background: #08090b; border: 1px solid var(--border); overflow: hidden;
+  }
+  .ps-frame iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+  .ps-url-row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+  .ps-url {
+    flex: 1; min-width: 0; font-family: var(--mono); font-size: 11.5px;
+    color: var(--text-dim); background: #17181b; border: 1px solid var(--border);
+    border-radius: 3px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .ps-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .ps-options { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 12px; }
+  .ps-field > label { display: block; font-size: 11.5px; font-weight: 700; color: var(--text-dim); margin-bottom: 4px; }
+  .ps-field select {
+    width: 100%; min-height: 32px; padding: 5px 8px;
+    background: #17181b; color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: 3px; font-family: inherit; font-size: 12px;
+  }
+  .ps-check {
+    display: flex; align-items: center; gap: 8px; min-height: 32px;
+    font-size: 12px; color: var(--text-dim); cursor: pointer;
+  }
+  .ps-check input { width: 16px; height: 16px; accent-color: var(--accent); }
+  .ps-check .hint { color: var(--text-mute); font-size: 11px; }
+  .ps-counts {
+    margin-top: 10px; padding: 9px 11px; background: var(--surface-2);
+    border: 1px solid var(--border); border-radius: 3px;
+    font-size: 12px; color: var(--text-dim); line-height: 1.6;
+  }
+  .ps-counts b { color: var(--text); }
+  .ps-badge-p1 { color: var(--left-color, #d0344e); font-weight: 800; }
+  .ps-badge-p2 { color: var(--right-color, #3d78c9); font-weight: 800; }
+</style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+(function () {
+'use strict';
+const { el, api, ok, warn, cmdError, mount, clear } = ui;
+
+const page = mount({
+  current: '/pickshow',
+  title: '选手选曲展示',
+  subtitle: '对外网手机选歌器 → 选曲队列 → OBS 展示；可选择 P1 / P2 / 同时，支持每人 1 / 2 / 4 首',
+});
+
+/* ── 顶部说明 ───────────────────────────────────────── */
+page.append(el('section', { class: 'card mb12' },
+  el('header', null, el('span', { text: '选手选曲展示' }), el('span', { class: 'spacer' }),
+    el('a', { class: 'btn ghost sm', href: '/pick', target: '_blank', text: '打开手机选歌页' }),
+    el('a', { class: 'btn ghost sm', href: '/match', text: '比赛计分' }),
+    el('a', { class: 'btn ghost sm', href: '/outputs', text: '输出与场景' })),
+  el('div', { class: 'body' },
+    el('div', { class: 'note info', html:
+      '选手用手机扫码打开 <code>/pick</code> 选歌；选择「当前局」或「即将进行」后提交，'
+      + '这里会实时显示。即将进行的选曲可以在当前局结束后继续收集，选手可在手机端选择「你是谁」；'
+      + '开启新局时会自动填入名字、生成霓虹对阵卡并放进叠加队列。'
+      + '「选曲结果同步」默认开启：当前局的提交会直接写入比赛曲目表的下一空行。'
+      + '切到 OBS 选曲展示场景时默认是待展示画面；点「播放展示动画」后按当前双人/单人模式播放 3D 展开。' }),
+  ),
+));
+
+/* ── 预览 + 输出选项 ─────────────────────────────────── */
+let staticBg = false;
+let lastState = null;
+
+const previewFrame = el('iframe', { title: '选手选曲展示预览', loading: 'lazy' });
+const sourceUrl = el('code', { class: 'ps-url', text: '' });
+const sourcePill = el('span', { class: 'pill mute', text: '未接入' });
+const revealPill = el('span', { class: 'pill mute', text: '待展示' });
+const revealBtn = el('button', { class: 'btn sm primary', type: 'button', text: '▶ 播放展示动画' });
+const resetRevealBtn = el('button', { class: 'btn sm ghost', type: 'button', text: '回到待展示' });
+const bgDynamicBtn = el('button', { class: 'btn sm primary', type: 'button', text: '动态背景' });
+const bgStaticBtn = el('button', { class: 'btn sm ghost', type: 'button', text: '静态背景' });
+
+const sideSel = el('select', null,
+  el('option', { value: 'both', text: '同时显示 P1 + P2' }),
+  el('option', { value: 'left', text: '只显示 P1' }),
+  el('option', { value: 'right', text: '只显示 P2' }),
+);
+const countSel = el('select', null,
+  el('option', { value: 'auto', text: '自动（1–2 首 / 3–4 首）' }),
+  el('option', { value: '1', text: '固定 1 首' }),
+  el('option', { value: '2', text: '固定 2 首' }),
+  el('option', { value: '4', text: '固定 4 首' }),
+);
+const sourceSel = el('select', null,
+  el('option', { value: 'current', text: '当前局选曲（含已同步结果）' }),
+  el('option', { value: 'upcoming', text: '即将进行选曲' }),
+);
+const syncCheck = el('input', { type: 'checkbox', checked: true });
+const syncWrap = el('label', { class: 'ps-check' },
+  syncCheck,
+  el('span', null, '选曲结果同步到比赛',
+    el('span', { class: 'hint', text: '（提交后自动写入下一空行，默认开）' })),
+);
+const audioCheck = el('input', { type: 'checkbox', checked: true });
+const audioWrap = el('label', { class: 'ps-check' },
+  audioCheck,
+  el('span', null, '播放预览音频',
+    el('span', { class: 'hint', text: '（双人默认 P1 第一首）' })),
+);
+const audioSideSel = el('select', null,
+  el('option', { value: 'auto', text: '自动（双人默认 P1）' }),
+  el('option', { value: 'left', text: '固定 P1' }),
+  el('option', { value: 'right', text: '固定 P2' }),
+);
+const countsEl = el('div', { class: 'ps-counts', text: '等待选曲数据…' });
+const clearUpcomingBtn = el('button', { class: 'btn sm danger', type: 'button', text: '清空即将进行选曲' });
+
+function sourcePath() { return `/render/pickshow${staticBg ? '?static=1' : ''}`; }
+function previewSrc() { return `/render/pickshow?preview=1&fit=1${staticBg ? '&static=1' : ''}&t=${Date.now()}`; }
+function syncBg() {
+  bgDynamicBtn.className = `btn sm ${staticBg ? 'ghost' : 'primary'}`;
+  bgStaticBtn.className = `btn sm ${staticBg ? 'primary' : 'ghost'}`;
+  previewFrame.src = previewSrc();
+  sourceUrl.textContent = `${location.origin}${sourcePath()}`;
+}
+bgDynamicBtn.onclick = () => { staticBg = false; syncBg(); };
+bgStaticBtn.onclick = () => { staticBg = true; syncBg(); };
+
+function copySource() {
+  const url = `${location.origin}${sourcePath()}`;
+  if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(url).then(() => ok('已复制展示地址')).catch(fallback); return; }
+  fallback();
+  function fallback() {
+    const ta = el('textarea', { style: { position: 'fixed', left: '-9999px' } });
+    ta.value = url; document.body.append(ta); ta.select();
+    try { document.execCommand('copy'); ok('已复制展示地址'); } catch { warn('复制失败，请手动复制'); }
+    ta.remove();
+  }
+}
+
+syncBg();
+
+const previewCard = el('section', { class: 'card' },
+  el('header', null,
+    el('span', { text: '展示预览' }), el('span', { class: 'spacer' }), revealPill, sourcePill),
+  el('div', { class: 'body' },
+    el('div', { class: 'ps-frame' }, previewFrame),
+    el('div', { class: 'ps-url-row' }, sourceUrl),
+    el('div', { class: 'ps-actions' },
+      revealBtn, resetRevealBtn,
+      el('button', { class: 'btn sm', type: 'button', text: '刷新预览', onclick: () => { previewFrame.src = previewSrc(); } }),
+      el('button', { class: 'btn sm ghost', type: 'button', text: '复制 OBS 地址', onclick: copySource }),
+      bgDynamicBtn, bgStaticBtn,
+    ),
+    el('div', { class: 'note info mt8', html:
+      '预览使用独立 target，不计入 OBS 源连接数。把 <code>/render/pickshow</code> 加进 OBS 浏览器源即可输出。' }),
+  ),
+);
+const optionsCard = el('section', { class: 'card' },
+  el('header', null, el('span', { text: '输出选项' }), el('span', { class: 'spacer' }),
+    el('span', { class: 'small muted', text: '修改后立即同步到 OBS 源' })),
+  el('div', { class: 'body' },
+    el('div', { class: 'ps-options' },
+      el('div', { class: 'ps-field' }, el('label', { text: '显示哪一侧' }), sideSel),
+      el('div', { class: 'ps-field' }, el('label', { text: '每人几首' }), countSel),
+      el('div', { class: 'ps-field' }, el('label', { text: '选曲来源' }), sourceSel),
+      el('div', { class: 'ps-field' }, el('label', { text: '同步' }), syncWrap),
+      el('div', { class: 'ps-field' }, el('label', { text: '预览音频' }), audioWrap, audioSideSel),
+    ),
+    countsEl,
+    el('div', { class: 'ps-actions' }, clearUpcomingBtn,
+      el('span', { class: 'small muted', text: '清空「即将进行」队列不影响当前局待确认选曲。' })),
+  ),
+);
+page.append(el('div', { class: 'ps-grid' }, previewCard, optionsCard));
+
+/* ── 数据 / 操作 ─────────────────────────────────────── */
+let syncing = false;
+
+function applyState(state) {
+  if (!state) return;
+  lastState = state;
+  const o = state.options || {};
+  if (!syncing) {
+    if (document.activeElement !== sideSel) sideSel.value = o.side || 'both';
+    if (document.activeElement !== countSel) countSel.value = String(o.count || 'auto');
+    if (document.activeElement !== sourceSel) sourceSel.value = o.source || 'current';
+    syncCheck.checked = o.sync !== false;
+    audioCheck.checked = o.audio !== false;
+    if (document.activeElement !== audioSideSel) audioSideSel.value = o.audioSide || 'auto';
+  }
+  const t = state.totals || { left: 0, right: 0 };
+  clear(countsEl);
+  countsEl.append(
+    el('div', null,
+      el('span', { class: 'ps-badge-p1', text: 'P1' }), ` ${t.left || 0} 首 · `,
+      el('span', { class: 'ps-badge-p2', text: 'P2' }), ` ${t.right || 0} 首`,
+      el('span', { class: 'muted', text: ` · ${state.sourceLabel || '当前局'} · 每人显示 ${state.count || 2} 首` })),
+    el('div', { class: 'small muted', text: `即将进行队列：${state.upcomingPickCount || 0} 首` }),
+    el('div', { class: 'small muted', text: state.audio
+      ? `预览音频：${state.audioSide === 'right' ? 'P2' : 'P1'} · ${state.audio.title || `#${state.audio.musicId}`}`
+      : '预览音频：未启用或当前没有可播放的选曲' }),
+  );
+  revealPill.className = `pill ${state.revealed ? 'ok' : 'mute'}`;
+  revealPill.textContent = state.revealed ? '已展开' : '待展示';
+  revealBtn.textContent = state.revealed ? '▶ 重播展示动画' : '▶ 播放展示动画';
+
+  // 状态灯：真实 OBS 源连接数
+  const c = arcadeWS.state?.overlay?.clients?.pickshow;
+  sourcePill.className = `pill ${c ? 'ok' : 'mute'}`;
+  sourcePill.textContent = c ? 'OBS 源已接入' : 'OBS 源未接入';
+}
+
+async function doReveal() {
+  revealBtn.disabled = true;
+  try {
+    await api('/api/pickshow/reveal', { method: 'POST', body: {} });
+    ok('展示动画已开始');
+  } catch (e) { cmdError(e, '播放展示动画'); }
+  finally { revealBtn.disabled = false; }
+}
+
+async function doResetReveal() {
+  resetRevealBtn.disabled = true;
+  try {
+    await api('/api/pickshow/reset', { method: 'POST', body: {} });
+    ok('已回到待展示画面');
+  } catch (e) { cmdError(e, '回到待展示'); }
+  finally { resetRevealBtn.disabled = false; }
+}
+
+revealBtn.onclick = doReveal;
+resetRevealBtn.onclick = doResetReveal;
+
+async function pushOptions() {
+  syncing = true;
+  try {
+    const r = await api('/api/pickshow/options', {
+      method: 'POST',
+      body: {
+        side: sideSel.value,
+        count: countSel.value,
+        source: sourceSel.value,
+        sync: syncCheck.checked,
+        audio: audioCheck.checked,
+        audioSide: audioSideSel.value,
+      },
+      quiet: true,
+    });
+    if (r.state) applyState(r.state);
+  } catch (e) { cmdError(e, '更新输出选项'); }
+  finally { syncing = false; }
+}
+
+for (const s of [sideSel, countSel, sourceSel]) s.onchange = pushOptions;
+syncCheck.onchange = pushOptions;
+audioCheck.onchange = pushOptions;
+audioSideSel.onchange = pushOptions;
+
+clearUpcomingBtn.onclick = async () => {
+  try {
+    await api('/api/pickshow/upcoming/clear', { method: 'POST', body: {} });
+    ok('即将进行选曲已清空');
+  } catch (e) { cmdError(e, '清空即将进行选曲'); }
+};
+
+function refreshSource() {
+  const c = arcadeWS.state?.overlay?.clients?.pickshow;
+  sourcePill.className = `pill ${c ? 'ok' : 'mute'}`;
+  sourcePill.textContent = c ? 'OBS 源已接入' : 'OBS 源未接入';
+}
+
+arcadeWS.on('hello', () => {
+  applyState(arcadeWS.state?.pickshow?.state);
+  refreshSource();
+});
+arcadeWS.watch('pickshow.state', (v) => applyState(v));
+arcadeWS.watch('overlay.clients', refreshSource);
+refreshSource();
+})();
+</script>
+</body>
+</html>

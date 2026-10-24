@@ -214,6 +214,38 @@ test('未知模板入队被拒绝', () => {
   assert.equal(r.nack.code, 'unknown_template');
 });
 
+test('★ 队列：必填槽位为空时明确拒绝，而不是入队后静默卡住', () => {
+  overlay.queueClear();
+  const r = overlay.queueAdd({ template: 'versusCardNeon', values: {} });
+  assert.equal(r.ok, false);
+  assert.equal(r.nack.code, 'invalid_values');
+  assert.match(r.nack.msg, /必填/);
+});
+
+test('★ 队列：空队列开始播放返回明确错误', () => {
+  overlay.queueClear();
+  const r = overlay.queueStart({ target: 'main' });
+  assert.equal(r.ok, false);
+  assert.equal(r.nack.code, 'queue_empty');
+});
+
+test('★ 队列：有效条目会依次播放并推进', async () => {
+  overlay.queueClear();
+  overlay.queueAdd({ template: T, values: { name: 'q1' }, durationMs: 120, target: 'preview' });
+  overlay.queueAdd({ template: T, values: { name: 'q2' }, durationMs: 120, target: 'preview' });
+  const started = overlay.queueStart({ target: 'preview' });
+  assert.equal(started.ok, true);
+  assert.equal(overlay.getTarget('preview').slotValues.name, 'q1');
+
+  // durationMs 下限 300ms：第一条 300ms 后隐藏，再等 500ms 接第二条
+  await new Promise((r) => setTimeout(r, 380));
+  assert.equal(overlay.getTarget('preview').visible, false, '第一条结束后应隐藏');
+
+  await new Promise((r) => setTimeout(r, 520));
+  assert.equal(overlay.getTarget('preview').slotValues.name, 'q2', '第二条应自动接上');
+  overlay.queueClear();
+});
+
 test('★ 时长预估：行数越多越长，速度越快越短（A-REQ-523）', () => {
   const a = overlay.estimateCreditsDuration({ lines: new Array(5), speed: 40 });
   const b = overlay.estimateCreditsDuration({ lines: new Array(20), speed: 40 });

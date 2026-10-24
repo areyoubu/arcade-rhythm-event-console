@@ -1,0 +1,229 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>解说摄像头叠加 · 街机音游赛事控制软件</title>
+<!--
+  解说摄像头叠加 —— OBS 全屏透明 UI。
+
+  OBS 场景顺序：
+    1. 摄像头画面源（铺满或裁切到 1920×1080）
+    2. 浏览器源 /render/castcam（放在摄像头源上方）
+
+  本页只画 UI：比赛 Logo、图片轮播位、底部「正在进行 / 即将进行」赛程条。
+  赛程名称与比赛计分模块的 name / upcoming 双向同步。
+
+  URL 参数（只影响预览）：
+    ?preview=1   全屏模拟摄像头画面，便于调 UI
+    ?bare=1      透明（配合 preview 时用于控制台的合并预览）
+    ?fit=1       按窗口等比缩放
+-->
+<style>
+  :root {
+    --cam-accent: #d9a441;
+    --ticker-alpha: .88;
+    --ink: #ffffff;
+    --ink-dim: #cdd3de;
+    --ink-mute: #8c93a0;
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: transparent !important;
+    overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  #stage {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    overflow: hidden;
+    pointer-events: none;
+    transform-origin: top left;
+  }
+
+  /* ── 预览用的全屏模拟摄像头（OBS 里不显示） ── */
+  .mock-cam {
+    position: absolute; inset: 0; z-index: 0;
+    display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px;
+    background:
+      radial-gradient(70% 62% at 50% 34%, rgba(80, 104, 138, .40), transparent 70%),
+      linear-gradient(160deg, #18202c 0%, #0b0f15 78%);
+    color: #6f7b8d; font-family: var(--mono); font-size: 13px; letter-spacing: 2px;
+  }
+  body.preview:not(.bare) .mock-cam { display: flex; }
+  .mock-silhouette {
+    width: 300px; height: 300px; border-radius: 50%;
+    background:
+      radial-gradient(circle at 50% 34%, #46536a 0 25%, transparent 26%),
+      radial-gradient(ellipse 62% 50% at 50% 92%, #46536a 0 42%, transparent 43%);
+    opacity: .9;
+  }
+
+  /* ── 全屏 UI 层 ── */
+  .cam-ui { position: absolute; inset: 0; z-index: 2; }
+
+  /* 比赛 Logo */
+  .logo-block {
+    position: absolute;
+    display: flex; align-items: center; gap: 16px;
+    max-width: 900px;
+    padding: 12px 24px 12px 18px;
+    background: linear-gradient(90deg, rgba(6, 7, 10, .76), rgba(6, 7, 10, .14));
+    border-left: 4px solid var(--cam-accent);
+    filter: drop-shadow(0 10px 26px rgba(0, 0, 0, .35));
+  }
+  body.logo-tl .logo-block { left: 64px; top: 48px; }
+  body.logo-tr .logo-block {
+    right: 64px; top: 48px;
+    flex-direction: row-reverse; text-align: right;
+    border-left: 0; border-right: 4px solid var(--cam-accent);
+    background: linear-gradient(270deg, rgba(6, 7, 10, .76), rgba(6, 7, 10, .14));
+  }
+  body.ticker-top.logo-tl .logo-block,
+  body.ticker-top.logo-tr .logo-block { top: 150px; }
+
+  .logo-mark { display: none; flex: 0 0 auto; }
+  .logo-mark.on { display: block; }
+  .logo-mark img {
+    display: block; max-height: 96px; max-width: var(--logo-w, 220px);
+    width: auto; height: auto; object-fit: contain;
+    filter: drop-shadow(0 4px 14px rgba(0, 0, 0, .45));
+  }
+  .logo-text { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .event-title {
+    font-size: 28px; font-weight: 900; color: var(--ink); line-height: 1.15;
+    letter-spacing: .5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-shadow: 0 3px 14px rgba(0, 0, 0, .8);
+  }
+  .event-title:empty { display: none; }
+  .event-sub {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: 2.6px; color: var(--ink-dim);
+    text-shadow: 0 2px 10px rgba(0, 0, 0, .8);
+  }
+  .event-sub:empty { display: none; }
+  .logo-text:empty { display: none; }
+
+  /* 图片轮播位 */
+  .carousel {
+    position: absolute;
+    width: var(--car-w, 300px);
+    padding: 8px;
+    background: rgba(6, 7, 10, .52);
+    border: 1px solid rgba(255, 255, 255, .16);
+    box-shadow: 0 14px 34px rgba(0, 0, 0, .30);
+    display: flex; align-items: center; justify-content: center;
+  }
+  body.car-tr .carousel { right: 64px; top: 48px; }
+  body.car-tl .carousel { left: 64px; top: 48px; }
+  body.car-br .carousel { right: 64px; bottom: 160px; }
+  body.car-bl .carousel { left: 64px; bottom: 160px; }
+  body.ticker-top.car-tr .carousel,
+  body.ticker-top.car-tl .carousel { top: 150px; }
+  body.ticker-top.car-br .carousel,
+  body.ticker-top.car-bl .carousel { bottom: 48px; }
+
+  .carousel img {
+    display: block; width: 100%; max-height: 210px; object-fit: contain;
+    opacity: 1; transition: opacity .22s ease;
+  }
+  .carousel img.fade { opacity: 0; }
+
+  /* 底部 / 顶部赛程提示条 */
+  .ticker {
+    position: absolute; left: 0; right: 0; z-index: 3;
+    height: 118px;
+    display: flex; align-items: center; gap: 42px;
+    padding: 0 76px;
+    background: rgba(6, 7, 10, var(--ticker-alpha));
+    border-top: 3px solid var(--cam-accent);
+    box-shadow: 0 -18px 46px rgba(0, 0, 0, .36);
+  }
+  body.ticker-bottom .ticker { bottom: 0; }
+  body.ticker-top .ticker {
+    top: 0; border-top: 0; border-bottom: 3px solid var(--cam-accent);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, .36);
+  }
+
+  .tick-now, .tick-next { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+  .tick-now { flex: 0 1 auto; }
+  .tick-next { flex: 0 1 auto; }
+  .tick-label {
+    font-family: var(--mono); font-size: 12px; font-weight: 800;
+    letter-spacing: 2.4px; color: var(--cam-accent);
+    white-space: nowrap;
+  }
+  .tick-next .tick-label { color: var(--ink-mute); }
+  .tick-name {
+    font-size: 34px; font-weight: 900; line-height: 1.1; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    text-shadow: 0 3px 14px rgba(0, 0, 0, .55);
+  }
+  .tick-next .tick-name { font-size: 30px; color: var(--ink-dim); }
+  .tick-sep {
+    flex: 0 0 auto; width: 1px; height: 56px;
+    background: rgba(255, 255, 255, .18);
+  }
+  .tick-live {
+    flex: 0 0 auto; margin-left: auto;
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 5px 11px;
+    border: 1px solid rgba(255, 255, 255, .18);
+    font-family: var(--mono); font-size: 11px; font-weight: 800;
+    letter-spacing: 1.8px; color: #e7eaf0;
+  }
+  .tick-live .dot {
+    width: 8px; height: 8px; border-radius: 50%; background: #d94b4b;
+    box-shadow: 0 0 0 3px rgba(217, 75, 75, .18);
+    animation: cam-live 1.6s ease-in-out infinite;
+  }
+  @keyframes cam-live { 0%, 100% { opacity: 1 } 50% { opacity: .35 } }
+
+  .hidden { display: none !important; }
+</style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
+</head>
+<body class="logo-tl car-tr ticker-bottom">
+<div id="stage">
+  <div class="mock-cam" aria-hidden="true">
+    <div class="mock-silhouette"></div>
+    <span>摄像头画面 · CAMERA</span>
+  </div>
+
+  <div class="cam-ui">
+    <div class="logo-block hidden" id="logoBlock">
+      <div class="logo-mark" id="logoMark"><img id="camLogo" alt="" /></div>
+      <div class="logo-text" id="logoText">
+        <div class="event-title" id="camEventTitle"></div>
+        <div class="event-sub" id="camEventSub"></div>
+      </div>
+    </div>
+
+    <div class="carousel hidden" id="carousel">
+      <img id="carouselImg" alt="" />
+    </div>
+
+    <div class="ticker">
+      <div class="tick-now">
+        <div class="tick-label" id="nowLabel">正在进行</div>
+        <div class="tick-name" id="nowName">等待比赛</div>
+      </div>
+      <div class="tick-sep" id="tickSep"></div>
+      <div class="tick-next" id="tickNext">
+        <div class="tick-label" id="nextLabel">即将进行</div>
+        <div class="tick-name" id="nextName">待定</div>
+      </div>
+      <div class="tick-live" id="tickLive"><span class="dot"></span>LIVE</div>
+    </div>
+  </div>
+</div>
+<script src="/shared/ws.js"></script>
+<script src="/render/castcam.js?v=20261025"></script>
+</body>
+</html>

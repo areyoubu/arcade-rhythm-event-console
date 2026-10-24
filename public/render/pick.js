@@ -64,7 +64,7 @@
       row.innerHTML = `<span class="side ${p.side === 'right' ? 'right' : 'left'}">${p.side === 'right' ? 'P2' : 'P1'}</span>`
         + (p.cover ? `<img class="cover" src="${esc(p.cover)}" alt="" />` : '')
         + `<span class="t">${esc(p.title)}</span>`
-        + `<span class="d">${esc(p.difficultyName || '')} ${esc(p.levelText || p.level ?? '')}</span>`;
+        + `<span class="d">${esc(p.difficultyName || '')} ${esc(p.levelText || p.level || '')}</span>`;
       el.pickList.append(row);
     }
   }

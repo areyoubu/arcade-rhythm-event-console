@@ -101,6 +101,8 @@
   body.obs-mode .cue-tpl { min-height: 66px; font-size: 17px; }
   body.obs-mode .cue-tpl .kbd { font-size: 12px; }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <script src="/shared/format.js"></script>
@@ -179,6 +181,7 @@ app.append(dMain);
 const localBase = location.origin;
 const directorObsUrl = localBase + '/director?obs=1';
 const castObsUrl = localBase + '/cast';
+const castCamUrl = localBase + '/render/castcam';
 
 async function copyToClipboard(text) {
   try {
@@ -224,10 +227,16 @@ const obsHelpCard = el('section', { class: 'card', id: 'obsHelpCard' },
       '。',
     ),
     obsUrlRow('导播端', directorObsUrl),
-    obsUrlRow('解说端（透明叠加）', castObsUrl),
+    obsUrlRow('解说提示（/cast）', castObsUrl),
+    obsUrlRow('解说摄像头（/render/castcam）', castCamUrl),
     el('div', { class: 'tiny muted mt8', style: { lineHeight: '1.7' } },
-      '解说端是**背景完全透明**的叠加层，只画提示文字/倒计时，直接盖在画面上。'
-      + '预览时加 ?preview=1 会显示棋盘格底衬；需要在普通浏览器里点「收到」时加 ?ack=1。'),
+      '解说提示默认是**背景完全透明**的叠加层；摄像头叠加只画边框 / 标签 / 姓名牌，'
+      + '中心留空给 OBS 摄像头源。两路源的模板、位置、配色统一在 ',
+      el('a', { href: '/commentary', text: '解说控制台' }),
+      ' 或「设置 → 解说页」调整。'),
+    el('div', { class: 'tiny muted mt8', style: { lineHeight: '1.7' } },
+      '预览时加 ?preview=1 会显示棋盘格底衬；提示调模板可加 ?config=1&demo=1；'
+      + '需要在普通浏览器里点「收到」时加 ?ack=1。'),
     el('div', { class: 'tiny muted mt8', style: { lineHeight: '1.7' } },
       '声音：OBS 浏览器源默认不出声，需要在源的「高级音频属性」里把该源监听到输出，'
       + '或在浏览器里先点一下页面解锁。'),
@@ -547,6 +556,17 @@ function cueOptionsModal({ title, preview, prio, sound, aud, requiresAck }) {
     prioSel.value = ['P0', 'P1', 'P2', 'P3'].includes(prio) ? prio : 'P3';
     const soundSel = el('select', null, [['none', '无声音'], ['beep', 'beep 单短音'], ['triple', 'triple 三短音'], ['alarm', 'alarm 急促音']].map(([v, t]) => el('option', { value: v, text: t })));
     soundSel.value = ['none', 'beep', 'triple', 'alarm'].includes(sound) ? sound : 'none';
+    // 手动话术默认 10 秒后自动清除，避免像 T1/T3 这样的倒计时话术永久堆在解说页。
+    // P0 默认常驻（等回执），需要时仍可手动改成 5/10/30 秒。
+    const ttlSel = el('select', null, [
+      ['5000', '5 秒后自动清除'],
+      ['10000', '10 秒后自动清除（推荐）'],
+      ['30000', '30 秒后自动清除'],
+      ['never', '不自动清除（需手动清）'],
+    ].map(([v, t]) => el('option', { value: v, text: t })));
+    ttlSel.value = prio === 'P0' ? 'never' : '10000';
+    let ttlTouched = false;
+    ttlSel.addEventListener('change', () => { ttlTouched = true; });
     const ackChk = el('input', { type: 'checkbox' });
     ackChk.checked = !!requiresAck;
     const audBoxes = channels.map((ch) => {
@@ -554,7 +574,12 @@ function cueOptionsModal({ title, preview, prio, sound, aud, requiresAck }) {
       c.checked = aud.includes(ch);
       return el('label', { class: 'check', style: { display: 'inline-flex', marginRight: '14px' } }, c, el('span', { class: 'label', text: ch }));
     });
-    const syncAck = () => { if (prioSel.value === 'P0') { ackChk.checked = true; ackChk.disabled = true; } else { ackChk.disabled = false; } };
+    const syncAck = () => {
+      if (prioSel.value === 'P0') { ackChk.checked = true; ackChk.disabled = true; }
+      else { ackChk.disabled = false; }
+      // P0 默认常驻等回执；其余优先级默认 10 秒自动清除（用户手动改过就不再覆盖）
+      if (!ttlTouched) ttlSel.value = prioSel.value === 'P0' ? 'never' : '10000';
+    };
     prioSel.addEventListener('change', syncAck);
     syncAck();
     const m = modal({
@@ -564,6 +589,8 @@ function cueOptionsModal({ title, preview, prio, sound, aud, requiresAck }) {
         el('div', { class: 'field' }, el('label', { text: '优先级' }), prioSel,
           el('div', { class: 'help', text: 'P0 强制需回执（C-REQ-551）' })),
         el('div', { class: 'field' }, el('label', { text: '声音' }), soundSel),
+        el('div', { class: 'field' }, el('label', { text: '自动清除' }), ttlSel,
+          el('div', { class: 'help', text: '到期后自动从解说页 / 导播页队列消失；需要常驻提示时选「不自动清除」。' })),
         el('div', { class: 'field' }, el('label', { text: '受众' }), el('div', { class: 'inline' }, audBoxes)),
         el('div', { class: 'check' }, ackChk, el('span', { class: 'label', text: '需回执（ack）' })),
       ),
@@ -572,7 +599,10 @@ function cueOptionsModal({ title, preview, prio, sound, aud, requiresAck }) {
         el('button', { class: 'btn primary', text: '发送', onclick: () => {
           const audience = channels.filter((ch) => audBoxes[channels.indexOf(ch)].querySelector('input').checked);
           if (!audience.length) { warn('请至少选择一个受众'); return; }
-          finish({ priority: prioSel.value, sound: soundSel.value, audience, requiresAck: ackChk.checked });
+          finish({
+            priority: prioSel.value, sound: soundSel.value, audience, requiresAck: ackChk.checked,
+            ttlMs: ttlSel.value === 'never' ? null : Number(ttlSel.value),
+          });
         } }),
       ],
       onClose: () => finish(null),
@@ -602,7 +632,13 @@ async function sendTemplate(t) {
   try {
     const r = await api('/api/cues/fromTemplate', {
       method: 'POST',
-      body: { templateId: t.id, vars, overrides: { priority: opts.priority, sound: opts.sound, audience: opts.audience, requiresAck: opts.requiresAck } },
+      body: {
+        templateId: t.id, vars,
+        overrides: {
+          priority: opts.priority, sound: opts.sound, audience: opts.audience, requiresAck: opts.requiresAck,
+          ttlMs: opts.ttlMs,
+        },
+      },
     });
     ok(`已发送：${r.rendered}`);
     addLog({ at: Date.now(), level: 'info', source: 'cue', msg: `手动发送话术 ${t.id}：${r.rendered}` });
@@ -625,7 +661,10 @@ async function sendFreeText() {
   try {
     await api('/api/cues/free', {
       method: 'POST',
-      body: { text: text.trim(), audience: opts.audience, priority: opts.priority, sound: opts.sound, requiresAck: opts.requiresAck },
+      body: {
+        text: text.trim(), audience: opts.audience, priority: opts.priority,
+        sound: opts.sound, requiresAck: opts.requiresAck, ttlMs: opts.ttlMs,
+      },
     });
     ok('自由文本已广播');
   } catch (e) { cmdError(e, '发送自由文本'); }

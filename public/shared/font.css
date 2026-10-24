@@ -1,0 +1,29 @@
+/*
+ * 全局字体：font/字由文艺黑.ttf
+ *
+ * 说明：
+ *  - 这个字体的数字是比例宽度（11111 和 00000 不等宽），不能用于分数 / 倒计时 /
+ *    坐标等需要等宽对齐的区域，否则会把比分数字挤歪。
+ *  - 因此这里只覆盖 UI 正文字体；页面里显式使用 var(--mono) 的
+ *    分数、计时、日志、代码等区域继续使用系统等宽字体。
+ */
+@font-face {
+  font-family: 'ZiHuiWenYiHei';
+  src: url('/fonts/zihui-wenyihei.ttf') format('truetype');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+html,
+body {
+  font-family: 'ZiHuiWenYiHei', 'Noto Sans SC', 'Microsoft YaHei', 'PingFang SC', system-ui, sans-serif !important;
+}
+
+/* 表单控件默认继承正文字体；显式等宽区域仍由各自的 font-family: var(--mono) 控制 */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+}

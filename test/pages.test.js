@@ -128,12 +128,26 @@ test('★ 前端功能目录（CATALOG）指向的页面都已在服务端登记
   assert.deepEqual(missing, [], '前端目录与服务端页面清单不一致');
 });
 
-test('★ 每个页面的业务脚本都必须语法正确', () => {
+test('★ 每个页面的内联与外部业务脚本都必须语法正确', () => {
   const broken = [];
+  const checked = new Set();
   for (const f of PAGES) {
-    for (const [i, code] of scriptsOf(readPage(f)).entries()) {
+    const html = readPage(f);
+    for (const [i, code] of scriptsOf(html).entries()) {
       try { new vm.Script(code, { filename: `${f}#script${i}` }); }
       catch (e) { broken.push(`${f} 第 ${i + 1} 段脚本：${e.message}`); }
+    }
+    // 外部脚本（render/*.js 等）同样要能解析 —— 一个 SyntaxError 会让整页 JS 静默停摆
+    for (const src of externalScriptsOf(html)) {
+      const clean = src.split(/[?#]/)[0];
+      if (/^https?:/i.test(clean) || !clean.endsWith('.js')) continue;
+      const rel = clean.replace(/^\/+/, '');
+      const file = path.join(PUBLIC, rel);
+      if (!fs.existsSync(file)) { broken.push(`${f} 引用了不存在的脚本 ${src}`); continue; }
+      if (checked.has(file)) continue;
+      checked.add(file);
+      try { new vm.Script(fs.readFileSync(file, 'utf8'), { filename: rel }); }
+      catch (e) { broken.push(`${rel}：${e.message}`); }
     }
   }
   assert.deepEqual(broken, [], broken.join('\n'));
@@ -190,7 +204,7 @@ test('★ 每个页面都必须引入必需的共享库，且顺序正确', () =
 
 test('★ 渲染端页面必须保持透明背景、不引共享样式、不含错误文案（A-REQ-530 / 537）', () => {
   // /cast 也是一路透明叠加（解说端监视器用），一并检查
-  for (const f of ['render/main.html', 'render/credits.html', 'render/score.html', 'render/pick.html', 'render/lottery.html', 'cast.html']) {
+  for (const f of ['render/main.html', 'render/credits.html', 'render/score.html', 'render/pick.html', 'render/lottery.html', 'render/castcam.html', 'cast.html']) {
     const html = fs.readFileSync(path.join(PUBLIC, f), 'utf8');
     assert.match(html, /background:\s*transparent/i, `${f} 必须显式声明透明背景`);
     assert.ok(!externalScriptsOf(html).some((s) => s.includes('/shared/style.css')),

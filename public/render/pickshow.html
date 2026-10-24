@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>选手选曲展示 · 街机音游赛事控制软件</title>
+<!--
+  选手选曲展示 —— 整屏场景 / OBS 浏览器源。
+
+  数据来自 /api/match/pick（对外网手机选歌器）提交到比赛模块的选曲队列。
+  /pickshow 控制台选择输出 P1 / P2 / 同时，以及 2 首 / 4 首布局。
+-->
+<style>
+  :root {
+    --left-color: #d0344e;
+    --right-color: #3d78c9;
+    --accent: #d9a441;
+    --ink: #ffffff;
+    --ink-dim: #c9cfda;
+    --ink-mute: #8c93a0;
+    --panel: rgba(9, 10, 13, .82);
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    background: #0a0b0d; color: var(--ink);
+    overflow: hidden;
+    font-family: 'Noto Sans SC', 'Microsoft YaHei', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  #stage {
+    position: fixed; left: 0; top: 0;
+    width: 1920px; height: 1080px;
+    transform-origin: top left;
+    overflow: hidden;
+    background: #0a0b0d;
+  }
+
+  /* 背景 */
+  .bg {
+    position: absolute; inset: 0; z-index: 0;
+    background: #0a0b0d url('/assets/liveroom-background.png') center / cover no-repeat;
+  }
+  .bg-video {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    object-fit: cover; display: block;
+  }
+  .bg-video[hidden] { display: none; }
+  .bg-shade {
+    position: absolute; inset: 0;
+    background:
+      linear-gradient(180deg, rgba(5,6,8,.78) 0%, rgba(5,6,8,.26) 25%, rgba(5,6,8,.18) 62%, rgba(5,6,8,.76) 100%),
+      radial-gradient(120% 90% at 50% 45%, rgba(0,0,0,0) 26%, rgba(0,0,0,.46) 100%);
+  }
+
+  .scene { position: absolute; inset: 0; z-index: 2; padding: 38px 64px 42px; display: flex; flex-direction: column; }
+
+  .head { display: flex; align-items: center; gap: 14px; flex: 0 0 auto; }
+  .head .dot { width: 9px; height: 9px; background: var(--accent); }
+  .brand { font-family: var(--mono); font-size: 12.5px; font-weight: 700; letter-spacing: 2.4px; color: #aeb4c0; }
+  .head .title { padding-left: 14px; border-left: 3px solid var(--accent); font-size: 26px; font-weight: 800; }
+  .head .spacer { flex: 1; }
+  .chip {
+    font-family: var(--mono); font-size: 11.5px; font-weight: 800; letter-spacing: 1px;
+    padding: 5px 9px; background: rgba(8,9,12,.78); border: 1px solid var(--line, rgba(255,255,255,.14));
+    color: var(--ink-dim);
+  }
+  .chip.gold { color: var(--accent); border-color: #5a4a22; }
+
+  .match-line {
+    flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    margin: 16px 0 24px;
+  }
+  .match-name { font-size: 42px; font-weight: 900; letter-spacing: .5px; text-shadow: 0 4px 18px rgba(0,0,0,.5); }
+  .match-sub { font-family: var(--mono); font-size: 12px; letter-spacing: 3px; color: var(--ink-mute); }
+
+  .show-grid {
+    flex: 1 1 auto; min-height: 0;
+    display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr);
+    gap: 34px; align-items: center; justify-items: center;
+  }
+  .side-left .show-grid, .side-right .show-grid { grid-template-columns: minmax(0,1fr); }
+
+  /*
+   * 每位选手的「条子」（姓名条）和下面的曲目卡同宽并一起居中：
+   * panel 宽度由 cards 的固定列宽撑开，p-head 再拉伸到同一宽度。
+   * 这样 P1 / P2 的条子与各自卡片严格居中对齐，空位和已选卡也不会改变尺寸。
+   */
+  .panel {
+    width: var(--panel-w, 614px); max-width: 100%;
+    display: flex; flex-direction: column; gap: 12px;
+    transform-style: preserve-3d;
+  }
+
+  .p-head {
+    width: 100%;
+    display: flex; align-items: center; gap: 14px;
+    padding: 10px 18px;
+    background: linear-gradient(90deg, rgba(8,9,12,.88), rgba(8,9,12,.42));
+    border: 1px solid rgba(255,255,255,.13);
+  }
+  .panel.left .p-head { border-left: 5px solid var(--left-color); }
+  .panel.right .p-head { border-right: 5px solid var(--right-color); flex-direction: row-reverse; text-align: right;
+    background: linear-gradient(270deg, rgba(8,9,12,.88), rgba(8,9,12,.42)); }
+  .avatar {
+    width: 62px; height: 62px; flex: 0 0 auto; position: relative;
+    background: #16171b; border: 1px solid #3a3c43; overflow: hidden;
+  }
+  .avatar img { width: 100%; height: 100%; object-fit: cover; display: none; }
+  .avatar img.on { display: block; }
+  .avatar .fb { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-size: 26px; font-weight: 800; color: #5e626b; }
+  .avatar img.on + .fb { display: none; }
+  .p-info { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .p-name { font-size: 30px; font-weight: 800; line-height: 1.1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .panel.left .p-name { color: var(--left-color); }
+  .panel.right .p-name { color: var(--right-color); }
+  .p-team { font-size: 13px; color: var(--ink-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .p-team:empty { display: none; }
+
+  /*
+   * 条子与卡片同宽：panel 宽度由模式固定，cards 吃满 panel。
+   * 空位卡 / 已选卡尺寸因此完全一致，不会因为选曲到达而缩放；
+   * 名字再长也只会在条子里省略，不会把条子撑得比卡片宽。
+   */
+  .side-both.count-1 { --panel-w: 460px; }
+  .side-both.count-2, .side-both.count-4 { --panel-w: 614px; }
+  .side-left.count-1, .side-right.count-1 { --panel-w: 560px; }
+  .side-left.count-2, .side-right.count-2 { --panel-w: 874px; }
+  .side-left.count-4, .side-right.count-4 { --panel-w: 1562px; }
+
+  .cards { width: 100%; display: grid; gap: 14px; }
+  .side-both.count-1 .cards { grid-template-columns: minmax(0, 1fr); }
+  .side-both.count-2 .cards, .side-both.count-4 .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .side-left.count-1 .cards, .side-right.count-1 .cards { grid-template-columns: minmax(0, 1fr); }
+  .side-left.count-2 .cards, .side-right.count-2 .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .side-left.count-4 .cards, .side-right.count-4 .cards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+  .card {
+    width: 100%; min-width: 0;
+    display: flex; flex-direction: column;
+    padding: 8px; background: rgba(8,9,12,.82);
+    border: 1px solid rgba(255,255,255,.16);
+    box-shadow: 0 16px 38px rgba(0,0,0,.32);
+    transform-style: preserve-3d;
+  }
+  .card .cover {
+    width: 100%; aspect-ratio: 1 / 1; object-fit: cover; display: block;
+    background: #111; border: 1px solid rgba(255,255,255,.12);
+  }
+  .card .cover.ph {
+    display: flex; align-items: center; justify-content: center;
+    color: #5c616a; font-size: 46px;
+  }
+  .card .t { margin-top: 7px; font-size: 18px; font-weight: 800; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .a { margin-top: 2px; font-size: 11.5px; color: var(--ink-mute);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .card .m { margin-top: 7px; display: flex; align-items: center; gap: 6px; }
+  .diff-chip { font-family: var(--mono); font-size: 10.5px; font-weight: 800; padding: 2px 6px; color: #fff; white-space: nowrap; }
+  .card.empty {
+    border-style: dashed; border-color: rgba(255,255,255,.18);
+    background: rgba(8,9,12,.42); box-shadow: none;
+  }
+  .card.empty .cover.ph { font-size: 34px; color: #4d525b; }
+  .card.empty .t { color: #707680; font-weight: 600; }
+  .card.empty .a { color: #5c616a; }
+
+  .side-both.count-1 .card .t { font-size: 22px; }
+  .side-left.count-1 .card .t, .side-right.count-1 .card .t { font-size: 28px; }
+  .side-left.count-1 .card .a, .side-right.count-1 .card .a { font-size: 15px; }
+  .side-left.count-2 .card .t, .side-right.count-2 .card .t { font-size: 22px; }
+  .side-left.count-2 .card .a, .side-right.count-2 .card .a { font-size: 13px; }
+  .side-left.count-4 .card .t, .side-right.count-4 .card .t { font-size: 17px; }
+  .side-left.count-4 .card .a, .side-right.count-4 .card .a { font-size: 11.5px; }
+
+  .waiting { flex: 1; display: flex; align-items: center; justify-content: center; }
+  .waiting .box { text-align: center; color: var(--ink-mute); }
+  .waiting .box .big { font-size: 28px; font-weight: 800; color: var(--ink-dim); letter-spacing: 2px; }
+  .waiting .box .small { margin-top: 6px; font-family: var(--mono); font-size: 12px; letter-spacing: 2px; }
+
+  /* ── 待展示画面（不泄露比赛名与选曲） ───────────────────── */
+  .idle {
+    position: absolute; inset: 0; z-index: 3;
+    display: none; align-items: center; justify-content: center;
+    pointer-events: none;
+  }
+  #stage.is-idle .idle { display: flex; }
+  #stage.is-idle .head { opacity: 0; }
+  #stage.is-idle .match-line, #stage.is-idle .show-grid { visibility: hidden; }
+
+  .idle-frame {
+    position: relative; text-align: center;
+    padding: 42px 68px 34px;
+    background: rgba(7,8,11,.34);
+    border: 1px solid rgba(255,255,255,.10);
+    box-shadow: 0 30px 90px rgba(0,0,0,.4);
+  }
+  .idle-frame::before, .idle-frame::after {
+    content: ''; position: absolute; left: 22px; right: 22px; height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(217,164,65,.8), transparent);
+  }
+  .idle-frame::before { top: -1px; }
+  .idle-frame::after { bottom: -1px; }
+  .idle-dot {
+    display: block; width: 8px; height: 8px; margin: 0 auto 18px;
+    background: var(--accent); box-shadow: 0 0 18px rgba(217,164,65,.8);
+    animation: idle-pulse 2.2s ease-in-out infinite;
+  }
+  @keyframes idle-pulse {
+    0%, 100% { opacity: .35; transform: rotate(45deg) scale(.8); }
+    50% { opacity: 1; transform: rotate(45deg) scale(1.15); }
+  }
+  .idle-brand { font-family: var(--mono); font-size: 11.5px; font-weight: 800; letter-spacing: 3.6px; color: #aeb4c0; }
+  .idle-title { margin-top: 10px; font-size: 54px; font-weight: 900; letter-spacing: 12px; text-indent: 12px; text-shadow: 0 8px 34px rgba(0,0,0,.5); }
+  .idle-sub { margin-top: 12px; font-family: var(--mono); font-size: 11px; letter-spacing: 3px; color: var(--ink-mute); }
+
+  /*
+   * 3D 展开动画：
+   *   .pre       —— 元素先摆到 3D 初始位（不可见、旋转、后退）；
+   *   .animating —— 打开过渡；移除 .pre 后自动回到正常位置。
+   * 这样即使动画被浏览器节流，最终状态也一定是可见的。
+   */
+  #stage.animating .head,
+  #stage.animating .match-line,
+  #stage.animating .panel,
+  #stage.animating .p-head,
+  #stage.animating .card { will-change: transform, opacity; }
+
+  #stage.animating .head { transition: opacity .5s ease, transform .85s cubic-bezier(.16,1,.3,1); }
+  #stage.animating .match-line { transition: opacity .55s ease, transform .9s cubic-bezier(.16,1,.3,1); transition-delay: .06s; }
+  #stage.animating .panel {
+    transition: opacity .6s ease, transform 1.05s cubic-bezier(.16,1,.3,1);
+    transition-delay: var(--side-delay, 0ms);
+  }
+  #stage.animating .p-head {
+    transition: opacity .45s ease, transform .8s cubic-bezier(.16,1,.3,1);
+    transition-delay: calc(var(--side-delay, 0ms) + 170ms);
+  }
+  #stage.animating .card {
+    transition: opacity .5s ease, transform .95s cubic-bezier(.16,1,.3,1);
+    transition-delay: calc(var(--side-delay, 0ms) + 280ms + var(--i, 0) * 85ms);
+  }
+
+  #stage.pre .head { opacity: 0; transform: translateY(-22px); }
+  #stage.pre .match-line { opacity: 0; transform: perspective(1000px) translateZ(190px) scale(.78); }
+  #stage.pre .panel { opacity: 0; }
+
+  #stage.side-both.pre .panel.left {
+    transform: perspective(1700px) rotateY(52deg) translateX(-110px) translateZ(-80px) scale(.9);
+    transform-origin: left center;
+  }
+  #stage.side-both.pre .panel.right {
+    transform: perspective(1700px) rotateY(-52deg) translateX(110px) translateZ(-80px) scale(.9);
+    transform-origin: right center;
+  }
+  #stage.side-left.pre .panel, #stage.side-right.pre .panel {
+    transform: perspective(1700px) rotateX(18deg) rotateY(-26deg) scale(.83) translateZ(-120px);
+    transform-origin: 50% 60%;
+  }
+
+  #stage.pre .p-head { opacity: 0; transform: translateZ(90px) rotateX(30deg); }
+  #stage.pre .card { opacity: 0; }
+
+  #stage.side-both.pre .panel.left .card {
+    transform: perspective(1200px) rotateY(-72deg) translateZ(-120px) scale(.94);
+    transform-origin: left center;
+  }
+  #stage.side-both.pre .panel.right .card {
+    transform: perspective(1200px) rotateY(72deg) translateZ(-120px) scale(.94);
+    transform-origin: right center;
+  }
+  #stage.side-left.pre .card:nth-child(odd), #stage.side-right.pre .card:nth-child(odd) {
+    transform: perspective(1200px) rotateY(-44deg) rotateX(10deg) translateZ(-100px) scale(.93);
+    transform-origin: center top;
+  }
+  #stage.side-left.pre .card:nth-child(even), #stage.side-right.pre .card:nth-child(even) {
+    transform: perspective(1200px) rotateY(44deg) rotateX(10deg) translateZ(-100px) scale(.93);
+    transform-origin: center top;
+  }
+
+  .hidden { display: none !important; }
+</style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
+</head>
+<body>
+<div id="stage" class="side-both count-2 is-idle">
+  <div class="bg" aria-hidden="true">
+    <video class="bg-video" id="bgVideo" autoplay muted loop playsinline preload="auto"
+           poster="/assets/liveroom-background.png">
+      <source src="/assets/liveroom-background.mp4" type="video/mp4" />
+    </video>
+    <div class="bg-shade"></div>
+  </div>
+
+  <div class="scene">
+    <header class="head">
+      <span class="dot"></span>
+      <span class="brand">CHUNITHM · PLAYER PICKS</span>
+      <span class="title">选手选曲</span>
+      <span class="spacer"></span>
+      <span class="chip gold" id="sourceChip">当前局</span>
+      <span class="chip" id="countChip">每人 2 首</span>
+    </header>
+
+    <div class="match-line">
+      <div class="match-name" id="matchName">比赛</div>
+      <div class="match-sub" id="matchSub">PLAYER PICKS · 等待选手选曲</div>
+    </div>
+
+    <main class="show-grid" id="showGrid"></main>
+  </div>
+
+  <!-- 曲目预览音频：OBS 浏览器源需要开启该源的音频输出 -->
+  <audio id="previewAudio" preload="auto"></audio>
+
+  <!-- 待展示画面：不显示比赛名与选曲，等导播点击「播放展示动画」 -->
+  <div class="idle" id="idle" aria-hidden="true">
+    <div class="idle-frame">
+      <span class="idle-dot"></span>
+      <div class="idle-brand">CHUNITHM · PLAYER PICKS</div>
+      <div class="idle-title">选手选曲</div>
+      <div class="idle-sub">READY</div>
+    </div>
+  </div>
+</div>
+<script src="/shared/ws.js"></script>
+<script src="/shared/audio-preview.js?v=20261025"></script>
+<script src="/render/pickshow.js?v=20261025d"></script>
+</body>
+</html>

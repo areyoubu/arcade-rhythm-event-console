@@ -54,6 +54,9 @@
   }
   .side-btn.left.on { background: var(--left); border-color: var(--left); color: #fff; }
   .side-btn.right.on { background: var(--right); border-color: var(--right); color: #fff; }
+  .target-toggle { margin-top: 2px; }
+  .target-btn.on { background: var(--gold); border-color: var(--gold); color: #151515; }
+  .target-btn:disabled { opacity: .35; cursor: not-allowed; }
 
   .search { display: flex; gap: 8px; margin-top: 10px; }
   input[type=search], select {
@@ -132,6 +135,8 @@
   .done-card .big { font-size: 17px; font-weight: 800; color: #a9d9b9; }
   .done-card .small { font-size: 12.5px; color: var(--text-dim); margin-top: 3px; }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <div class="wrap">
@@ -151,6 +156,17 @@
         <button class="side-btn left on" type="button" data-side="left">P1 · 左侧</button>
         <button class="side-btn right" type="button" data-side="right">P2 · 右侧</button>
       </div>
+
+      <div class="label" style="margin-top:12px">选曲目标</div>
+      <div class="side-toggle target-toggle">
+        <button class="side-btn target-btn on" type="button" data-target="current">当前局</button>
+        <button class="side-btn target-btn" type="button" data-target="upcoming">即将进行</button>
+      </div>
+      <div class="sub" id="targetHint" style="margin-top:6px">目标：当前局</div>
+
+      <div class="label" style="margin-top:12px">你是谁（选手实体）</div>
+      <select id="who"><option value="">未指定（下一局显示 P1 / P2）</option></select>
+      <div class="sub" id="whoHint" style="margin-top:6px">选择后，下一局会自动填入你的名字与头像，并生成霓虹对阵卡</div>
 
       <div class="search">
         <input type="search" id="q" placeholder="搜索曲名 / 曲师 / ID…" autocomplete="off" />
@@ -199,6 +215,8 @@
   const $ = (id) => document.getElementById(id);
   const state = {
     side: 'left',
+    target: 'current',
+    playerId: '',
     meta: null,
     pub: null,
     selected: null,
@@ -236,18 +254,40 @@
     return data;
   }
 
+  function canSubmit() {
+    if (state.submitting || !state.selected) return false;
+    return state.target === 'upcoming' || state.pub?.status !== 'finished';
+  }
+
+  function syncTargetButtons() {
+    for (const btn of document.querySelectorAll('.target-btn')) {
+      btn.classList.toggle('on', btn.dataset.target === state.target);
+      if (btn.dataset.target === 'current') btn.disabled = state.pub?.status === 'finished';
+    }
+  }
+
   function setStatus() {
     const p = state.pub;
     const finished = p?.status === 'finished';
+    const upcomingMode = state.target === 'upcoming';
+    if (finished && !upcomingMode) state.target = 'upcoming';
+    syncTargetButtons();
+
     $('matchName').textContent = p?.name || '扫码选曲';
-    $('matchSub').textContent = finished
-      ? '本局已经结束，不能再提交选曲'
-      : `${p?.modeLabel || '比赛'} · 选择 P1 / P2，挑一首歌提交给导播`;
+    $('matchSub').textContent = upcomingMode
+      ? `即将进行${p?.upcoming ? `：${p.upcoming}` : ''} · 选择 P1 / P2，提交后由导播确认`
+      : finished
+        ? '本局已经结束，可切换到「即将进行」为下一场选曲'
+        : `${p?.modeLabel || '比赛'} · 选择 P1 / P2，挑一首歌提交给导播`;
+    $('targetHint').textContent = upcomingMode
+      ? `目标：即将进行${p?.upcoming ? ` · ${p.upcoming}` : ''}`
+      : `目标：当前局${p?.name ? ` · ${p.name}` : ''}`;
+
     const st = $('matchStatus');
-    st.textContent = finished ? '已结束' : p ? '进行中' : '加载中';
-    st.className = `status ${finished ? 'finished' : 'live'}`;
-    $('submit').disabled = finished || !state.selected || state.submitting;
-    if (finished) {
+    st.textContent = upcomingMode ? '即将进行' : finished ? '已结束' : p ? '进行中' : '加载中';
+    st.className = `status ${upcomingMode ? 'live' : finished ? 'finished' : 'live'}`;
+    $('submit').disabled = !canSubmit();
+    if (finished && !upcomingMode) {
       $('done').classList.remove('on');
       $('selTitle').textContent = '本局已结束';
       $('selDiff').textContent = '等待导播开启下一轮';
@@ -266,12 +306,18 @@
     img.classList.remove('hidden');
   }
 
+  function usedSongSet() {
+    return new Set(state.target === 'upcoming'
+      ? (state.pub?.upcomingPickMusicIds || [])
+      : (state.pub?.songs || []).map((s) => s.musicId));
+  }
+
   function renderChips(song) {
     const order = [...(state.meta?.difficultyOrder || ['basic', 'advanced', 'expert', 'master', 'ultima'])];
     const includeWe = $('includeWe').checked || $('diff').value === 'we';
     if (includeWe && song.we) order.push('we');
     const banned = new Set(state.pub?.banned || []);
-    const used = new Set((state.pub?.songs || []).map((s) => s.musicId));
+    const used = usedSongSet();
     const isBanned = banned.has(song.id);
     const isUsed = used.has(song.id);
     const box = document.createElement('div');
@@ -298,7 +344,7 @@
         $('selTitle').textContent = `${state.side === 'left' ? 'P1' : 'P2'} · ${song.name}`;
         $('selDiff').textContent = `${label} · ${song.artist || ''}`;
         setSelCover(song.cover);
-        $('submit').disabled = state.pub?.status === 'finished' || state.submitting;
+        $('submit').disabled = !canSubmit();
         renderResults();
         window.scrollTo({ top: 0, behavior: 'smooth' });
       };
@@ -315,7 +361,7 @@
       return;
     }
     const banned = new Set(state.pub?.banned || []);
-    const used = new Set((state.pub?.songs || []).map((s) => s.musicId));
+    const used = usedSongSet();
     for (const song of state.results) {
       const isBanned = banned.has(song.id);
       const isUsed = used.has(song.id);
@@ -398,12 +444,15 @@
           side: state.side,
           musicId: state.selected.song.id,
           difficulty: state.selected.difficulty,
+          target: state.target,
+          playerId: state.playerId || undefined,
         },
       });
       const p = r.pick;
       $('done').classList.add('on');
       $('doneTitle').textContent = `已提交给导播：${p.title}`;
-      $('doneSub').textContent = `${state.side === 'left' ? 'P1' : 'P2'} · ${p.difficultyName} ${p.level}。导播确认后才会写入曲目表。`;
+      const who = (state.pub?.players || []).find((x) => x.id === state.playerId)?.name;
+      $('doneSub').textContent = `${who ? `${who}（${state.side === 'left' ? 'P1' : 'P2'}）` : (state.side === 'left' ? 'P1' : 'P2')} · ${state.target === 'upcoming' ? '即将进行' : '当前局'} · ${p.difficultyName} ${p.level}。${state.target === 'upcoming' ? '开始下一局时会自动填名字并生成对阵卡。' : '按「选曲结果同步」设置写入曲目表。'}`;
       toast('选曲已提交，等待导播确认', 'ok');
       state.selected = null;
       $('selTitle').textContent = '可以继续选下一首';
@@ -428,6 +477,39 @@
       setStatus();
       if (state.results.length) renderResults();
     } catch { /* ignore */ }
+  }
+
+  // ── 「你是谁」：从实体库选择选手，提交时带上 playerId ────────────
+  const LS_PLAYER = 'lp.pick.player';
+  function lsGet(k) { try { return localStorage.getItem(k) || ''; } catch { return ''; } }
+  function lsSet(k, v) { try { localStorage.setItem(k, v); } catch { /* ignore */ } }
+
+  function updateWhoHint() {
+    const p = (state.pub?.players || []).find((x) => x.id === state.playerId);
+    $('whoHint').textContent = p
+      ? `已选择：${p.name} · 开始下一局时会自动填入名字并生成霓虹对阵卡`
+      : '选择后，下一局会自动填入你的名字与头像，并生成霓虹对阵卡';
+  }
+
+  function fillWho() {
+    const sel = $('who');
+    sel.innerHTML = '<option value="">未指定（下一局显示 P1 / P2）</option>';
+    for (const p of state.pub?.players || []) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.name;
+      sel.append(o);
+    }
+    if (!state.playerId) state.playerId = lsGet(LS_PLAYER);
+    const has = [...sel.options].some((o) => o.value === state.playerId);
+    if (!has) state.playerId = '';
+    sel.value = state.playerId;
+    sel.onchange = () => {
+      state.playerId = sel.value;
+      lsSet(LS_PLAYER, state.playerId);
+      updateWhoHint();
+    };
+    updateWhoHint();
   }
 
   function fillMeta() {
@@ -458,14 +540,24 @@
   }
 
   // 侧别切换
-  for (const btn of document.querySelectorAll('.side-btn')) {
+  for (const btn of document.querySelectorAll('.side-btn[data-side]')) {
     btn.onclick = () => {
       state.side = btn.dataset.side === 'right' ? 'right' : 'left';
-      for (const b of document.querySelectorAll('.side-btn')) b.classList.toggle('on', b === btn);
+      for (const b of document.querySelectorAll('.side-btn[data-side]')) b.classList.toggle('on', b === btn);
       if (state.selected) {
         $('selTitle').textContent = `${state.side === 'left' ? 'P1' : 'P2'} · ${state.selected.song.name}`;
         setSelCover(state.selected.song.cover);
       }
+    };
+  }
+
+  // 选曲目标：当前局 / 即将进行
+  for (const btn of document.querySelectorAll('.target-btn')) {
+    btn.onclick = () => {
+      if (btn.disabled) return;
+      state.target = btn.dataset.target === 'upcoming' ? 'upcoming' : 'current';
+      setStatus();
+      renderResults();
     };
   }
 
@@ -480,6 +572,7 @@
       state.meta = meta;
       state.pub = pub;
       fillMeta();
+      fillWho();
       setStatus();
       // 首屏给一批曲目，省得选手不知道要搜什么
       load(true);

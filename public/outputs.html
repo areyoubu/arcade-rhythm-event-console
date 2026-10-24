@@ -49,6 +49,8 @@
     border-radius: 3px; padding: 4px 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <script src="/shared/format.js"></script>
@@ -146,14 +148,27 @@
       links.push(el('a', { class: 'btn ghost sm', href: '/pick', text: '手机选曲页' }));
       links.push(el('a', { class: 'btn ghost sm', href: '/match', text: '比赛计分' }));
     }
+    if (item.id === 'render-random') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/random', text: '随机选曲控制台' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/match', text: '比赛计分' }));
+    }
+    if (item.id === 'render-pickshow') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/pickshow', text: '选曲展示控制台' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/pick', text: '手机选歌页' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/match', text: '比赛计分' }));
+    }
     if (item.id === 'render-lottery') {
       links.push(el('a', { class: 'btn ghost sm', href: '/lottery', text: '抽奖控制台' }));
       links.push(el('a', { class: 'btn ghost sm', href: '/guests', text: '签到管理' }));
       links.push(el('a', { class: 'btn ghost sm', href: '/join', text: '签到页' }));
     }
-    if (item.id === 'cast-source') {
-      links.push(el('a', { class: 'btn ghost sm', href: '/cast', text: '打开解说页' }));
-      links.push(el('a', { class: 'btn ghost sm', href: '/cues', text: '话术模板' }));
+    if (item.id === 'cast-source' || item.id === 'cast-cam-source') {
+      links.push(el('a', { class: 'btn ghost sm', href: '/commentary', text: '解说控制台' }));
+      links.push(el('a', { class: 'btn ghost sm', href: '/settings#cast', text: '解说页设置' }));
+      if (item.id === 'cast-source') {
+        links.push(el('a', { class: 'btn ghost sm', href: '/cast?preview=1&config=1', target: '_blank', text: '调提示模板' }));
+        links.push(el('a', { class: 'btn ghost sm', href: '/cues', text: '话术模板' }));
+      }
     }
     return links;
   }
@@ -198,8 +213,17 @@
         item.id === 'render-pick'
           ? el('div', { class: 'out-note', html: '扫码选曲大屏：二维码指向 <b>/pick</b>，手机提交后由导播在比赛页确认。' })
           : null,
+        item.id === 'render-random'
+          ? el('div', { class: 'out-note', html: '整屏场景：在 <a href="/random">随机选曲大屏</a> 触发抽选；加 <b>?static=1</b> 使用静态背景。' })
+          : null,
+        item.id === 'render-pickshow'
+          ? el('div', { class: 'out-note', html: '整屏场景：展示手机选歌器提交的选手选曲；在 <a href="/pickshow">选曲展示控制台</a> 切换 P1 / P2 / 同时和 2 / 4 首布局。' })
+          : null,
         item.id === 'cast-source'
-          ? el('div', { class: 'out-note', html: '以 <b>audience=cast</b> 接入；连接数可从导播页 / 提示状态里看到，断开时倒计时和提示会停止更新。' })
+          ? el('div', { class: 'out-note', html: '以 <b>audience=cast</b> 接入；提示显示在「提示预览」区域。模板 / 位置 / 配色在 <a href="/commentary">解说控制台</a> 或 <a href="/settings#cast">设置 → 解说页</a> 里调整。' })
+          : null,
+        item.id === 'cast-cam-source'
+          ? el('div', { class: 'out-note', html: '中心区域透明：在 OBS 里把摄像头源垫在本源下面，再按本源预览中的边框开孔对齐。配置同样在 <a href="/commentary">解说控制台</a>。' })
           : null,
       ),
     ));

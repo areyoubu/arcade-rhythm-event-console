@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>叠加控制台 · 街机音游赛事控制软件</title>
 <link rel="stylesheet" href="/shared/style.css">
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <script src="/shared/format.js"></script>
@@ -775,6 +777,7 @@
   const durInput = el('input', { type: 'number', value: '6000', min: '500', step: '500', style: { width: '110px', flex: '0 0 auto' } });
   const qPlayPill = el('span', { class: 'pill mute', text: '未播放' });
   const queueList = el('div', { class: 'list' });
+  const qError = el('div', { class: 'note warn mt8', style: { display: 'none' } });
   const qStartBtn = el('button', { class: 'btn ok sm', text: '▶ 开始' });
   const qPauseBtn = el('button', { class: 'btn sm', text: '⏸ 暂停' });
   const qClearBtn = el('button', { class: 'btn sm', text: '清空' });
@@ -787,6 +790,7 @@
     ),
     el('div', { class: 'body tight' },
       queueList,
+      qError,
       el('div', { class: 'btn-row mt8' }, qStartBtn, qPauseBtn, qClearBtn),
     ),
   );
@@ -794,9 +798,12 @@
   function renderQueue() {
     const q = ws.state.overlay?.queue || [];
     const playing = !!ws.state.overlay?.queuePlaying;
+    const qErr = ws.state.overlay?.queueError;
     clear(queueList);
     qPlayPill.className = `pill ${playing ? 'ok' : 'mute'}`;
     qPlayPill.textContent = playing ? '播放中' : '未播放';
+    qError.style.display = qErr ? '' : 'none';
+    qError.textContent = qErr || '';
     if (!q.length) {
       queueList.append(el('div', { class: 'muted small', text: '队列为空 —— 用「当前模板入队」把多张卡排成播出序列，拖拽可排序' }));
       return;
@@ -837,6 +844,7 @@
       await ws.cmd('overlay.queue.add', {
         template: S.selectedId,
         values: S.draft,
+        target: S.editTarget,
         durationMs: Number(durInput.value) || 6000,
         label: S.selectedDef?.name || S.selectedId,
       });
@@ -904,7 +912,7 @@
     const sig = JSON.stringify([
       rendererCount(), ws.state.overlay?.clients,
       m.activeTemplate, m.visible, m.pinned, m.mode, m.modeLabel, m.sentAt, m.renderedAt, m.slotValues,
-      ws.state.overlay?.queue, ws.state.overlay?.queuePlaying, ws.state.overlay?.undoDepth,
+      ws.state.overlay?.queue, ws.state.overlay?.queuePlaying, ws.state.overlay?.queueError, ws.state.overlay?.undoDepth,
       S.templates.length, S.mediaCount, S.entities.length,
     ]);
     if (sig === lastSig) return;

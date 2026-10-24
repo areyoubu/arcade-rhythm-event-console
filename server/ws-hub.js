@@ -107,6 +107,8 @@ export function attach(server, { path = '/ws' } = {}) {
       audioUnlocked: false,
       lastAckAt: null,
       alive: true,
+      // 控制台里的预览页 / 合并预览：照常收 cue，但不计入「解说端已接入」
+      preview: false,
     };
     clients.add(client);
     log.debug('server', 'WS 客户端接入', { clientId: client.id.slice(0, 8), ip: client.ip });
@@ -176,6 +178,7 @@ async function handleMessage(client, msg) {
       client.target = typeof msg.target === 'string' ? msg.target : null;
       client.ua = msg.ua || client.ua;
       client.role = msg.role || null;
+      client.preview = !!msg.preview;
       // ★ 控制命令鉴权：渲染源不需要 token；控制页面必须带后台密码
       client.authOk = verifyAdminSecret(msg.token);
       updateClientCounts();
@@ -316,6 +319,15 @@ function filterPatchForClients(path, value) {
   // 渲染端只收 overlay 相关（省带宽、避免无关重绘）
   const nonRenderers = all.filter((c) => !c.isRenderer);
 
+  // 解说页 / 摄像头叠加的显示配置、赛程条、随机选曲大屏状态：
+  // 渲染端也必须收到，否则 OBS 源无法热更新
+  if (path === 'config.cast' || path.startsWith('config.cast.')
+      || path === 'match.ticker' || path.startsWith('match.ticker.')
+      || path === 'random.state' || path.startsWith('random.state.')
+      || path === 'pickshow.state' || path.startsWith('pickshow.state.')) {
+    return { filtered: { t: 'patch', path, value }, targets: all };
+  }
+
   if (!path.startsWith('cue.')) {
     if (path.startsWith('overlay.')) {
       // 比分条渲染端只认 score:state，不需要叠加模板的 patch —— 省一点带宽与解码
@@ -405,7 +417,7 @@ export function audienceStats() {
   const out = {};
   const audio = {};
   for (const c of clients) {
-    if (!c.audience) continue;
+    if (!c.audience || c.preview) continue;
     out[c.audience] = (out[c.audience] || 0) + 1;
     audio[c.audience] = audio[c.audience] || { total: 0, unlocked: 0 };
     audio[c.audience].total++;
@@ -418,7 +430,7 @@ export function audienceStats() {
 export function clientRegistry() {
   const out = {};
   for (const c of clients) {
-    if (!c.audience) continue;
+    if (!c.audience || c.preview) continue;
     (out[c.audience] ||= {})[c.id] = {
       clientId: c.id,
       audience: c.audience,

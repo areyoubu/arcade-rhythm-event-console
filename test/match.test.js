@@ -16,6 +16,7 @@ import path from 'node:path';
 import * as match from '../server/match.js';
 import * as music from '../server/music.js';
 import * as score from '../server/score.js';
+import { getState } from '../server/state.js';
 
 const TMP_MATCH = path.join(os.tmpdir(), `lp-match-test-${process.pid}.json`);
 const TMP_SCORE = path.join(os.tmpdir(), `lp-match-score-test-${process.pid}.json`);
@@ -36,10 +37,10 @@ const FIXTURE = {
   difficultyOrder: ['basic', 'advanced', 'expert', 'master', 'ultima'],
   genres: [],
   songs: [
-    { id: 1, name: 'Alpha', artist: 'A', genre: 'ORIGINAL', cn: true, difficulties: { basic: 3, master: 12.5 } },
-    { id: 2, name: 'Beta', artist: 'B', genre: 'ORIGINAL', cn: true, difficulties: { advanced: 5, master: 13.7 } },
-    { id: 3, name: 'Gamma', artist: 'C', genre: 'VARIETY', cn: false, difficulties: { expert: 9.5, master: 14 } },
-    { id: 4, name: 'Delta', artist: 'D', genre: 'VARIETY', cn: true, difficulties: { basic: 2, expert: 8 } },
+    { id: 1, name: 'Alpha', artist: 'A', genre: 'ORIGINAL', cn: true, cover: '/covers/1.webp', difficulties: { basic: 3, master: 12.5 } },
+    { id: 2, name: 'Beta', artist: 'B', genre: 'ORIGINAL', cn: true, cover: '/covers/2.webp', difficulties: { advanced: 5, master: 13.7 } },
+    { id: 3, name: 'Gamma', artist: 'C', genre: 'VARIETY', cn: false, cover: '/covers/3.webp', difficulties: { expert: 9.5, master: 14 } },
+    { id: 4, name: 'Delta', artist: 'D', genre: 'VARIETY', cn: true, cover: '/covers/4.webp', difficulties: { basic: 2, expert: 8 } },
   ],
 };
 
@@ -122,6 +123,28 @@ test('★★ 小局制：比赢下的曲目数，平分不算任何一方获胜'
   assert.equal(d.totalRight, 2_100_000);
 });
 
+test('★★ 赛程：「即将进行」独立于当前局名称，结束后仍可修改', () => {
+  const a = match.setUpcoming('第 12 局', 'test');
+  assert.equal(a.ok, true);
+  assert.equal(match.snapshot().current.upcoming, '第 12 局');
+  assert.equal(match.snapshot().current.name, '测试局');
+  assert.equal(getState().match.ticker.upcoming, '第 12 局');
+  assert.equal(getState().match.ticker.current, '测试局');
+
+  match.setUpcoming('', 'test');
+  assert.equal(match.snapshot().current.upcoming, '', '允许清空');
+
+  match.setSong(0, { musicId: 1 }, 'test');
+  setScore(0, 1000, 900);
+  match.finish('test');
+  assert.equal(match.snapshot().current.status, 'finished');
+  // 当前局名称已冻结，但赛程的「即将进行」仍要能改（下一场不依赖上一场状态）
+  assert.equal(match.setName('改不了', 'test').ok, false);
+  const b = match.setUpcoming('第 13 局', 'test');
+  assert.equal(b.ok, true);
+  assert.equal(match.snapshot().current.upcoming, '第 13 局');
+});
+
 test('★★ 结束本局：胜负写入历史；结束后不能再改，画面冻结', () => {
   match.setSong(0, { musicId: 1 }, 'test');
   setScore(0, 1_000_000, 950_000);
@@ -165,6 +188,32 @@ test('★ 换曲 / 换难度会清空该行分数（分数只对具体谱面有�
   row = match.snapshot().current.songs[0];
   assert.equal(row.difficulty, 'advanced');
   assert.equal(row.scoreLeft, null, '换难度后分数也应清空');
+});
+
+test('★★ 随机选曲必须写入封面，控制页与总比分画面才能显示曲绘', () => {
+  const r = match.randomPick({ index: 0 }, 'test');
+  assert.equal(r.ok, true);
+  const row = match.snapshot().current.songs[0];
+  assert.ok(row.cover, '随机选曲后不应丢封面');
+  assert.match(row.cover, /^\/covers\/\d+\.webp$/);
+  assert.equal(row.title, r.pick.song.name);
+});
+
+test('★★ 重新选择同一曲目：补齐封面，但保留已录分数', () => {
+  match.setSong(0, { musicId: 1, difficulty: 'master' }, 'test');
+  setScore(0, 111, 222);
+  // 模拟旧数据：曲库后补/更新了封面，比赛行里仍是旧值
+  assert.equal(music.updateSong(1, { cover: '/covers/1-new.webp' }, 'test').ok, true);
+  try {
+    const r = match.setSong(0, { musicId: 1, difficulty: 'master' }, 'test');
+    assert.equal(r.ok, true);
+    const row = match.snapshot().current.songs[0];
+    assert.equal(row.cover, '/covers/1-new.webp', '同一曲目重选应同步曲库封面');
+    assert.equal(row.scoreLeft, 111, '重选同一谱面不能清空分数');
+    assert.equal(row.scoreRight, 222);
+  } finally {
+    music.updateSong(1, { cover: '/covers/1.webp' }, 'test');
+  }
 });
 
 test('★ 分数校验：负数 / 非整数 / 超上限都要拒绝', () => {

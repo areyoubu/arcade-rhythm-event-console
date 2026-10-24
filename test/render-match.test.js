@@ -89,6 +89,31 @@ test('★★ 过长曲名先缩小字号，超出时启用滚动', async () => {
   assert.equal(wrap.style.getPropertyValue('--shift'), '-300px');
 });
 
+test('★ 曲绘紧贴文字左侧，右侧配平块保证文字严格居中', async () => {
+  const { w, handlers } = makeWindow();
+  handlers.get('match:state')({ match: stateWith() });
+  await new Promise((r) => setTimeout(r, 20));
+
+  const center = w.document.querySelector('.song-row .song-center');
+  assert.ok(center, '应存在曲目中间列');
+  assert.equal(center.children[0].classList.contains('song-cover'), true, '曲绘在文字左侧');
+  assert.equal(center.children[1].classList.contains('song-text'), true, '中间是文字');
+  assert.equal(center.children[2].classList.contains('song-cover-spacer'), true, '右侧是等宽配平块');
+
+  const spacer = center.children[2];
+  assert.equal(spacer.classList.contains('hidden'), false, '有曲绘时配平块生效');
+  // 配平块宽度必须与曲绘一致，否则文字仍会偏
+  assert.match(HTML, /\.song-cover\s*\{[^}]*width:\s*76px[^}]*height:\s*76px/s);
+  assert.match(HTML, /\.song-cover-spacer\s*\{[^}]*flex:\s*0 0 76px[^}]*width:\s*76px/s);
+
+  // 曲名块至少占满文字列，短曲名居中；超宽时按 max-content 滚动
+  assert.match(HTML, /\.song-title\s*\{[^}]*width:\s*max-content;[^}]*min-width:\s*100%/s);
+
+  handlers.get('match:state')({ match: stateWith({ cover: '' }) });
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(spacer.classList.contains('hidden'), true, '无曲绘时配平块一并隐藏');
+});
+
 test('★ 短标题不滚动，分数列文字仍对齐', async () => {
   const { w, handlers } = makeWindow();
   handlers.get('match:state')({ match: stateWith({ title: '短歌名' }) });

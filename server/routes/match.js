@@ -16,6 +16,8 @@ import { createRateLimiter } from '../rate-limit.js';
 import { clientIp } from '../client-ip.js';
 import * as match from '../match.js';
 import * as score from '../score.js';
+import * as pickshow from '../pickshow.js';
+import * as entities from '../entities.js';
 
 // 每 IP 每分钟最多提交次数
 const allowPick = createRateLimiter({ max: 30, windowMs: 60_000 });
@@ -43,7 +45,12 @@ export default function matchRoutes() {
     if (!h) return res.status(404).json({ ok: false, nack: { code: 'not_found', msg: '比赛记录不存在' } });
     res.json({ ok: true, match: h });
   });
-  r.get('/match/public', (req, res) => res.json({ ok: true, ...match.publicState() }));
+  r.get('/match/public', (req, res) => res.json({
+    ok: true,
+    ...match.publicState(),
+    // 手机选曲页的「你是谁」：只给 id + 姓名，不暴露头像/队伍等控制数据
+    players: entities.list({ kind: 'player' }).map((e) => ({ id: e.id, name: e.name })),
+  }));
 
   // ── 二维码 ──
   r.get('/match/pickUrl', (req, res) => res.json({ ok: true, ...resolvePickUrl(req) }));
@@ -66,26 +73,64 @@ export default function matchRoutes() {
       return res.status(429).json({ ok: false, nack: { code: 'rate_limited', msg: '提交太频繁，请稍后再试' } });
     }
     const body = req.body || {};
+    const target = body.target === 'upcoming' ? 'upcoming' : 'current';
+
+    // 身份由服务端按实体库解析，不能相信客户端传来的姓名 / 头像
+    let player = null;
+    const playerId = String(body.playerId || '').trim();
+    if (playerId) {
+      const e = entities.get(playerId);
+      if (!e || e.kind !== 'player') {
+        return res.status(400).json({ ok: false, nack: { code: 'unknown_player', msg: '选手不存在，请刷新页面重新选择' } });
+      }
+      const team = entities.resolveTeam(e);
+      player = {
+        id: e.id,
+        name: e.name,
+        image: e.image || '',
+        teamName: team?.name || '',
+        teamImage: team?.image || '',
+      };
+    }
+
     const out = match.createPick({
       side: body.side,
       musicId: body.musicId,
       difficulty: body.difficulty,
       source: 'pick',
+      target,
+      player,
     });
     if (!out.ok) return res.status(400).json(out);
-    res.json({ ok: true, pick: out.pick, duplicate: !!out.duplicate });
+
+    // 选曲结果同步（默认开）：当前局的提交直接写入曲目表。
+    // 只在有空行时写；曲目表满了就留在待确认队列，绝不覆盖已录比分的行。
+    let appliedIndex = null;
+    if (!out.duplicate && target === 'current' && pickshow.getOptions().sync) {
+      const applied = match.applyPick(out.pick.id, null, 'pick-sync', { onlyEmpty: true });
+      if (applied.ok) appliedIndex = applied.index;
+    }
+
+    res.json({ ok: true, pick: out.pick, duplicate: !!out.duplicate, appliedIndex });
   });
 
   // ── 比赛生命周期 ──
   r.post('/match/start', (req, res) => {
-    const out = match.start(req.body || {}, req.body?.actor || 'operator');
-    if (out.ok) score.setSource('match', req.body?.actor || 'operator');
+    const body = req.body || {};
+    const out = match.start({
+      ...body,
+      // 默认跟随「选曲结果同步」：把即将进行的选曲直接写进新局空行
+      applyPicks: body.applyPicks ?? pickshow.getOptions().sync,
+    }, body.actor || 'operator');
+    if (out.ok) score.setSource('match', body.actor || 'operator');
     respond(res, out);
   });
   r.post('/match/name', (req, res) => respond(res, match.setName(req.body?.name, req.body?.actor || 'operator')));
+  r.post('/match/upcoming', (req, res) => respond(res, match.setUpcoming(req.body?.name, req.body?.actor || 'operator')));
   r.post('/match/mode', (req, res) => respond(res, match.setMode(req.body?.mode, req.body?.actor || 'operator')));
   r.post('/match/finish', (req, res) => respond(res, match.finish(req.body?.actor || 'operator')));
   r.post('/match/history/clear', (req, res) => respond(res, match.clearHistory(req.body?.actor || 'operator')));
+  r.post('/match/upcomingPicks/clear', (req, res) => respond(res, match.clearUpcomingPicks(req.body?.actor || 'operator')));
 
   // ── 曲目行 ──
   r.post('/match/song', (req, res) => {

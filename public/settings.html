@@ -85,6 +85,8 @@
   .toc a:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
   .toc a.on { background: rgba(255,255,255,.10); color: #fff; }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <script src="/shared/format.js"></script>
@@ -334,6 +336,29 @@
       reset: () => controls.get(f.path).set(getPath(CFG, f.path)),
     });
 
+    // 图片类配置：可以直接从媒体库挑，不用手动复制 URL
+    if (f.path === 'cast.camLogo' || f.path === 'cast.camCarouselImages') {
+      const multi = f.path === 'cast.camCarouselImages';
+      field.append(el('button', {
+        class: 'btn sm ghost mt8', type: 'button',
+        text: multi ? '从图片库选择（可多选）' : '从图片库选择',
+        onclick: () => {
+          const current = multi
+            ? String(input.value).split(',').map((s) => s.trim()).filter(Boolean)
+            : [String(input.value).trim()].filter(Boolean);
+          ui.mediaPicker({
+            multiple: multi,
+            selected: current,
+            title: multi ? '选择轮播图片' : '选择比赛 Logo',
+            onPick: (urls) => {
+              input.value = multi ? urls.join(', ') : (urls[0] || '');
+              onChange(input.value);
+            },
+          });
+        },
+      }));
+    }
+
     if (f.help) field.append(el('div', { class: 'help', html: linkifyHelp(f.help) }));
     field.append(el('div', { class: 'err', style: { display: 'none' } }));
     return field;
@@ -366,6 +391,112 @@
         return testRow('obs', '测试 OBS 连接', '会做一次独立的 WebSocket 握手，不影响正在使用的连接。');
       case 'vmix':
         return testRow('vmix', '测试 vMix 连接', '发一次不带参数的 GET /api/（与心跳同款），并顺带探测回放输入。');
+      case 'gameAudio': {
+        const out = el('div', { class: 'test-result', style: { display: 'none' } });
+        const statusLine = el('div', { class: 'small muted', text: '正在读取游戏音频状态…' });
+        const idInput = el('input', { type: 'number', min: '1', step: '1', placeholder: '曲目 ID，例如 487', style: { width: '190px' } });
+        const scanBtn = el('button', { class: 'btn sm', type: 'button', text: '扫描游戏目录' });
+        const clearBtn = el('button', { class: 'btn sm ghost', type: 'button', text: '清理预览缓存' });
+        const testBtn = el('button', { class: 'btn sm ghost', type: 'button', text: '试听预览' });
+
+        function describe(d) {
+          const parts = [];
+          if (d.index) {
+            parts.push(`已索引 ${d.index.ids} 首`);
+            parts.push(`${d.index.awbFiles} 个 AWB`);
+            parts.push(`${d.index.roots} 个资源目录`);
+            if (d.index.duplicates) parts.push(`${d.index.duplicates} 个重复 ID`);
+          }
+          if (d.cache) parts.push(`缓存 ${d.cache.files} 个 / ${(d.cache.bytes / 1024 / 1024).toFixed(1)} MB`);
+          return parts.join(' · ') || '没有扫描到可用音频';
+        }
+
+        function show(d, { scannedResult = false } = {}) {
+          out.style.display = '';
+          clear(out);
+          const isScanned = !!d.index;
+          statusLine.textContent = d.configuredDir
+            ? (isScanned ? describe(d) : '游戏目录已配置，但还没有扫描（点「扫描游戏目录」）')
+            : '尚未配置游戏目录';
+          statusLine.className = `small ${d.configuredDir ? (isScanned ? 'muted' : 'dim') : 'muted'}`;
+
+          out.append(el('div', { class: `note ${isScanned ? 'ok' : 'warn'}`,
+            text: isScanned
+              ? `${scannedResult ? '扫描完成：' : ''}${describe(d)}`
+              : (d.errors?.[0] || '没有扫描到 cueFile。请确认填的是包含 data / option 的游戏根目录。') }));
+
+          if (d.gameDir && d.configuredDir && d.gameDir !== d.configuredDir) {
+            out.append(el('div', { class: 'note info mt8',
+              text: '刚才扫描的是输入框中的目录。点「保存修改」后，播放预览才会使用这个目录。' }));
+          }
+          if (d.errors?.length) {
+            out.append(el('pre', { text: d.errors.slice(0, 8).join('\n') }));
+          }
+        }
+
+        async function refresh() {
+          try {
+            const d = await ui.api('/api/game-audio/status');
+            show(d);
+          } catch (e) {
+            statusLine.textContent = `读取失败：${e.message}`;
+          }
+        }
+
+        scanBtn.onclick = () => ui.withBusy(scanBtn, async () => {
+          try {
+            const dir = String(currentVal('gameAudio.gameDir') || '').trim();
+            const d = await ui.api('/api/game-audio/scan', { method: 'POST', body: { gameDir: dir } });
+            show(d, { scannedResult: true });
+            ui.ok(d.index ? `扫描完成：${d.index.ids} 首曲目` : '扫描完成，但没有找到 cueFile');
+          } catch (e) {
+            ui.warn(`扫描失败：${e.message}`);
+          }
+        });
+
+        clearBtn.onclick = () => ui.withBusy(clearBtn, async () => {
+          try {
+            const d = await ui.api('/api/game-audio/cache/clear', { method: 'POST', body: {} });
+            ui.ok(`已清理 ${d.removed} 个缓存文件（${(d.bytes / 1024 / 1024).toFixed(1)} MB）`);
+            refresh();
+          } catch (e) {
+            ui.warn(`清理失败：${e.message}`);
+          }
+        });
+
+        testBtn.onclick = () => {
+          const id = Number(idInput.value);
+          if (!Number.isSafeInteger(id) || id <= 0) { ui.warn('先填一个曲目 ID'); return; }
+          const audio = new Audio(`/api/audio/preview?id=${id}`);
+          audio.volume = Number(currentVal('gameAudio.volume')) || 0.8;
+          audio.play().then(() => ui.ok(`正在试听曲目 ${id} 的预览`))
+            .catch(() => ui.warn('试听失败：请先保存设置并确认游戏目录已经扫描、该 ID 存在音频'));
+        };
+
+        refresh();
+        return el('div', null,
+          el('div', { class: 'note info', html:
+            '这项功能用于在 OBS 里播放本地游戏曲目的短预览。使用前：<br>'
+            + '1. 填游戏安装根目录（包含 <code>data</code> 与 <code>option</code> 或 <code>bin/option</code>），保存设置；<br>'
+            + '2. 点「扫描游戏目录」确认能按 ID 找到 <code>cueFile/cueFileXXXXXX/*.awb</code>；<br>'
+            + '3. 在 OBS 的随机选曲 / 选手选曲展示浏览器源里勾选「通过 OBS 控制音频」，'
+            + '并在音频混合器确认该源没有静音；如果开了监听，请设为「监听并输出」。<br>'
+            + '浏览器直接打开时，如果底部出现「点击启用声音」，点一下即可（浏览器默认禁止无操作自动播放）；'
+            + 'OBS 浏览器源里右键「交互」点一次同样有效。之后同一页面会记住授权，预览音频会带缓入缓出自动播放。'
+            + '建议关闭该浏览器源的「不可见时关闭源」，避免每次切场景都重新加载页面、需要再授权一次。<br>'
+            + '4. 随机选曲控制页与选手选曲展示控制页都可以单独关闭预览音频。<br>'
+            + '双人选手选曲展示默认播放 P1 的第一首展示曲目；单人展示播放当前选手的曲目。'
+            + '<br><br>程序只读游戏目录中的 <code>cueFile</code> 音频文件，不会修改游戏文件，也不会读取存档或其他数据；'
+            + '解码后的 WAV 缓存在程序的 <code>data/audio-cache</code>。不同版本 / 区服的音频密钥可能不同，'
+            + '如果扫描到了曲目但试听失败，通常是版本或区服不匹配。' }),
+          el('div', { class: 'inline mt12' }, scanBtn, clearBtn),
+          statusLine,
+          out,
+          el('div', { class: 'divider' }),
+          el('div', { class: 'inline' }, idInput, testBtn,
+            el('span', { class: 'small muted', text: '试听使用已保存的设置；修改目录后请先保存。' })),
+        );
+      }
       case 'transitions':
         return el('div', null,
           el('div', { class: 'inline' },

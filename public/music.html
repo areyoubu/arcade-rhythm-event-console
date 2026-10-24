@@ -46,6 +46,8 @@
   .editor-grid .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
   .hint { font-size: 11.5px; color: var(--text-dim); line-height: 1.6; }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <script src="/shared/format.js"></script>
@@ -116,6 +118,7 @@
   const diffSel = el('select', null,
     el('option', { value: '', text: '全部难度' }),
     ...DIFF_ORDER.map((k) => el('option', { value: k, text: k.toUpperCase() })),
+    el('option', { value: 'we', text: "WORLD'S END" }),
   );
   const cnChk = el('input', { type: 'checkbox' });
   const countText = el('span', { class: 'small muted' });
@@ -211,6 +214,8 @@
       genre: S.genre,
       difficulty: S.difficulty,
       cnOnly: S.cnOnly ? '1' : '',
+      // 曲目库是管理视图：默认把 WE 特殊谱面也列出来，选 WE 时才能筛到
+      includeWe: '1',
       limit: String(S.limit),
       offset: String(S.offset),
     });

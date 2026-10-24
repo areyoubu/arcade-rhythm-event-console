@@ -242,9 +242,9 @@
     font-family: var(--mono); font-size: 11.5px; font-weight: 700;
     letter-spacing: 2px; color: var(--ink-mute);
   }
-  .song-head .h-left { text-align: right; padding-right: 34px; }
+  .song-head .h-left { text-align: right; padding-right: 30px; }
   .song-head .h-center { text-align: center; }
-  .song-head .h-right { text-align: left; padding-left: 34px; }
+  .song-head .h-right { text-align: left; padding-left: 30px; }
   .song-row {
     min-height: 100px;
     border-top: 1px solid var(--line-soft);
@@ -288,21 +288,33 @@
   .side-score.left .score-flag { right: 0; }
   .side-score.right .score-flag { left: 0; }
 
-  /* 中间曲目 */
+  /*
+   * 中间曲目：曲绘 + 文字居中排布。
+   * 右侧放一块与曲绘等宽的配平占位，曲绘占多少，右边就留多少，
+   * 因此文字中心始终等于整行中心；曲绘紧贴文字左侧，不会隔着大段空白。
+   * 曲绘按 76×76 缩略裁切，任意长宽比都不会撑高行或挤动文字。
+   */
   .song-center {
-    display: flex; flex-direction: row; align-items: center; justify-content: center; gap: 12px;
-    min-width: 0; text-align: center; padding: 8px;
+    display: flex; flex-direction: row; align-items: center; justify-content: center;
+    gap: 12px; min-width: 0; text-align: center; padding: 6px 4px;
   }
   .song-cover {
-    width: 76px; height: 76px; flex: 0 0 auto;
+    /* border-box：含边框正好 76px，与右侧配平块严格等宽 */
+    box-sizing: border-box;
+    width: 76px; height: 76px; max-width: 76px; max-height: 76px;
+    flex: 0 0 76px;
     object-fit: cover; border-radius: 3px; background: #111;
     border: 1px solid rgba(255, 255, 255, .18);
     box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
   }
   .song-cover.hidden { display: none; }
+  /* 配平块宽度 = 曲绘宽度，保证文字严格居中 */
+  .song-cover-spacer { flex: 0 0 76px; width: 76px; }
+  .song-cover-spacer.hidden { display: none; }
   .song-text {
     display: flex; flex-direction: column; align-items: center; gap: 2px;
-    min-width: 0; flex: 1 1 0; width: auto;
+    /* 宽度收缩到曲名/标签的实际宽度：曲绘才能紧贴文字；超长时再收缩并滚动 */
+    flex: 0 1 auto; width: max-content; max-width: 100%; min-width: 0;
   }
   .song-line {
     width: 100%; max-width: 100%; overflow: hidden; text-align: center;
@@ -342,16 +354,23 @@
     white-space: nowrap;
   }
   .diff b { font-size: 13.5px; letter-spacing: 0; }
+  /*
+   * 曲名 / 曲师：最短也占满整行（保证居中），超出时以 max-content 宽度
+   * 向左滚动 —— 这样 scrollWidth 能真实反映文本宽度，滚动终点不会截断。
+   */
   .song-title {
     font-size: 28px; font-weight: 800; color: var(--ink);
-    white-space: nowrap; display: inline-block;
-    max-width: none; line-height: 1.15;
+    white-space: nowrap; display: block;
+    width: max-content; min-width: 100%;
+    text-align: center; line-height: 1.15;
   }
   .song-title.long { font-size: 24px; }
   .song-title.very-long { font-size: 20px; }
   .song-artist {
     font-size: 15px; color: var(--ink-mute);
-    white-space: nowrap; display: inline-block; max-width: none;
+    white-space: nowrap; display: block;
+    width: max-content; min-width: 100%;
+    text-align: center;
   }
   .song-artist.long { font-size: 13px; }
   .song-artist:empty { display: none; }
@@ -376,6 +395,8 @@
 
   .hidden { display: none !important; }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <div id="stage">
@@ -455,6 +476,6 @@
   </div>
 </div>
 <script src="/shared/ws.js"></script>
-<script src="/render/match.js?v=20261024"></script>
+<script src="/render/match.js?v=20261025"></script>
 </body>
 </html>

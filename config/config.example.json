@@ -35,6 +35,15 @@
   "competition": {
     "mode": "team"
   },
+  "gameAudio": {
+    "enabled": false,
+    "gameDir": "",
+    "previewSeconds": 25,
+    "useGamePreview": true,
+    "fallbackStartSec": 0,
+    "volume": 0.8,
+    "cacheLimitMB": 512
+  },
   "match": {
     "pickBaseUrl": "",
     "publicPickBaseUrl": "",
@@ -192,6 +201,39 @@
       "retainHours": 4
     },
     "templates": {}
+  },
+  "cast": {
+    "template": "panel",
+    "position": "bottom",
+    "title": "解说提示",
+    "cueTitle": "提示预览",
+    "accent": "#d9a441",
+    "opacity": 0.9,
+    "scale": 1,
+    "maxCues": 2,
+    "showMatch": true,
+    "showClock": true,
+    "showBrand": true,
+    "showAudio": false,
+    "ackButton": false,
+    "background": "transparent",
+    "camLogo": "",
+    "camLogoWidth": 220,
+    "camLogoPosition": "top-left",
+    "camEventTitle": "解说机位",
+    "camEventSub": "COMMENTARY",
+    "camCarouselImages": [],
+    "camCarouselWidth": 300,
+    "camCarouselPosition": "top-right",
+    "camCarouselIntervalMs": 6000,
+    "camTickerShow": true,
+    "camTickerPosition": "bottom",
+    "camTickerOpacity": 0.88,
+    "camTickerCurrentLabel": "正在进行",
+    "camTickerUpcomingLabel": "即将进行",
+    "camTickerShowUpcoming": true,
+    "camTickerShowLive": true,
+    "camAccent": "#d9a441"
   },
   "countdown": {
     "leadPresetsMs": [

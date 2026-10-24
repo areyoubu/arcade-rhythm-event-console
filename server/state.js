@@ -108,11 +108,23 @@ const state = {
   // ── 模块 F：比赛计分 / 选曲 ──
   match: {
     state: null,                // match.snapshot()
+    // 解说摄像头叠加用的最小赛程快照（渲染端也能收到）
+    ticker: null,               // { current, upcoming, status, updatedAt }
   },
 
   // ── 模块 E：抽奖 / 现场签到 ──
   lottery: {
     state: null,                // lottery.snapshot()
+  },
+
+  // ── 随机选曲大屏（全屏场景） ──
+  random: {
+    state: null,                // 最近一次随机结果 + 转盘序列
+  },
+
+  // ── 选手选曲展示（全屏场景） ──
+  pickshow: {
+    state: null,                // 当前输出选项 + P1/P2 选曲
   },
 
   // ── 配置元信息（不含敏感值） ──

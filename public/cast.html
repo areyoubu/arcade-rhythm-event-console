@@ -3,34 +3,44 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>解说端叠加 · 街机音游赛事控制软件</title>
+<title>解说提示叠加 · 街机音游赛事控制软件</title>
 <!--
-  解说端 —— **透明背景的 OBS 浏览器源**。
+  解说页 —— 可配置的「解说视角」模板 + 提示预览。
 
-  用途：把本页加进 OBS 场景，作为叠加层盖在送给解说的画面上，
-        再由 OBS 用 NDI 或 HDMI 输出到解说的监视器。
-
-  硬性约定（与 /render/main 一致）：
-    · 背景必须透明（不能有任何不透明的整页底色，否则会挡住画面）
-    · 页面尺寸 1920×1080，OBS 浏览器源按同尺寸添加
-    · close/shutdown = false、restart_when_active = false
-    · 不得显示任何报错文案（解说会看到）
+  默认仍然是 OBS 透明浏览器源：背景完全透明，只画解说需要的信息。
+  提示不再铺满整屏，而是收进模板里的「提示预览」区域，解说能同时看到画面和提示。
 
   URL 参数：
-    ?preview=1   控制端 iframe 预览（显示棋盘格底衬，方便看透明区域）
-    ?scale=0.5   等比缩放
-    ?fit=1       按窗口自适应缩放
-    ?ack=1       显示「收到」按钮（在普通浏览器里给解说点；OBS 里点不了，默认关闭）
-  ⚠️ 本页没有导航栏、没有状态栏 —— 它是要直接投到监视器上的。
+    ?preview=1       控制端预览：棋盘格底衬 + 空状态提示
+    ?config=1        打开右侧配置抽屉（普通浏览器用；OBS 源不要加）
+    ?demo=1          填入示例提示 / 比赛数据，便于调模板
+    ?ack=1           显示「收到」按钮（普通浏览器 / 平板）
+    ?template=panel  panel | ticker | minimal | classic（临时覆盖，不保存）
+    ?pos=bottom      bottom | top | left | right（临时覆盖，不保存）
+    ?bg=dark         transparent | dark | dynamic（临时覆盖，不保存）
+    ?cueScale=1      提示文字缩放（临时覆盖，不保存）
+    ?scale=1         整个画布缩放（预览缩放，与文字缩放无关）
+    ?fit=1           按窗口等比缩放
+
+  OBS 浏览器源建议：1920×1080、shutdown=false、restart_when_active=false。
 -->
 <style>
   :root {
-    --cue-p0: #bd4b4b;
-    --cue-p1: #c97a3f;
-    --cue-p2: #c7a044;
-    --cue-p3: #7f8fa6;
-    --cast-accent: #d9d9d4;
+    --left-color: #d0344e;
+    --right-color: #3d78c9;
+    --accent: #d9a441;
+    --panel-alpha: .9;
+    --cue-scale: 1;
+    --p0: #bd4b4b;
+    --p1: #c97a3f;
+    --p2: #c7a044;
+    --p3: #7f8fa6;
+    --ink: #ffffff;
+    --ink-dim: #c7ccd6;
+    --ink-mute: #8c93a0;
+    --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
   }
+  * { box-sizing: border-box; }
   html, body {
     margin: 0; padding: 0;
     width: 100%; height: 100%;
@@ -40,111 +50,385 @@
     -webkit-font-smoothing: antialiased;
   }
 
+  /* 预览模式：棋盘格底衬，方便看清透明区域（OBS 里不会出现） */
+  body.preview { background:
+    repeating-conic-gradient(#191d28 0% 25%, #141821 0% 50%) 50% / 32px 32px !important; }
+
   #stage {
     position: fixed; left: 0; top: 0;
     width: 1920px; height: 1080px;
     overflow: hidden;
-    pointer-events: none;          /* 叠加层不吃鼠标事件 */
-    display: flex; flex-direction: column;
-    align-items: center; justify-content: center;
-    gap: 28px;
-    padding: 60px 90px; box-sizing: border-box;
+    pointer-events: none;              /* 叠加层默认不吃鼠标事件 */
+    transform-origin: top left;
   }
-  #stage.has-ack { pointer-events: auto; }
+  .hidden { display: none !important; }
 
-  /* 预览模式：棋盘格底衬，让操作员看清哪里是透明的（OBS 里不会出现） */
-  body.preview { background:
-    repeating-conic-gradient(#191d28 0% 25%, #141821 0% 50%) 50% / 32px 32px !important; }
+  /* ── 背景：只有 dark / dynamic 时显示，transparent 时保持全透明 ── */
+  .scene-bg { position: absolute; inset: 0; z-index: 0; display: none; background: #0a0b0d; }
+  .bg-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: none; }
+  .scene-shade { position: absolute; inset: 0; }
+  body.bg-dark .scene-bg {
+    display: block;
+    background:
+      radial-gradient(120% 90% at 18% 12%, rgba(208, 52, 78, .18), transparent 55%),
+      radial-gradient(120% 90% at 82% 88%, rgba(61, 120, 201, .18), transparent 55%),
+      linear-gradient(160deg, #101116 0%, #0a0b0e 55%, #08090c 100%);
+  }
+  body.bg-dynamic .scene-bg { display: block; }
+  body.bg-dynamic .bg-video { display: block; }
+  body.bg-dynamic .scene-shade {
+    background:
+      linear-gradient(180deg, rgba(5, 6, 8, .72) 0%, rgba(5, 6, 8, .22) 30%, rgba(5, 6, 8, .18) 65%, rgba(5, 6, 8, .74) 100%),
+      radial-gradient(120% 90% at 50% 45%, rgba(0, 0, 0, 0) 28%, rgba(0, 0, 0, .44) 100%);
+  }
+  .bg-video[hidden] { display: none; }
 
-  /* ── 提示卡 ── */
+  /* ── 顶部标识 / 时钟 ── */
+  .cast-head {
+    position: absolute; left: 54px; right: 54px; top: 30px;
+    z-index: 4;
+    display: flex; align-items: center; justify-content: space-between; gap: 20px;
+  }
+  .brand-block { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .brand-block .dot { width: 9px; height: 9px; background: var(--accent); flex: 0 0 auto; }
+  .brand {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 700;
+    letter-spacing: 2.4px; color: #aeb4c0; white-space: nowrap;
+  }
+  .cast-title {
+    padding-left: 14px; border-left: 3px solid var(--accent);
+    font-size: 26px; font-weight: 800; color: var(--ink); white-space: nowrap;
+  }
+  .head-right { display: flex; align-items: center; gap: 12px; flex: 0 0 auto; }
+  .clock {
+    font-family: var(--mono); font-size: 20px; font-weight: 700;
+    letter-spacing: 1px; color: #e3e6ec;
+    padding: 3px 10px; background: rgba(8, 9, 12, .62);
+    border: 1px solid rgba(255, 255, 255, .12);
+  }
+  .audio-dot {
+    font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .5px;
+    color: var(--ink-mute); padding: 4px 9px;
+    border: 1px solid rgba(255, 255, 255, .12); background: rgba(8, 9, 12, .62);
+  }
+  .audio-dot.ok { color: #8fc7a2; border-color: #345641; }
+
+  /* ── 比赛 / 比分 / 当前曲目 ── */
+  .match-strip {
+    position: absolute; left: 50%; top: 108px; transform: translateX(-50%);
+    z-index: 3;
+    width: min(1280px, 90%);
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center; gap: 26px;
+    padding: 12px 24px;
+    background: rgba(8, 9, 12, .80);
+    border: 1px solid rgba(255, 255, 255, .14);
+    border-left: 4px solid var(--left-color);
+    border-right: 4px solid var(--right-color);
+    box-shadow: 0 12px 34px rgba(0, 0, 0, .32);
+  }
+  .ms-side { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  .ms-side.right { justify-content: flex-end; }
+  .ms-name {
+    font-size: 25px; font-weight: 800; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .ms-side.left .ms-name { color: var(--left-color); }
+  .ms-side.right .ms-name { color: var(--right-color); }
+  .ms-score {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: 36px; font-weight: 800; line-height: 1; letter-spacing: -1px;
+    white-space: nowrap;
+  }
+  .ms-side.left .ms-score { color: var(--left-color); }
+  .ms-side.right .ms-score { color: var(--right-color); }
+  .ms-mid { text-align: center; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .ms-match {
+    font-family: var(--mono); font-size: 11px; font-weight: 700;
+    letter-spacing: 2px; color: var(--ink-mute);
+  }
+  .ms-song {
+    font-size: 20px; font-weight: 800; color: var(--ink);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 560px;
+  }
+  .ms-meta {
+    font-size: 12px; color: var(--ink-dim);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 560px;
+  }
+  .ms-meta:empty { display: none; }
+
+  /* ── 提示预览区 ── */
+  .cue-preview {
+    position: absolute; z-index: 2;
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 16px 20px 18px;
+    background: rgba(8, 9, 12, var(--panel-alpha));
+    border: 1px solid rgba(255, 255, 255, .15);
+    border-top: 3px solid var(--accent);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, .42);
+    transition: opacity .18s ease;
+  }
+  .pos-bottom .cue-preview { left: 50%; bottom: 46px; transform: translateX(-50%); width: min(1240px, 86%); }
+  .pos-top .cue-preview { left: 50%; top: 246px; transform: translateX(-50%); width: min(1240px, 86%); }
+  .pos-left .cue-preview { left: 56px; top: 50%; transform: translateY(-50%); width: 620px; }
+  .pos-right .cue-preview { right: 56px; top: 50%; transform: translateY(-50%); width: 620px; }
+
+  .cue-head {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px;
+    padding-bottom: 9px; border-bottom: 1px solid rgba(255, 255, 255, .09);
+  }
+  .cue-label {
+    font-family: var(--mono); font-size: 12.5px; font-weight: 800;
+    letter-spacing: 2px; color: var(--accent);
+  }
+  .cue-count { font-family: var(--mono); font-size: 11px; color: var(--ink-mute); letter-spacing: 1px; }
+  .cue-list { display: flex; flex-direction: column; gap: 10px; }
+  .cue-empty {
+    padding: 22px 10px 20px; text-align: center;
+    font-size: 17px; letter-spacing: 1px; color: var(--ink-mute);
+  }
+  .cue-empty:empty { display: none; }
+
   .cue-card {
+    --pc: var(--p3);
+    display: flex; align-items: center; gap: 18px;
+    padding: 13px 18px;
+    background: rgba(0, 0, 0, .42);
+    border-left: 5px solid var(--pc);
     position: relative;
-    max-width: 86%;
-    min-width: 46%;
-    padding: 34px 64px;
-    border-radius: 6px;
-    background: rgba(8, 8, 9, .88);
-    border: 2px solid rgba(255, 255, 255, .14);
-    display: flex; flex-direction: column; align-items: center; gap: 18px;
-    text-align: center;
-    box-shadow: 0 8px 28px rgba(0, 0, 0, .45);
   }
-  .cue-card.P0 { border-color: var(--cue-p0); background: rgba(24, 8, 10, .92); }
-  .cue-card.P1 { border-color: var(--cue-p1); background: rgba(24, 16, 8, .92); }
-  .cue-card.P2 { border-color: var(--cue-p2); background: rgba(22, 19, 8, .92); }
-  .cue-card.P3 { border-color: var(--cue-p3); background: rgba(10, 12, 16, .92); }
-
-  /* P0 脉冲边框 */
+  .cue-card.P0 { --pc: var(--p0); background: rgba(42, 10, 12, .66); }
+  .cue-card.P1 { --pc: var(--p1); background: rgba(40, 24, 10, .60); }
+  .cue-card.P2 { --pc: var(--p2); background: rgba(38, 32, 10, .58); }
+  .cue-card.P3 { --pc: var(--p3); }
   .cue-card.P0::after {
-    content: ''; position: absolute; inset: -2px; border-radius: 6px; pointer-events: none;
+    content: ''; position: absolute; inset: 0; pointer-events: none;
     border: 2px solid rgba(189, 75, 75, .85);
     animation: cast-pulse 1.4s ease-in-out infinite;
   }
-  @keyframes cast-pulse { 0%, 100% { opacity: .25 } 50% { opacity: 1 } }
-  .cue-card.flash { animation: cast-flash 1s ease-in-out 3; }
-  @keyframes cast-flash { 0%, 100% { filter: none } 50% { filter: brightness(1.6) } }
+  @keyframes cast-pulse { 0%, 100% { opacity: .18 } 50% { opacity: .85 } }
+  .cue-card.flash { animation: cast-flash 1s ease-in-out 2; }
+  @keyframes cast-flash { 0%, 100% { filter: none } 50% { filter: brightness(1.55) } }
 
+  .cue-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
   .cue-title {
-    font-size: 76px; font-weight: 900; line-height: 1.15;
+    font-size: calc(38px * var(--cue-scale)); font-weight: 900; line-height: 1.18;
     color: #fff; letter-spacing: .01em;
-    text-shadow: 0 3px 18px rgba(0, 0, 0, .85), 0 0 2px rgba(0, 0, 0, .95);
-    max-width: 100%; word-break: break-word;
+    text-shadow: 0 3px 16px rgba(0, 0, 0, .8);
+    word-break: break-word;
   }
   .cue-body {
-    font-size: 40px; font-weight: 600; color: #d7deec; line-height: 1.35;
-    text-shadow: 0 2px 12px rgba(0, 0, 0, .8);
+    font-size: calc(22px * var(--cue-scale)); font-weight: 600; line-height: 1.32;
+    color: #d5dbe6; text-shadow: 0 2px 10px rgba(0, 0, 0, .75);
   }
-
-  /* 倒计时数字：≥ 20vh 等效（1080 画布下约 220px） */
-  .cue-count { display: flex; align-items: baseline; gap: 22px; }
-  .cue-count .num {
-    font-size: 220px; font-weight: 900; line-height: .9;
-    font-variant-numeric: tabular-nums; letter-spacing: -.03em;
-    color: var(--cast-accent);
-    text-shadow: 0 6px 26px rgba(0, 0, 0, .9);
+  .cue-count-wrap { flex: 0 0 auto; display: flex; align-items: baseline; gap: 6px; }
+  .cue-count-wrap .num {
+    font-family: var(--mono); font-variant-numeric: tabular-nums;
+    font-size: calc(78px * var(--cue-scale)); font-weight: 900; line-height: .92;
+    color: var(--accent); letter-spacing: -2px;
   }
-  .cue-count.P0 .num { color: #d97a7a; text-shadow: 0 6px 26px rgba(0,0,0,.9); }
-  .cue-count.P1 .num { color: #d99a62; }
-  .cue-count.P2 .num { color: #d9bd6a; }
-  .cue-count .unit { font-size: 52px; font-weight: 700; color: #c9d3e4; text-shadow: 0 2px 12px rgba(0,0,0,.8); }
+  .cue-card.P0 .cue-count-wrap .num { color: #e08383; }
+  .cue-card.P1 .cue-count-wrap .num { color: #e0a06a; }
+  .cue-card.P2 .cue-count-wrap .num { color: #e0c477; }
+  .cue-count-wrap .unit { font-size: calc(20px * var(--cue-scale)); font-weight: 700; color: var(--ink-dim); }
 
   .ack-btn {
     pointer-events: auto;
-    margin-top: 6px;
-    display: inline-flex; align-items: center; justify-content: center; gap: 16px;
-    min-width: 520px; min-height: 108px; padding: 0 44px;
-    font-size: 46px; font-weight: 900; font-family: inherit;
+    flex: 0 0 auto;
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 132px; min-height: 52px; padding: 0 20px;
+    font-size: 21px; font-weight: 900; font-family: inherit;
     color: #0c1a12; background: #4f9b6d;
-    border: 2px solid #62b183; border-radius: 6px; cursor: pointer;
-    box-shadow: none;
+    border: 2px solid #62b183; cursor: pointer;
   }
-  .ack-btn:disabled { filter: grayscale(1) brightness(.7); cursor: default; box-shadow: none; }
+  .ack-btn:disabled { filter: grayscale(1) brightness(.7); cursor: default; }
 
-  .ack-hint { font-size: 24px; color: #93a0b6; font-weight: 600; }
+  /* ticker：底部横向单行条 */
+  .tpl-ticker .cue-preview {
+    left: 4%; right: 4%; bottom: 40px; top: auto;
+    width: auto; transform: none;
+    padding: 10px 14px;
+  }
+  .tpl-ticker .cue-head { display: none; }
+  .tpl-ticker .cue-list { gap: 6px; }
+  .tpl-ticker .cue-card { padding: 9px 14px; gap: 14px; }
+  .tpl-ticker .cue-title { font-size: calc(29px * var(--cue-scale)); }
+  .tpl-ticker .cue-body { font-size: calc(15px * var(--cue-scale)); }
+  .tpl-ticker .cue-count-wrap .num { font-size: calc(46px * var(--cue-scale)); }
+  .tpl-ticker .ack-btn { min-width: 96px; min-height: 40px; font-size: 17px; }
 
-  .empty { display: none; }        /* 没有提示时**什么都不画**（保持完全透明） */
+  /* minimal：没有面板底色，只保留浮动卡片 */
+  .tpl-minimal .cue-preview {
+    background: transparent; border-color: transparent; border-top-color: transparent;
+    box-shadow: none; padding: 0;
+  }
+  .tpl-minimal .cue-head { display: none; }
+  .tpl-minimal .cue-card { background: rgba(8, 9, 12, .80); box-shadow: 0 12px 30px rgba(0, 0, 0, .35); }
+  .tpl-minimal .cue-empty { background: rgba(8, 9, 12, .62); }
 
-  body.preview .empty {
+  /* classic：原来的全屏大提示 */
+  .tpl-classic .cue-preview {
+    inset: 0; left: 0; right: 0; top: 0; bottom: 0;
+    width: auto; transform: none;
+    background: transparent; border: none; box-shadow: none;
+    align-items: center; justify-content: center; padding: 60px 90px;
+  }
+  .tpl-classic .cue-head { display: none; }
+  .tpl-classic .cue-list { width: 100%; align-items: center; }
+  .tpl-classic .cue-card {
+    width: auto; max-width: 86%; min-width: 46%;
+    flex-direction: column; gap: 16px; padding: 30px 56px;
+    background: rgba(8, 8, 9, .88); border: 2px solid var(--pc); border-left-width: 2px;
+    text-align: center;
+  }
+  .tpl-classic .cue-main { align-items: center; }
+  .tpl-classic .cue-title { font-size: calc(72px * var(--cue-scale)); }
+  .tpl-classic .cue-body { font-size: calc(38px * var(--cue-scale)); }
+  .tpl-classic .cue-count-wrap .num { font-size: calc(200px * var(--cue-scale)); }
+  .tpl-classic .cue-count-wrap .unit { font-size: calc(46px * var(--cue-scale)); }
+  .tpl-classic .ack-btn { min-width: 420px; min-height: 92px; font-size: 40px; }
+
+  /* 预览 / 调模板时的边框提示 */
+  .pos-bottom .cue-preview::before,
+  .pos-top .cue-preview::before,
+  .pos-left .cue-preview::before,
+  .pos-right .cue-preview::before {
+    content: ''; position: absolute; inset: 5px; pointer-events: none;
+    border: 1px dashed rgba(255, 255, 255, .10);
+  }
+  body:not(.preview):not(.config) .cue-preview::before { display: none; }
+
+  /* bare=1：用于控制台的「合并预览」，去掉棋盘格与预览提示，只保留画面内容 */
+  body.preview.bare { background: transparent !important; }
+  body.preview.bare .stage-empty,
+  body.preview.bare .sound-hint { display: none !important; }
+
+  /* 空状态 / 声音提示：只在预览或调模板时出现 */
+  .stage-empty, .sound-hint { display: none; }
+  body.preview .stage-empty, body.config .stage-empty {
     display: block; position: fixed; right: 20px; bottom: 16px;
-    padding: 8px 14px; border-radius: 8px;
-    background: rgba(0, 0, 0, .6); color: #8d9bb2;
-    font-size: 14px; font-family: ui-monospace, Consolas, monospace;
+    padding: 8px 14px; background: rgba(0, 0, 0, .62); color: #8d9bb2;
+    font-size: 14px; font-family: var(--mono);
   }
+  body.preview .stage-empty.hidden, body.config .stage-empty.hidden { display: none; }
+  body.preview .sound-hint { display: flex; position: fixed; left: 20px; bottom: 16px; align-items: center; gap: 10px;
+    padding: 8px 14px; background: rgba(0, 0, 0, .65); color: #f5c451; font-size: 15px; font-weight: 700; }
+  body.preview .sound-hint.ok { display: none; }
 
-  /* 声音解锁提示：只在预览模式下显示，避免投到监视器上 */
-  .sound-hint { display: none; }
-  body.preview .sound-hint {
-    display: flex; position: fixed; left: 20px; bottom: 16px;
-    align-items: center; gap: 10px;
-    padding: 8px 14px; border-radius: 8px;
-    background: rgba(0, 0, 0, .65); color: #f5c451; font-size: 15px; font-weight: 700;
+  /* ── 右侧配置抽屉（只在 ?config=1 时出现） ── */
+  .cfg-drawer {
+    position: fixed; right: 16px; top: 16px; bottom: 16px; width: 392px;
+    z-index: 100; pointer-events: auto;
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 16px 18px;
+    background: #101114; color: #e4e7ec;
+    border: 1px solid #34373d; box-shadow: 0 24px 70px rgba(0, 0, 0, .55);
+    overflow-y: auto; font-size: 12.5px;
   }
+  .cfg-drawer h2 {
+    margin: 0; font-size: 15px; font-weight: 800; letter-spacing: .5px;
+    display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  }
+  .cfg-drawer h2 .sub { font-size: 10.5px; color: #7c828d; font-weight: 600; }
+  .cfg-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 10px; }
+  .cfg-row { display: flex; flex-direction: column; gap: 4px; }
+  .cfg-row.full { grid-column: 1 / -1; }
+  .cfg-row label { font-size: 11px; font-weight: 700; color: #aeb4bf; letter-spacing: .3px; }
+  .cfg-row input, .cfg-row select {
+    width: 100%; min-height: 32px; padding: 5px 8px;
+    background: #17181c; color: #e8ebf0;
+    border: 1px solid #34373d; border-radius: 3px;
+    font-family: inherit; font-size: 12px;
+  }
+  .cfg-row input[type="color"] { padding: 2px; height: 32px; }
+  .cfg-row input[type="range"] { padding: 0; accent-color: var(--accent); }
+  .cfg-checks { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 10px; }
+  .cfg-check { display: flex; align-items: center; gap: 7px; color: #cdd2db; font-size: 11.5px; }
+  .cfg-check span { white-space: nowrap; }
+  .cfg-check input { accent-color: var(--accent); flex: 0 0 auto; }
+  .cfg-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+  .cfg-btn {
+    pointer-events: auto; cursor: pointer;
+    padding: 6px 10px; min-height: 30px;
+    font: inherit; font-size: 11.5px; font-weight: 700;
+    color: #dfe3e9; background: #1b1d21; border: 1px solid #3a3d44; border-radius: 3px;
+  }
+  .cfg-btn:hover { border-color: var(--accent); }
+  .cfg-btn.primary { color: #0d1117; background: var(--accent); border-color: var(--accent); }
+  .cfg-status { min-height: 16px; font-size: 11px; color: #8f96a1; }
+  .cfg-status.ok { color: #8fc7a2; }
+  .cfg-status.err { color: #d97a7a; }
+  .cfg-pw { display: flex; gap: 6px; }
+  .cfg-pw input { flex: 1; }
+  .cfg-note { color: #7c828d; font-size: 10.5px; line-height: 1.55; }
+  .cfg-url {
+    word-break: break-all; font-family: var(--mono); font-size: 10.5px; color: #9aa1ad;
+    background: #17181c; border: 1px solid #2b2e34; padding: 6px 8px;
+  }
+  .cfg-toggle {
+    position: fixed; right: 18px; bottom: 18px; z-index: 101;
+    pointer-events: auto; cursor: pointer;
+    padding: 9px 14px; font: inherit; font-size: 12px; font-weight: 700;
+    color: #0d1117; background: var(--accent); border: none;
+  }
+  .cfg-toggle.hidden { display: none; }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
-<body>
-<div id="stage"></div>
-<div class="empty" id="emptyHint">透明叠加 · 当前无提示</div>
-<div class="sound-hint" id="soundHint"><span>声音未启用（点击页面可尝试启用）</span></div>
+<body class="tpl-panel pos-bottom bg-transparent">
+<div id="stage">
+  <div class="scene-bg" id="sceneBg" aria-hidden="true">
+    <video class="bg-video" id="bgVideo" autoplay muted loop playsinline preload="auto"
+           poster="/assets/liveroom-background.png">
+      <source src="/assets/liveroom-background.mp4" type="video/mp4" />
+    </video>
+    <div class="scene-shade"></div>
+  </div>
+
+  <header class="cast-head" id="castHead">
+    <div class="brand-block" id="brandBlock">
+      <span class="dot"></span>
+      <span class="brand">CHUNITHM · CAST</span>
+      <span class="cast-title" id="castTitle">解说提示</span>
+    </div>
+    <div class="head-right">
+      <span class="clock hidden" id="clock">--:--:--</span>
+      <span class="audio-dot hidden" id="audioDot">声音</span>
+    </div>
+  </header>
+
+  <section class="match-strip hidden" id="matchStrip">
+    <div class="ms-side left">
+      <span class="ms-name" id="msLeftName">P1</span>
+      <span class="ms-score" id="msLeftScore">0</span>
+    </div>
+    <div class="ms-mid">
+      <span class="ms-match" id="msMatchName">比赛</span>
+      <span class="ms-song" id="msSong">等待选曲</span>
+      <span class="ms-meta" id="msMeta"></span>
+    </div>
+    <div class="ms-side right">
+      <span class="ms-name" id="msRightName">P2</span>
+      <span class="ms-score" id="msRightScore">0</span>
+    </div>
+  </section>
+
+  <section class="cue-preview" id="cuePanel">
+    <header class="cue-head">
+      <span class="cue-label" id="cueLabel">提示预览</span>
+      <span class="cue-count" id="cueCount"></span>
+    </header>
+    <div class="cue-list" id="cueList"></div>
+    <div class="cue-empty" id="cueEmpty">等待导播提示…</div>
+  </section>
+
+  <div class="stage-empty hidden" id="emptyHint">透明叠加 · 当前无提示</div>
+  <div class="sound-hint" id="soundHint"><span>声音未启用（点击页面可尝试启用）</span></div>
+</div>
+
+<aside class="cfg-drawer hidden" id="cfgDrawer"></aside>
+<button class="cfg-toggle hidden" id="cfgToggle" type="button">⚙ 解说页配置</button>
 
 <script src="/shared/format.js"></script>
 <script src="/shared/audio.js"></script>
@@ -154,112 +438,272 @@
 (function () {
   const Q = new URLSearchParams(location.search);
   const PREVIEW = Q.get('preview') === '1';
-  const SHOW_ACK = Q.get('ack') === '1';
+  const CONFIG_UI = Q.get('config') === '1';
+  const DEMO = Q.get('demo') === '1';
+  const BARE = Q.get('bare') === '1';
   const CANVAS = { width: 1920, height: 1080 };
 
+  const DEFAULT_CFG = {
+    template: 'panel',
+    position: 'bottom',
+    title: '解说提示',
+    cueTitle: '提示预览',
+    accent: '#d9a441',
+    opacity: 0.9,
+    scale: 1,
+    maxCues: 2,
+    showMatch: true,
+    showClock: true,
+    showBrand: true,
+    showAudio: false,
+    ackButton: false,
+    background: 'transparent',
+  };
+  const TEMPLATES = ['panel', 'ticker', 'minimal', 'classic'];
+  const POSITIONS = ['bottom', 'top', 'left', 'right'];
+  const BACKGROUNDS = ['transparent', 'dark', 'dynamic'];
+
+  const $ = (id) => document.getElementById(id);
+  const stage = $('stage');
+  const el = {
+    castHead: $('castHead'), brandBlock: $('brandBlock'), castTitle: $('castTitle'),
+    clock: $('clock'), audioDot: $('audioDot'),
+    matchStrip: $('matchStrip'), msLeftName: $('msLeftName'), msLeftScore: $('msLeftScore'),
+    msRightName: $('msRightName'), msRightScore: $('msRightScore'),
+    msMatchName: $('msMatchName'), msSong: $('msSong'), msMeta: $('msMeta'),
+    cuePanel: $('cuePanel'), cueLabel: $('cueLabel'), cueCount: $('cueCount'),
+    cueList: $('cueList'), cueEmpty: $('cueEmpty'),
+    emptyHint: $('emptyHint'), soundHint: $('soundHint'),
+    bgVideo: $('bgVideo'),
+    cfgDrawer: $('cfgDrawer'), cfgToggle: $('cfgToggle'),
+  };
+
+  // 预览 / 配置页静音：提示音只由真实 OBS 解说源播放
+  if (PREVIEW || CONFIG_UI) {
+    const s = el.soundHint.querySelector('span');
+    if (s) s.textContent = '预览静音 · 提示音只在 OBS 解说源播放';
+  }
+
   if (PREVIEW) document.body.classList.add('preview');
+  if (BARE) document.body.classList.add('bare');
+  if (CONFIG_UI) document.body.classList.add('config');
 
-  const $stage = document.getElementById('stage');
-  const $empty = document.getElementById('emptyHint');
-  const $sound = document.getElementById('soundHint');
+  // URL 临时覆盖（用于快速调模板，不保存）
+  const override = {
+    template: TEMPLATES.includes(Q.get('template')) ? Q.get('template') : '',
+    position: POSITIONS.includes(Q.get('pos')) ? Q.get('pos') : '',
+    background: BACKGROUNDS.includes(Q.get('bg')) ? Q.get('bg') : '',
+    scale: Number(Q.get('cueScale')) > 0 ? Number(Q.get('cueScale')) : 0,
+  };
 
-  // 画布缩放（?scale= / ?fit=）
+  // 画布缩放
   (function applyScale() {
     const sc = Q.get('scale');
     const fit = Q.get('fit') === '1';
     let s = sc ? Number(sc) || 1 : 1;
     if (!sc && fit) s = Math.min(window.innerWidth / CANVAS.width, window.innerHeight / CANVAS.height);
-    $stage.style.width = `${CANVAS.width}px`;
-    $stage.style.height = `${CANVAS.height}px`;
-    if (s !== 1) { $stage.style.transformOrigin = 'top left'; $stage.style.transform = `scale(${s})`; }
+    stage.style.width = `${CANVAS.width}px`;
+    stage.style.height = `${CANVAS.height}px`;
+    if (s !== 1) { stage.style.transformOrigin = 'top left'; stage.style.transform = `scale(${s})`; }
     window.addEventListener('resize', () => { if (fit) location.reload(); });
   })();
 
-  // 身份：audience='cast'。服务端只把 cast 频道的提示推给本页。
-  arcadeWS.start({ audience: 'cast' });
-
-  // ── 声音（C-REQ-560 / 564）──
-  const audio = window.audioCue;
-  function unlockOnce() {
-    audio.unlock().then(() => {
-      $sound.style.display = audio.status().unlocked ? 'none' : '';
-      // 视觉提示始终独立生效，与声音是否解锁无关（C-REQ-564）
-    });
-  }
-  document.addEventListener('click', unlockOnce, { once: true });
-  document.addEventListener('keydown', unlockOnce, { once: true });
-  unlockOnce();
-
-  arcadeWS.on('cue:sound', (m) => {
-    if (!m || !m.sound || m.sound === 'none') return;
-    const played = audio.play(m.sound);
-    if (!played && !audio.status().unlocked) {
-      const top = $stage.firstElementChild;
-      if (top) { top.classList.remove('flash'); void top.offsetWidth; top.classList.add('flash'); }
+  // 背景视频只在 bg=dynamic 时加载；视频不可用时回落到 CSS 背景
+  if (el.bgVideo) {
+    if (Q.get('static') === '1') { el.bgVideo.hidden = true; el.bgVideo.removeAttribute('src'); }
+    else {
+      const hideVideo = () => { el.bgVideo.hidden = true; };
+      el.bgVideo.addEventListener('error', hideVideo);
+      for (const s of el.bgVideo.querySelectorAll('source')) s.addEventListener('error', hideVideo);
+      const p = el.bgVideo.play?.();
+      if (p && typeof p.catch === 'function') p.catch(() => { /* poster / CSS 背景兜底 */ });
     }
-  });
+  }
 
-  // ── 提示渲染（C-REQ-822：最多 2 条）──
+  // ── 配置 ─────────────────────────────────────────────
+  let cfg = { ...DEFAULT_CFG };
+  let overrideCfg = {};
+  let renderQueued = false;
+
+  function coerceCfg(raw) {
+    const out = { ...DEFAULT_CFG };
+    if (!raw || typeof raw !== 'object') return out;
+    if (TEMPLATES.includes(raw.template)) out.template = raw.template;
+    if (POSITIONS.includes(raw.position)) out.position = raw.position;
+    if (BACKGROUNDS.includes(raw.background)) out.background = raw.background;
+    if (typeof raw.title === 'string' && raw.title.trim()) out.title = raw.title.trim().slice(0, 40);
+    if (typeof raw.cueTitle === 'string' && raw.cueTitle.trim()) out.cueTitle = raw.cueTitle.trim().slice(0, 40);
+    if (/^#[0-9a-f]{6}$/i.test(String(raw.accent || ''))) out.accent = raw.accent;
+    const num = (v, min, max, fallback) => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+    };
+    out.opacity = num(raw.opacity, 0.35, 1, out.opacity);
+    out.scale = num(raw.scale, 0.7, 1.5, out.scale);
+    out.maxCues = Math.round(num(raw.maxCues, 1, 3, out.maxCues));
+    for (const k of ['showMatch', 'showClock', 'showBrand', 'showAudio', 'ackButton']) {
+      if (typeof raw[k] === 'boolean') out[k] = raw[k];
+    }
+    return out;
+  }
+
+  function effectiveCfg() {
+    return { ...cfg, ...overrideCfg };
+  }
+
+  function applyConfig(raw) {
+    cfg = coerceCfg(raw);
+    applyEffective();
+  }
+
+  /** 把「服务端配置 + 本次 URL 覆盖」应用到页面；不修改 cfg 本身 */
+  function applyEffective() {
+    const e = effectiveCfg();
+    const body = document.body;
+    for (const t of TEMPLATES) body.classList.toggle(`tpl-${t}`, e.template === t);
+    for (const p of POSITIONS) body.classList.toggle(`pos-${p}`, e.position === p);
+    for (const b of BACKGROUNDS) body.classList.toggle(`bg-${b}`, e.background === b);
+
+    document.documentElement.style.setProperty('--accent', e.accent);
+    document.documentElement.style.setProperty('--panel-alpha', String(e.opacity));
+    document.documentElement.style.setProperty('--cue-scale', String(e.scale));
+
+    el.castTitle.textContent = e.title;
+    el.cueLabel.textContent = e.cueTitle;
+    el.brandBlock.classList.toggle('hidden', !e.showBrand);
+    el.clock.classList.toggle('hidden', !e.showClock);
+    el.audioDot.classList.toggle('hidden', !e.showAudio);
+    el.castHead.classList.toggle('hidden', !e.showBrand && !e.showClock && !e.showAudio);
+
+    // 比赛条：配置关闭时永远隐藏；打开时只要有比赛状态就显示
+    el.matchStrip.classList.toggle('hidden', !e.showMatch || !matchState);
+
+    syncVideo();
+    render();
+  }
+
+  // URL 覆盖（仅影响本次打开，不改服务端配置）
+  function applyOverrides() {
+    overrideCfg = {};
+    if (override.template) overrideCfg.template = override.template;
+    if (override.position) overrideCfg.position = override.position;
+    if (override.background) overrideCfg.background = override.background;
+    if (override.scale >= 0.5) overrideCfg.scale = Math.min(1.5, Math.max(0.7, override.scale));
+    applyEffective();
+  }
+
+  function syncVideo() {
+    if (!el.bgVideo) return;
+    const dyn = document.body.classList.contains('bg-dynamic');
+    if (!dyn) {
+      try { el.bgVideo.pause(); } catch { /* ignore */ }
+      return;
+    }
+    const p = el.bgVideo.play?.();
+    if (p && typeof p.catch === 'function') p.catch(() => { /* poster / CSS 背景兜底 */ });
+  }
+
+  // ── 比赛 / 比分 ──────────────────────────────────────
+  let matchState = null;
+  let lastMatchKey = '';
+
+  function applyMatch(raw) {
+    const m = raw && typeof raw === 'object' && raw.current ? raw.current : raw;
+    if (!m || typeof m !== 'object') return;
+    matchState = m;
+    const song = m.songs?.[m.currentIndex] || m.visibleSongs?.[0] || null;
+    const key = JSON.stringify([m.name, m.currentIndex, m.status,
+      m.players?.left?.name, m.players?.right?.name,
+      m.derived?.displayLeft, m.derived?.displayRight,
+      song?.title, song?.artist, song?.difficultyName, song?.levelText]);
+    if (key === lastMatchKey) return;
+    lastMatchKey = key;
+
+    const left = m.players?.left || {}, right = m.players?.right || {};
+    const d = m.derived || {};
+    const colors = m.colors || {};
+    if (/^#[0-9a-f]{6}$/i.test(colors.left || '')) document.documentElement.style.setProperty('--left-color', colors.left);
+    if (/^#[0-9a-f]{6}$/i.test(colors.right || '')) document.documentElement.style.setProperty('--right-color', colors.right);
+
+    el.msLeftName.textContent = left.name || 'P1';
+    el.msRightName.textContent = right.name || 'P2';
+    el.msLeftScore.textContent = String(d.displayLeft ?? 0);
+    el.msRightScore.textContent = String(d.displayRight ?? 0);
+    el.msMatchName.textContent = `${m.name || '比赛'} · ${d.modeLabel || '总分制'}${d.scoreLabel ? ` · ${d.scoreLabel}` : ''}`;
+
+    if (song && (song.title || song.hasSong)) {
+      el.msSong.textContent = song.title || '未命名曲目';
+      const meta = [song.artist, song.difficultyName, song.levelText || song.level]
+        .filter((x) => x !== undefined && x !== null && x !== '').join(' · ');
+      el.msMeta.textContent = meta;
+    } else {
+      el.msSong.textContent = '等待选曲';
+      el.msMeta.textContent = '';
+    }
+
+    el.matchStrip.classList.toggle('hidden', !effectiveCfg().showMatch);
+  }
+
+  // ── 提示 ─────────────────────────────────────────────
   let cues = [];
   const ranked = { P0: 0, P1: 1, P2: 2, P3: 3 };
-
-  arcadeWS.on('cue:set', (m) => {
-    cues = (m.cues || []).slice().sort((a, b) => (ranked[a.priority] - ranked[b.priority]) || (b.createdAt - a.createdAt));
-    render();
-    if (cues.some((c) => c.priority === 'P0')) {
-      const top = $stage.firstElementChild;
-      if (top) { top.classList.remove('flash'); void top.offsetWidth; top.classList.add('flash'); }
-    }
-  });
-
-  // 倒计时本地插值（C-REQ-528）
   const cdState = new Map();
-  arcadeWS.on('cue:tick', (m) => {
-    if (m.state && m.state !== 'running') { cdState.delete(m.countdownId); return; }
-    cdState.set(m.countdownId || m.cueId, { remainAtRecv: m.remainingMs, recvAt: performance.now(), title: m.title });
-  });
-  arcadeWS.on('countdown:cancel', (m) => cdState.delete(m.countdownId));
-  arcadeWS.on('countdown:zero', () => cdState.clear());
+
+  function setCues(list) {
+    const before = new Set(cues.map((c) => c.id));
+    cues = (Array.isArray(list) ? list : []).slice()
+      .sort((a, b) => (ranked[a.priority] ?? 3) - (ranked[b.priority] ?? 3) || (b.createdAt || 0) - (a.createdAt || 0));
+    render();
+    // 新到 P0 才闪；只改模板 / 缩放时不要反复闪
+    const newP0 = cues.some((c) => c.priority === 'P0' && !before.has(c.id));
+    if (newP0) {
+      el.cuePanel.classList.remove('flash');
+      void el.cuePanel.offsetWidth;
+      el.cuePanel.classList.add('flash');
+    }
+  }
+
+  function cdFor(c) {
+    return cdState.get(c.id)
+      || [...cdState.values()].find((v) => v.cueId === c.id || (v.title && v.title === c.title))
+      || null;
+  }
+
+  function remainingFor(st) {
+    if (!st) return null;
+    return Math.max(0, st.remainAtRecv - (performance.now() - st.recvAt));
+  }
 
   function currentRemaining() {
     let best = null;
     for (const [, v] of cdState) {
-      const remain = Math.max(0, v.remainAtRecv - (performance.now() - v.recvAt));
-      if (best === null || remain < best.remain) best = { remain };
+      const remain = remainingFor(v);
+      if (best === null || remain < best) best = remain;
     }
     return best;
   }
 
   function frameLoop() {
     requestAnimationFrame(frameLoop);
-    const node = $stage.querySelector('[data-cd-num]');
-    if (!node) return;
-    const cur = currentRemaining();
-    const txt = cur ? String(Math.max(0, Math.ceil(cur.remain / 1000))) : '0';
-    if (node.textContent !== txt) node.textContent = txt;
+    const nodes = document.querySelectorAll('[data-cd-key]');
+    for (const node of nodes) {
+      const st = cdState.get(node.dataset.cdKey);
+      const remain = remainingFor(st);
+      if (remain === null) continue;
+      const txt = String(Math.max(0, Math.ceil(remain / 1000)));
+      if (node.textContent !== txt) node.textContent = txt;
+    }
   }
   requestAnimationFrame(frameLoop);
 
-  function render() {
-    const show = cues.slice(0, 2);
-    $empty.style.display = show.length ? 'none' : (PREVIEW ? 'block' : 'none');
-
-    // 用 replaceChildren 一次性替换，避免残留
-    const frag = document.createDocumentFragment();
-    for (const c of show) frag.append(renderCue(c));
-    $stage.replaceChildren(frag);
-
-    const hasAck = SHOW_ACK && show.some((c) => c.requiresAck);
-    $stage.classList.toggle('has-ack', hasAck);
-  }
-
-  function el(tag, attrs, ...kids) {
+  function el2(tag, attrs, ...kids) {
     const n = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
       if (v === null || v === undefined || v === false) continue;
       if (k === 'class') n.className = v;
       else if (k === 'text') n.textContent = v;
       else if (k === 'dataset') Object.assign(n.dataset, v);
+      else if (k === 'style' && v && typeof v === 'object') Object.assign(n.style, v);
       else if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2).toLowerCase(), v);
       else n.setAttribute(k, v === true ? '' : v);
     }
@@ -270,24 +714,33 @@
     return n;
   }
 
+  function ackEnabled() {
+    return Q.get('ack') === '1' || effectiveCfg().ackButton;
+  }
+
   function renderCue(c) {
-    const card = el('div', { class: `cue-card ${c.priority}` });
-    const cd = cdState.get(c.id) || [...cdState.values()].find((v) => v.title === c.title);
+    const card = el2('div', { class: `cue-card ${c.priority || 'P3'}` });
+    const cd = cdFor(c);
+    const main = el2('div', { class: 'cue-main' });
+    if (c.kind === 'countdown' && cd) {
+      main.append(el2('div', { class: 'cue-title', text: c.title || '倒计时' }));
+    } else {
+      main.append(el2('div', { class: 'cue-title', text: c.title || '提示' }));
+      if (c.body) main.append(el2('div', { class: 'cue-body', text: c.body }));
+    }
+    card.append(main);
 
     if (c.kind === 'countdown' && cd) {
-      card.append(el('div', { class: `cue-count ${c.priority}` },
-        el('div', { class: 'num', dataset: { cdNum: '1' }, text: String(Math.ceil(cd.remainAtRecv / 1000)) }),
-        el('div', { class: 'unit', text: '秒' }),
-      ));
-      if (c.title) card.append(el('div', { class: 'cue-title', style: { fontSize: '52px' }, text: c.title }));
-    } else {
-      card.append(el('div', { class: 'cue-title', text: c.title }));
-      if (c.body) card.append(el('div', { class: 'cue-body', text: c.body }));
+      const key = cdState.get(c.id) ? c.id : [...cdState.entries()].find(([, v]) => v.cueId === c.id || v.title === c.title)?.[0];
+      const num = el2('div', { class: 'cue-count-wrap' },
+        el2('span', { class: 'num', dataset: { cdKey: key || c.id }, text: String(Math.ceil((remainingFor(cd) || 0) / 1000)) }),
+        el2('span', { class: 'unit', text: '秒' }),
+      );
+      card.append(num);
     }
 
-    // 回执按钮只在 ?ack=1 时出现 —— OBS 浏览器源里点不了，默认不显示
-    if (SHOW_ACK && c.requiresAck) {
-      const btn = el('button', {
+    if (ackEnabled() && c.requiresAck) {
+      const btn = el2('button', {
         class: 'ack-btn', type: 'button',
         onclick: () => {
           if (btn.disabled) return;
@@ -295,29 +748,371 @@
           btn.disabled = true;
           btn.textContent = '已确认';
           cues = cues.filter((x) => x.id !== c.id);
-          setTimeout(render, 200);
+          setTimeout(render, 180);
         },
-      }, el('span', { text: '收到' }));
+      }, '收到');
       card.append(btn);
-      card.append(el('div', { class: 'ack-hint', text: '按 空格 / 回车 也可以确认' }));
     }
     return card;
   }
 
-  // ?ack=1 时支持键盘确认
-  if (SHOW_ACK) {
-    document.addEventListener('keydown', (e) => {
-      if (e.key !== ' ' && e.key !== 'Enter') return;
-      if (e.target && /INPUT|TEXTAREA|BUTTON/.test(e.target.tagName)) return;
-      const target = cues.find((c) => c.requiresAck);
-      if (!target) return;
-      e.preventDefault();
-      const btn = $stage.querySelector('.ack-btn');
-      if (btn && !btn.disabled) btn.click();
-    });
+  function render() {
+    if (!el.cueList) return;
+    const e = effectiveCfg();
+    const show = cues.slice(0, Math.round(e.maxCues));
+    el.cueList.replaceChildren(...show.map(renderCue));
+
+    el.cueCount.textContent = show.length ? `${show.length} 条` : '';
+    el.cueLabel.textContent = e.cueTitle;
+    el.cueEmpty.textContent = '等待导播提示…';
+
+    const showEmpty = !show.length && (PREVIEW || CONFIG_UI || DEMO || e.background !== 'transparent');
+    el.cueEmpty.classList.toggle('hidden', !showEmpty);
+    el.cuePanel.classList.toggle('hidden', !show.length && e.background === 'transparent' && !PREVIEW && !CONFIG_UI && !DEMO);
+    el.emptyHint.classList.toggle('hidden', show.length > 0);
   }
 
-  // 握手日志，便于在 OBS 日志里排查（与渲染端一致）
+  // ── 声音 ─────────────────────────────────────────────
+  const audio = window.audioCue;
+  function renderAudio() {
+    const unlocked = audio.status().unlocked;
+    el.soundHint.classList.toggle('ok', unlocked);
+    el.audioDot.textContent = unlocked ? '声音已启用' : '声音未启用';
+    el.audioDot.classList.toggle('ok', unlocked);
+  }
+  function unlockOnce() {
+    audio.unlock().then(renderAudio);
+  }
+  document.addEventListener('click', unlockOnce, { once: true });
+  document.addEventListener('keydown', unlockOnce, { once: true });
+  unlockOnce();
+
+  arcadeWS.on('cue:sound', (m) => {
+    // 控制台里的实时预览 / 配置抽屉不播放声音：避免与真实 OBS 源重复出声
+    if (PREVIEW || CONFIG_UI) return;
+    if (!m || !m.sound || m.sound === 'none') return;
+    const played = audio.play(m.sound);
+    if (!played && !audio.status().unlocked) {
+      const top = el.cueList.firstElementChild;
+      if (top) { top.classList.remove('flash'); void top.offsetWidth; top.classList.add('flash'); }
+    }
+    renderAudio();
+  });
+
+  // ── 时钟 ─────────────────────────────────────────────
+  function tickClock() {
+    const d = new Date();
+    const p2 = (n) => String(n).padStart(2, '0');
+    el.clock.textContent = `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
+  }
+  tickClock();
+  setInterval(tickClock, 1000);
+
+  // ── WS ───────────────────────────────────────────────
+  // 预览页照常接收真实提示（preview=1 且不带 demo），但服务端会把 preview
+  // 连接从「解说端已接入」统计里排除，避免控制台误报。
+  // 示例模式用独立的 cast-preview 频道，只显示本地示例数据。
+  const identity = { audience: 'cast', preview: PREVIEW || CONFIG_UI };
+  if (PREVIEW && DEMO) identity.audience = 'cast-preview';
+  arcadeWS.start(identity);
+
+  arcadeWS.on('hello', (m) => {
+    const s = m?.state || {};
+    applyConfig(s.config?.cast);
+    if (!DEMO) applyMatch(s.match?.state);
+    renderAudio();
+  });
+
+  arcadeWS.watch('config.cast', (v) => {
+    if (v && typeof v === 'object') applyConfig(v);
+  });
+  arcadeWS.watch('match.state', (v) => { if (!DEMO) applyMatch(v); });
+
+  arcadeWS.on('cue:set', (m) => {
+    if (DEMO) return;
+    setCues(m?.cues || []);
+    renderAudio();
+  });
+  arcadeWS.on('cue:tick', (m) => {
+    if (!m) return;
+    if (m.state && m.state !== 'running') { cdState.delete(m.countdownId || m.cueId); render(); return; }
+    const key = m.countdownId || m.cueId;
+    cdState.set(key, { remainAtRecv: m.remainingMs, recvAt: performance.now(), cueId: m.cueId, title: m.title });
+    // 第一次收到 tick 而卡片还没画出来时补一次渲染
+    if (!document.querySelector(`[data-cd-key="${key}"]`)) render();
+  });
+  arcadeWS.on('countdown:cancel', (m) => { cdState.delete(m?.countdownId); render(); });
+  arcadeWS.on('countdown:zero', () => { cdState.clear(); render(); });
+  arcadeWS.on('open', () => {
+    if (CONFIG_UI) addDrawerClose();
+  });
+
+  // ── 示例数据（?demo=1） ──────────────────────────────
+  if (DEMO) {
+    const now = Date.now();
+    cdState.set('demo-cd', {
+      remainAtRecv: 12000, recvAt: performance.now(), cueId: 'demo-cd', title: '回放倒计时',
+    });
+    setCues([
+      {
+        id: 'demo-cd', kind: 'countdown', priority: 'P0', title: '回放倒计时',
+        body: '', requiresAck: true, createdAt: now,
+      },
+      {
+        id: 'demo-cue', kind: 'notice', priority: 'P2', title: '下一场：胜者组决赛',
+        body: '请解说介绍双方队伍与本次赛事赛制。', requiresAck: false, createdAt: now - 1000,
+      },
+    ]);
+    matchState = {
+      name: '第 11 局', status: 'live', currentIndex: 1,
+      players: { left: { name: 'P1' }, right: { name: 'P2' } },
+      colors: { left: '#d0344e', right: '#3d78c9' },
+      derived: { displayLeft: 258955, displayRight: 1691612, scoreLabel: '总分', modeLabel: '总分制', filledCount: 3 },
+      songs: [
+        { filled: true, title: 'テトリス', artist: '柊マグネタイト', difficultyName: 'MASTER', levelText: '14.2' },
+        { filled: true, title: 'アイ情劣等生', artist: 'かいりきベア「#コンパス」', difficultyName: 'MASTER', levelText: '13' },
+        { filled: true, title: '空間創造理論', artist: 'Sound piercer', difficultyName: 'MASTER', levelText: '14.6' },
+      ],
+    };
+    applyMatch(matchState);
+    applyOverrides();
+  } else {
+    // 没有 URL 覆盖时，WS 的 config.cast 会在 hello 里到达
+    applyConfig(arcadeWS.state?.config?.cast);
+  }
+
+  // ── 配置抽屉 ─────────────────────────────────────────
+  const cfgStatus = el2('div', { class: 'cfg-status', id: 'cfgStatus' });
+  let drawerBuilt = false;
+
+  function buildDrawer() {
+    if (!CONFIG_UI || drawerBuilt || !el.cfgDrawer) return;
+    drawerBuilt = true;
+    el.cfgDrawer.classList.remove('hidden');
+
+    const title = el2('h2', null, el2('span', { text: '解说页配置' }),
+      el2('span', { class: 'sub', text: '即时预览 · 自动保存' }));
+    const close = el2('button', { class: 'cfg-btn', type: 'button', text: '收起', onclick: toggleDrawer });
+    title.append(close);
+
+    const grid = el2('div', { class: 'cfg-grid' });
+    const fields = {};
+
+    const addRow = (key, label, input, full = false) => {
+      const row = el2('div', { class: `cfg-row${full ? ' full' : ''}` });
+      row.append(el2('label', { text: label }), input);
+      grid.append(row);
+      fields[key] = input;
+      input.addEventListener('input', onCfgChange);
+      input.addEventListener('change', onCfgChange);
+      return input;
+    };
+    const select = (options) => el2('select', null, options.map(([v, l]) => el2('option', { value: v, text: l })));
+
+    addRow('template', '提示模板', select([
+      ['panel', '面板（推荐）'], ['ticker', '底部横条'], ['minimal', '浮动卡片'], ['classic', '经典全屏'],
+    ]));
+    addRow('position', '预览位置', select([
+      ['bottom', '底部居中'], ['top', '顶部居中'], ['left', '左侧'], ['right', '右侧'],
+    ]));
+    addRow('title', '解说页标题', el2('input', { type: 'text', maxlength: '40' }));
+    addRow('cueTitle', '预览区标题', el2('input', { type: 'text', maxlength: '40' }));
+    addRow('accent', '强调色', el2('input', { type: 'color' }));
+    addRow('opacity', '面板不透明度', el2('input', { type: 'range', min: '0.35', max: '1', step: '0.05' }));
+    addRow('scale', '文字缩放', el2('input', { type: 'range', min: '0.7', max: '1.5', step: '0.05' }));
+    addRow('maxCues', '最多条数', select([['1', '1 条'], ['2', '2 条'], ['3', '3 条']]));
+    addRow('background', '背景', select([
+      ['transparent', '透明叠加（OBS）'], ['dark', '深色整屏'], ['dynamic', '动态背景整屏'],
+    ]));
+
+    const checks = el2('div', { class: 'cfg-checks full' });
+    for (const [key, label] of [
+      ['showMatch', '比赛 / 比分条'], ['showClock', '时钟'], ['showBrand', '标识与标题'],
+      ['showAudio', '声音状态'], ['ackButton', '「收到」按钮'],
+    ]) {
+      const c = el2('input', { type: 'checkbox' });
+      c.addEventListener('change', onCfgChange);
+      fields[key] = c;
+      checks.append(el2('label', { class: 'cfg-check' }, c, el2('span', { text: label })));
+    }
+    grid.append(checks);
+
+    const actions = el2('div', { class: 'cfg-actions' },
+      el2('button', { class: 'cfg-btn', type: 'button', text: '复制 OBS 地址', onclick: copyObsUrl }),
+      el2('a', { class: 'cfg-btn', href: '/settings#cast', target: '_blank', text: '全部设置' }),
+      el2('button', { class: 'cfg-btn', type: 'button', text: '重新载入示例', onclick: () => { if (DEMO) location.reload(); } }),
+    );
+
+    const urlRow = el2('div', { class: 'cfg-url', text: '' });
+    urlRow.textContent = `${location.origin}/cast`;
+
+    const pwRow = el2('div', { class: 'cfg-pw hidden' },
+      el2('input', { type: 'password', placeholder: '后台密码（用于保存配置）', autocomplete: 'current-password' }),
+      el2('button', { class: 'cfg-btn primary', type: 'button', text: '保存密码', onclick: savePassword }),
+    );
+
+    el.cfgDrawer.replaceChildren(
+      title,
+      el2('div', { class: 'cfg-note' },
+        '这些设置写入服务端 config.cast，/cast 源会自动更新。',
+        el2('br'), 'OBS 浏览器源请使用：', el2('span', { class: 'mono', text: '/cast' }),
+        el2('br'), '调模板时用 ?preview=1&config=1&demo=1。'),
+      grid,
+      actions,
+      pwRow,
+      cfgStatus,
+      el2('div', { class: 'cfg-note' }, 'OBS 地址（不带参数）：'),
+      urlRow,
+    );
+
+    syncDrawerValues();
+
+    function onCfgChange() {
+      applyConfig(readDrawer());
+      queueSave();
+    }
+
+    function readDrawer() {
+      const out = { ...cfg };
+      out.template = fields.template.value;
+      out.position = fields.position.value;
+      out.title = fields.title.value;
+      out.cueTitle = fields.cueTitle.value;
+      out.accent = fields.accent.value;
+      out.opacity = Number(fields.opacity.value);
+      out.scale = Number(fields.scale.value);
+      out.maxCues = Number(fields.maxCues.value);
+      out.background = fields.background.value;
+      for (const k of ['showMatch', 'showClock', 'showBrand', 'showAudio', 'ackButton']) out[k] = fields[k].checked;
+      return out;
+    }
+
+    function syncDrawerValues() {
+      const e = cfg;
+      fields.template.value = e.template;
+      fields.position.value = e.position;
+      fields.title.value = e.title;
+      fields.cueTitle.value = e.cueTitle;
+      fields.accent.value = e.accent;
+      fields.opacity.value = String(e.opacity);
+      fields.scale.value = String(e.scale);
+      fields.maxCues.value = String(e.maxCues);
+      fields.background.value = e.background;
+      for (const k of ['showMatch', 'showClock', 'showBrand', 'showAudio', 'ackButton']) fields[k].checked = !!e[k];
+    }
+
+    // 抽屉里的控件值可能被服务端广播覆盖；只在没有焦点时同步，避免打断输入
+    el.cfgDrawer.addEventListener('focusin', () => { el.cfgDrawer.dataset.editing = '1'; });
+    el.cfgDrawer.addEventListener('focusout', () => { delete el.cfgDrawer.dataset.editing; });
+    const origApplyConfig = applyConfig;
+    applyConfig = function (raw) {
+      origApplyConfig(raw);
+      if (drawerBuilt && !el.cfgDrawer.dataset.editing) syncDrawerValues();
+    };
+  }
+
+  let saveTimer = null;
+  let saving = false;
+  let savePending = false;
+  function queueSave() {
+    if (!CONFIG_UI) return;
+    clearTimeout(saveTimer);
+    setCfgStatus('正在保存…', '');
+    saveTimer = setTimeout(saveConfig, 450);
+  }
+
+  async function saveConfig() {
+    if (saving) { savePending = true; return; }
+    saving = true;
+    const token = (() => { try { return localStorage.getItem('lp_admin_token') || ''; } catch { return ''; } })();
+    const patch = {};
+    for (const [k, v] of Object.entries(cfg)) patch[`cast.${k}`] = v;
+    try {
+      const res = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(patch),
+      });
+      if (res.status === 401 || res.status === 429) {
+        el.cfgDrawer.querySelector('.cfg-pw')?.classList.remove('hidden');
+        setCfgStatus(token ? '密码不正确，请重新输入后台密码' : '需要后台密码才能保存', 'err');
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.ok) {
+        const first = data.errors ? Object.entries(data.errors)[0] : null;
+        setCfgStatus(first ? `保存失败：${first[0]} ${first[1]}` : '保存失败', 'err');
+        return;
+      }
+      setCfgStatus(`已保存 · ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`, 'ok');
+    } catch (e) {
+      setCfgStatus(`保存失败：${e.message}`, 'err');
+    } finally {
+      saving = false;
+      if (savePending) { savePending = false; saveConfig(); }
+    }
+  }
+
+  function savePassword() {
+    const input = el.cfgDrawer.querySelector('.cfg-pw input');
+    const v = input?.value || '';
+    if (!v) return;
+    try { localStorage.setItem('lp_admin_token', v); } catch { /* ignore */ }
+    input.value = '';
+    el.cfgDrawer.querySelector('.cfg-pw')?.classList.add('hidden');
+    setCfgStatus('密码已保存，正在重试…', '');
+    saveConfig();
+  }
+
+  function setCfgStatus(text, cls) {
+    cfgStatus.textContent = text;
+    cfgStatus.className = `cfg-status ${cls || ''}`;
+  }
+
+  function copyObsUrl() {
+    const url = `${location.origin}/cast`;
+    const done = () => setCfgStatus('OBS 地址已复制', 'ok');
+    if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(url).then(done).catch(fallback); return; }
+    fallback();
+    function fallback() {
+      const ta = el2('textarea', { style: { position: 'fixed', left: '-9999px' } });
+      ta.value = url;
+      document.body.append(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch { setCfgStatus('复制失败，请手动复制', 'err'); }
+      ta.remove();
+    }
+  }
+
+  function toggleDrawer() {
+    if (!el.cfgDrawer) return;
+    const hidden = el.cfgDrawer.classList.toggle('hidden');
+    el.cfgToggle.classList.toggle('hidden', !hidden);
+    if (!hidden) { buildDrawer(); }
+  }
+  function addDrawerClose() {
+    if (CONFIG_UI) buildDrawer();
+  }
+  if (CONFIG_UI) {
+    buildDrawer();
+    el.cfgToggle.addEventListener('click', () => { toggleDrawer(); });
+  }
+
+  // ?ack=1 时支持键盘确认
+  document.addEventListener('keydown', (e) => {
+    if (!ackEnabled()) return;
+    if (e.key !== ' ' && e.key !== 'Enter') return;
+    if (e.target && /INPUT|TEXTAREA|BUTTON|SELECT/.test(e.target.tagName)) return;
+    const target = cues.find((c) => c.requiresAck);
+    if (!target) return;
+    e.preventDefault();
+    const btn = el.cueList.querySelector('.ack-btn');
+    if (btn && !btn.disabled) btn.click();
+  });
+
+  // 配置抽屉可能在 WS hello 之前构建：先构建一次，等配置到达后 sync
+  if (CONFIG_UI) buildDrawer();
+
   console.log('[cast] ready');
 })();
 </script>

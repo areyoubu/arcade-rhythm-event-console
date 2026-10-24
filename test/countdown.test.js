@@ -7,7 +7,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as countdown from '../server/cue/countdown.js';
-import { clearAll } from '../server/cue/engine.js';
+import { clearAll, getActive } from '../server/cue/engine.js';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -118,6 +118,25 @@ test('★ C-REQ-525：cancel 后倒计时与承载提示都必须消失', () => 
   assert.equal(c.ok, true);
   assert.equal(countdown.get(r.countdownId), null);
   assert.equal(countdown.list().length, 0);
+  cleanup();
+});
+
+test('★★ C-REQ-525：cancel 必须连升级提示一起清除，不能残留在队列里', async () => {
+  cleanup();
+  const r = countdown.schedule({
+    leadMs: 900,
+    audience: ['director'],
+    escalation: [
+      { atMs: 700, priority: 'P3', sound: 'none' },
+      { atMs: 400, priority: 'P2', sound: 'none' },
+    ],
+  });
+  // 等到第一档升级提示已经发出
+  await sleep(320);
+  assert.ok(getActive().length >= 1, '升级提示应先发出');
+  const c = countdown.cancel(r.countdownId);
+  assert.equal(c.ok, true);
+  assert.equal(getActive().length, 0, '取消倒计时后，主卡和升级提示都必须消失');
   cleanup();
 });
 

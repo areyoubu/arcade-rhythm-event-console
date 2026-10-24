@@ -175,6 +175,8 @@
     border-radius: 3px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 </style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
 </head>
 <body>
 <script src="/shared/format.js"></script>
@@ -207,6 +209,8 @@
   // ═══════════════════════════════════════════════════════════════
   const nameInput = el('input', { type: 'text', maxLength: 60, placeholder: '如：八强赛 A 组 第 1 场', class: 'match-name' });
   const nameBtn = el('button', { class: 'btn', text: '应用名称' });
+  const upcomingInput = el('input', { type: 'text', maxLength: 60, placeholder: '如：第 12 局 / 败者组决赛', class: 'match-name' });
+  const upcomingBtn = el('button', { class: 'btn', text: '应用即将进行' });
   const modeSel = el('select', null,
     el('option', { value: 'total', text: '总分制（曲目得分相加）' }),
     el('option', { value: 'wins', text: '小局制（赢的曲目多者胜）' }),
@@ -232,6 +236,12 @@
         el('span', { class: 'small muted', text: '计分模式' }), modeSel,
         el('span', { class: 'spacer' }),
         randomBtn, finishBtn, newBtn,
+      ),
+      el('div', { class: 'match-line' },
+        el('span', { class: 'small muted', text: '即将进行' }),
+        upcomingInput, upcomingBtn,
+        el('span', { class: 'spacer' }),
+        el('span', { class: 'small muted', text: '解说摄像头叠加的底部提示条会同步显示' }),
       ),
       el('div', { class: 'match-line' },
         el('label', { class: 'check' }, srcChk, el('span', { class: 'label', text: '比分条跟随本局（显示总分 / 胜局）' })),
@@ -949,6 +959,15 @@
     } catch (e) { cmdError(e, '修改比赛名称'); }
   };
   nameInput.onkeydown = (e) => { if (e.key === 'Enter') nameBtn.click(); };
+  upcomingBtn.onclick = async () => {
+    try {
+      const r = await api('/api/match/upcoming', { method: 'POST', body: { name: upcomingInput.value } });
+      applyMatchState(r.state);
+      upcomingInput.value = r.state?.current?.upcoming || '';
+      ok(upcomingInput.value ? '「即将进行」已更新' : '已清空「即将进行」');
+    } catch (e) { cmdError(e, '修改即将进行'); }
+  };
+  upcomingInput.onkeydown = (e) => { if (e.key === 'Enter') upcomingBtn.click(); };
 
   modeSel.onchange = async () => {
     const mode = modeSel.value;
@@ -1076,6 +1095,7 @@
     const cur = S.match?.current;
     const d = cur?.derived || {};
     if (document.activeElement !== nameInput) nameInput.value = cur?.name || '';
+    if (document.activeElement !== upcomingInput) upcomingInput.value = cur?.upcoming || '';
     modeSel.value = cur?.mode || 'total';
     modeSel.disabled = cur?.status === 'finished';
     nameBtn.disabled = cur?.status === 'finished';

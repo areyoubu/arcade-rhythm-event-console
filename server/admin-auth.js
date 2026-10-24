@@ -211,8 +211,22 @@ export function attemptAdminAuth(req) {
   return { ok: false, status: 401, remaining: st.remaining };
 }
 
-/** 渲染源 / 监控需要无令牌访问的只读接口（全部小写，与路径归一化一致） */
-const OPEN_GET = new Set(['/api/health', '/api/render/bootstrap', '/api/match/pickurl']);
+/**
+ * 渲染源 / 监控需要无令牌访问的只读接口（全部小写，与路径归一化一致）。
+ *
+ * 二维码 PNG 必须放行：页面里是 `<img src="/api/.../qr">`，浏览器不会给
+ * 图片请求带 Authorization 头；OBS 的选曲二维码源也无法登录。二维码内容
+ * 只是公开的 /join 或 /pick 地址，不含控制数据。
+ */
+const OPEN_GET = new Set([
+  '/api/health',
+  '/api/render/bootstrap',
+  '/api/match/pickurl',
+  '/api/match/qr',
+  '/api/lottery/qr',
+  // 游戏音频预览：<audio> 与 OBS 渲染源一样无法携带 Bearer；只按数字 ID 出缓存文件
+  '/api/audio/preview',
+]);
 
 /**
  * Express 中间件：启用鉴权时拦截未授权的控制接口。

@@ -31,6 +31,9 @@ import * as match from './match.js';
 import * as music from './music.js';
 import * as score from './score.js';
 import * as lottery from './lottery.js';
+import * as randomScene from './random-scene.js';
+import * as pickshow from './pickshow.js';
+import * as gameAudio from './game-audio.js';
 import * as cue from './cue/engine.js';
 import * as countdown from './cue/countdown.js';
 import * as orchestration from './cue/orchestration.js';
@@ -47,6 +50,9 @@ import scoreRoutes from './routes/score.js';
 import musicRoutes from './routes/music.js';
 import matchRoutes from './routes/match.js';
 import lotteryRoutes from './routes/lottery.js';
+import randomRoutes from './routes/random.js';
+import pickshowRoutes from './routes/pickshow.js';
+import gameAudioRoutes from './routes/game-audio.js';
 import sysRoutes from './routes/sys.js';
 import adminRoutes from './routes/admin.js';
 
@@ -89,6 +95,8 @@ match.setColorProvider(score.getSideColors);
 match.setTeamProvider(score.getSideTeams);
 match.load();
 score.refresh();
+pickshow.refresh();
+gameAudio.warmUp();
 
 // 抽奖：读回签到池与中奖记录，并启动第三方中继轮询（若配置了）
 lottery.load();
@@ -145,6 +153,9 @@ app.use('/api', scoreRoutes());
 app.use('/api', musicRoutes());
 app.use('/api', matchRoutes());
 app.use('/api', lotteryRoutes());
+app.use('/api', randomRoutes());
+app.use('/api', pickshowRoutes());
+app.use('/api', gameAudioRoutes());
 
 /**
  * 后台密码设置页 —— 只对内网开放。
@@ -370,7 +381,7 @@ entities.entityEvents.on('change', () => {
 overlay.overlayEvents.on('lineup', () => { match.refresh(); });
 
 // 比赛计分变化 → 比分条（若 source=match）同步聚合分
-match.matchEvents.on('change', () => { score.refresh(); });
+match.matchEvents.on('change', () => { score.refresh(); pickshow.refresh(); });
 
 // ── 功能开关 ──
 /**
@@ -443,8 +454,19 @@ configEvents.on('change', (patch, changed) => {
   }
   // 团队赛 / 单人赛切换会影响比分条上的队伍信息
   if (changed.some((p) => p.startsWith('competition.'))) match.refresh();
+  // 解说页模板：整节镜像到共享状态，/cast 无需登录也能在 hello 里拿到
+  if (changed.some((p) => p.startsWith('cast.'))) {
+    set('config.cast', structuredClone(getConfig().cast || {}));
+  }
   // 抽奖中继地址 / 令牌 / 轮询间隔变更后立刻重新轮询
   if (changed.some((p) => p.startsWith('lottery.relay'))) lottery.startRelay();
+  // 游戏音频目录 / 开关变化：重建索引（后台扫描）；其他音频参数变化只刷新展示信息
+  if (changed.some((p) => p.startsWith('gameAudio.'))) {
+    if (changed.some((p) => p === 'gameAudio.enabled' || p === 'gameAudio.gameDir')) {
+      gameAudio.afterConfigChange();
+    }
+    pickshow.refresh();
+  }
   set('config.loadedAt', Date.now());
   set('config.errors', {});
 });
@@ -574,6 +596,7 @@ function registerOps() {
     return nackOr(r);
   });
   H('match.name', (c, a) => nackOr(match.setName(a?.name, a?.actor || 'ws')));
+  H('match.upcoming', (c, a) => nackOr(match.setUpcoming(a?.name, a?.actor || 'ws')));
   H('match.mode', (c, a) => nackOr(match.setMode(a?.mode, a?.actor || 'ws')));
   H('match.song', (c, a) => nackOr(match.setSong(a?.index, a || {}, a?.actor || 'ws')));
   H('match.score', (c, a) => nackOr(match.setScore(a?.index, a?.side, a?.value, a?.actor || 'ws')));
@@ -584,6 +607,8 @@ function registerOps() {
   H('match.clearBans', (c, a) => nackOr(match.clearBans(a?.actor || 'ws')));
   H('match.finish', (c, a) => nackOr(match.finish(a?.actor || 'ws')));
   H('match.pickApply', (c, a) => nackOr(match.applyPick(a?.id, a?.index ?? null, a?.actor || 'ws')));
+  H('random.spin', (c, a) => nackOr(randomScene.spin(a?.filters || a || {}, a?.actor || 'ws')));
+  H('random.clear', (c, a) => nackOr(randomScene.clear(a?.actor || 'ws')));
   H('match.pickDismiss', (c, a) => nackOr(match.dismissPick(a?.id, a?.actor || 'ws')));
 
   // ── 配置测试（设置页的按钮也走这里，页面无需自己 fetch） ──
@@ -611,6 +636,8 @@ function nackOr(r) {
 // ═══════════════════════════════════════════════════════════════
 // 功能开关：默认全关 —— 只启动被显式启用的模块（见 applyFeatures）
 applyFeatures();
+// 解说页的显示模板（非敏感），随 hello 一起下发；OBS 浏览器源无法登录读取 /api/config
+set('config.cast', structuredClone(getConfig().cast || {}));
 templates.startWatch();
 
 log.info('server', '全部模块已启动', {

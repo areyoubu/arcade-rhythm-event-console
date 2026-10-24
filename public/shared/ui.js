@@ -290,6 +290,20 @@
       id: 'match', label: '比赛', desc: '计分、比分条与比赛画面',
       items: [
         { href: '/match', label: '比赛', title: '比赛计分', desc: '1–4 首自适应 · 总分 / 小局制 · 曲目与难度 · Ban · 扫码选曲 · 历史', badge: 'F' },
+        { href: '/random', label: '随机选曲', title: '随机选曲大屏', desc: '全屏滚动随机 · 缓停后放大曲绘与曲目信息 · 可应用到比赛', badge: 'F' },
+        { href: '/pickshow', label: '选曲展示', title: '选手选曲展示', desc: '手机选歌器 → 选曲队列 · P1/P2/同时 · 每人 2 首或 4 首', badge: 'F' },
+        {
+          id: 'render-pickshow', kind: 'render', href: '/render/pickshow', label: '选曲大屏', title: '选手选曲展示（/render/pickshow）',
+          desc: '整屏场景：展示 P1 / P2 / 同时的选曲，支持 2 首 / 4 首布局',
+          target: 'pickshow', badge: 'F', nav: false, size: '1920×1080', layer: '整屏场景',
+          open: 'preview', previewHref: '/render/pickshow?preview=1&fit=1',
+        },
+        {
+          id: 'render-random', kind: 'render', href: '/render/random', label: '随机大屏', title: '随机选曲大屏（/render/random）',
+          desc: '整屏场景：右向左滚动抽选，抽中后放大曲绘与详情；动态 / 静态背景可选',
+          target: 'random', badge: 'F', nav: false, size: '1920×1080', layer: '整屏场景',
+          open: 'preview', previewHref: '/render/random?preview=1&fit=1',
+        },
         { href: '/music', label: '曲目库', title: '曲目库管理', desc: '曲目增改删 · 难度定数 · 国服标记 · 上传 xlsx 全量更新', badge: 'F' },
         { href: '/scoreboard', label: '比分', title: '比分条', desc: '常驻比分 + P1/P2 选手牌 · 加一减一暂存确认 · 布局与分件输出', badge: 'D' },
         {
@@ -340,11 +354,18 @@
       id: 'playout', label: '播控', desc: '导播、解说、提示、回放与转场',
       items: [
         { href: '/director', label: '导播', title: '导播页', desc: '编排倒计时 · 回执看板 · 转场大提醒', badge: 'C' },
-        { href: '/cast', label: '解说页', title: '解说端叠加', desc: '透明 OBS 浏览器源：只画提示与倒计时', badge: 'C' },
+        { href: '/commentary', label: '解说', title: '解说控制台', desc: '解说提示叠加 + 解说摄像头叠加 · 两路预览与配置', badge: 'C' },
         {
-          id: 'cast-source', kind: 'render', href: '/cast', label: '解说端源', title: '解说端叠加（/cast 源）',
-          desc: '作为 OBS 浏览器源的解说端叠加；状态按 cue 的 cast 受众连接数计算', target: 'cast',
+          id: 'cast-source', kind: 'render', href: '/cast', label: '提示源', title: '解说提示叠加（/cast）',
+          desc: '透明 OBS 浏览器源：提示收进「提示预览」区域，并可显示比赛 / 比分 / 当前曲目', target: 'cast',
           badge: 'C', nav: false, size: '1920×1080', layer: '透明叠加',
+          open: 'preview', previewHref: '/cast?preview=1&config=1',
+        },
+        {
+          id: 'cast-cam-source', kind: 'render', href: '/render/castcam', label: '摄像头源', title: '解说摄像头叠加（/render/castcam）',
+          desc: '透明 OBS 浏览器源：摄像头边框 / 解说标签 / LIVE / 姓名牌，中心留空给摄像头画面',
+          target: 'castcam', badge: 'C', nav: false, size: '1920×1080', layer: '透明叠加',
+          open: 'preview', previewHref: '/render/castcam?preview=1&fit=1',
         },
         { href: '/cues', label: '话术', title: '话术模板', desc: '内置话术 · 变量插值 · 自定义', badge: 'C' },
         { href: '/replay', label: '回放', title: '回放控制器', desc: '13 个功能区 / 151 个 vMix 函数', badge: 'B', feature: 'replay' },
@@ -690,6 +711,128 @@
   }
 
   /**
+   * 从媒体库选择图片（单张 / 多张）。
+   *
+   * 用于比赛 Logo、轮播图等「填 URL 很难找」的配置项。
+   * 返回的是原图 URL（asset.url），不是缩略图；缩略图只用于列表展示。
+   *
+   * @param {object} opts
+   * @param {boolean} [opts.multiple] 多选
+   * @param {string[]} [opts.selected] 已选 URL（用于回显勾选）
+   * @param {(urls:string[])=>void} [opts.onPick] 确认回调
+   */
+  function mediaPicker({ title = '从图片库选择', multiple = false, selected = [], onPick = null } = {}) {
+    if (!document.getElementById('mp-style')) {
+      const style = document.createElement('style');
+      style.id = 'mp-style';
+      style.textContent = `
+        .mp-tools { display:flex; gap:8px; align-items:center; margin-bottom:8px; }
+        .mp-tools input { flex:1; min-width:0; }
+        .mp-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(118px,1fr)); gap:8px; max-height:52vh; overflow:auto; padding:4px; }
+        .mp-item { appearance:none; cursor:pointer; display:flex; flex-direction:column; gap:5px; padding:6px;
+          background:#17181b; border:2px solid #2f3238; border-radius:4px; color:#d7dbe2; font-family:inherit; text-align:left; }
+        .mp-item:hover { border-color:#5a4a22; }
+        .mp-item.on { border-color:#d9a441; box-shadow:0 0 0 2px rgba(217,164,65,.22); }
+        .mp-item img { width:100%; aspect-ratio:1/1; object-fit:contain; background:#0e1013;
+          background-image:repeating-conic-gradient(#1a1d22 0% 25%, #121419 0% 50%); background-size:18px 18px; }
+        .mp-name { font-size:10.5px; color:#aeb4bf; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .mp-empty { padding:28px; text-align:center; color:#7f8792; }
+        .mp-note { font-size:11px; color:#7f8792; margin-top:6px; }
+      `;
+      document.head.append(style);
+    }
+
+    const picked = [];
+    for (const u of (Array.isArray(selected) ? selected : [])) {
+      const s = String(u || '').trim();
+      if (s && !picked.includes(s)) picked.push(s);
+    }
+
+    const grid = el('div', { class: 'mp-grid' });
+    const status = el('div', { class: 'mp-note' });
+    const search = el('input', { type: 'text', placeholder: '搜索文件名 / 标签' });
+    let all = [];
+    let loaded = false;
+
+    const toggle = (url) => {
+      const i = picked.indexOf(url);
+      if (multiple) {
+        if (i >= 0) picked.splice(i, 1); else picked.push(url);
+      } else {
+        picked.length = 0;
+        picked.push(url);
+      }
+      render();
+    };
+
+    function render() {
+      const q = search.value.trim().toLowerCase();
+      const list = all.filter((a) => !q || `${a.originalName || ''} ${a.filename || ''} ${(a.tags || []).join(' ')}`.toLowerCase().includes(q));
+      clear(grid);
+      if (!loaded) {
+        grid.append(el('div', { class: 'mp-empty', text: '正在读取图片库…' }));
+        return;
+      }
+      if (!list.length) {
+        grid.append(el('div', { class: 'mp-empty' },
+          all.length ? '没有匹配的图片' : '图片库还是空的 —— 先到 ',
+          all.length ? null : el('a', { href: '/media', target: '_blank', text: '/media' }),
+          all.length ? null : ' 上传图片。',
+        ));
+        status.textContent = all.length ? `共 ${all.length} 张` : '';
+        return;
+      }
+      for (const a of list) {
+        const on = picked.includes(a.url);
+        const btn = el('button', { class: `mp-item${on ? ' on' : ''}`, type: 'button', onclick: () => toggle(a.url) },
+          el('img', { src: a.thumbnail || a.url, alt: '', loading: 'lazy' }),
+          el('span', { class: 'mp-name', text: a.originalName || a.filename || a.hash }),
+        );
+        grid.append(btn);
+      }
+      status.textContent = `${list.length} 张${multiple ? ` · 已选 ${picked.length}` : ''}`;
+    }
+
+    search.addEventListener('input', render);
+
+    const m = modal({
+      title,
+      wide: true,
+      body: el('div', null,
+        el('div', { class: 'mp-tools' }, search),
+        grid,
+        status,
+      ),
+      footer: [
+        el('button', {
+          class: 'btn ghost', type: 'button', text: multiple ? '清空选择' : '清空',
+          onclick: () => { picked.length = 0; if (onPick) onPick([]); m.close(); },
+        }),
+        el('button', { class: 'btn ghost', type: 'button', text: '取消', onclick: () => m.close() }),
+        el('button', {
+          class: 'btn primary', type: 'button', text: '使用所选',
+          onclick: () => { if (onPick) onPick(picked.slice()); m.close(); },
+        }),
+      ],
+    });
+
+    api('/api/media?limit=500').then((r) => {
+      all = r.items || [];
+      loaded = true;
+      if ((r.total || 0) > all.length) status.textContent = `共 ${r.total} 张，当前显示最近 ${all.length} 张`;
+      render();
+    }).catch((e) => {
+      loaded = true;
+      all = [];
+      clear(grid);
+      grid.append(el('div', { class: 'mp-empty', text: `读取图片库失败：${e.message}` }));
+    });
+
+    render();
+    return m;
+  }
+
+  /**
    * 签到人员编辑器 —— 抽奖页 / 签到管理页共用。
    *
    * 传 guest 为编辑，传 null 为新增。保存后如果接口只返回 guest，
@@ -757,7 +900,7 @@
 
   window.ui = {
     el, $, $$, clear, esc, toast, ok, warn, err, cmdError,
-    modal, confirm, prompt, playerPicker, guestEditor, deleteGuest,
+    modal, confirm, prompt, playerPicker, mediaPicker, guestEditor, deleteGuest,
     topbar, mount, linkStatusBar, withBusy, sortable, poll, api,
     uploadFetch, adminToken, setAdminToken,
     CATALOG, NAV_GROUPS, NAV, featureEnabled, featureBanner,

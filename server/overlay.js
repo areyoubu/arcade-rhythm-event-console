@@ -864,16 +864,34 @@ function validateRequired(tpl, values) {
 export function queueAdd(item) {
   const tpl = templates.get(item.template);
   if (!tpl) return { ok: false, nack: { code: 'unknown_template', msg: `模板不存在：${item.template}` } };
+  const target = item.target || getConfig().render.defaultTarget || 'main';
+  const values = sanitizeValues(tpl, item.values || {});
+  // 双人模板允许入队时少填一侧，由当前阵容补齐 —— 和直接 show 的行为一致，
+  // 否则对阵卡这类必填双人模板会「入队成功但播放时静默失败」。
+  if (isDualTemplate(tpl)) fillFromLineup(tpl, values);
+  const errs = validateRequired(tpl, values);
+  if (Object.keys(errs).length) {
+    const detail = tpl.slots
+      .filter((s) => errs[s.key])
+      .map((s) => s.label || s.key)
+      .join('、');
+    return {
+      ok: false,
+      nack: { code: 'invalid_values', msg: `必填槽位未填：${detail}。先填好再入队，或点实体一键填充。` },
+    };
+  }
   const entry = {
     id: `q${Date.now()}${Math.floor(Math.random() * 1000)}`,
     template: item.template,
-    values: item.values || {},
-    durationMs: item.durationMs ?? 6000,
+    target,
+    values,
+    durationMs: Math.max(300, Number(item.durationMs) || 6000),
     label: item.label || tpl.name,
   };
   queue.push(entry);
   set('overlay.queue', queue);
-  log.info('overlay', `队列新增：${entry.label}`, { queueLen: queue.length });
+  set('overlay.queueError', null);
+  log.info('overlay', `队列新增：${entry.label}`, { queueLen: queue.length, target });
   return { ok: true, item: entry, queue };
 }
 
@@ -887,6 +905,7 @@ export function queueClear() {
   stopQueue();
   queue = [];
   set('overlay.queue', queue);
+  set('overlay.queueError', null);
   return { ok: true };
 }
 
@@ -907,7 +926,11 @@ export function queueReorder(ids) {
 
 export function queueStart(opts = {}) {
   if (queueTimer) return { ok: true, already: true };
+  if (!queue.length) {
+    return { ok: false, nack: { code: 'queue_empty', msg: '队列为空：先把模板加入队列' } };
+  }
   queuePaused = false;
+  set('overlay.queueError', null);
   nextInQueue(opts.target || null);
   return { ok: true, target: opts.target || null };
 }
@@ -939,13 +962,24 @@ function nextInQueue(target = null) {
   const item = queue.shift();
   set('overlay.queue', queue);
   if (!item) {
+    set('overlay.queueError', null);
     log.info('overlay', '队列播放完毕');
     return;
   }
   // 队列跟随「编辑目标」：预览模式下排队播放只影响预览，不会上屏
   const tgt = target || item.target || getConfig().render.defaultTarget || 'main';
+  const shown = show({ template: item.template, values: item.values, actor: 'queue', target: tgt });
+  if (!shown.ok) {
+    // 以前这里忽略返回值：必填槽位缺值时「队列好像卡住」，没有任何提示。
+    const msg = shown.nack?.msg || '模板播放失败';
+    set('overlay.queueError', msg);
+    log.warn('overlay', '队列播放失败，跳过该条', { label: item.label, err: msg, target: tgt });
+    queueTimer = setTimeout(() => nextInQueue(tgt), 400);
+    queueTimer.unref?.();
+    return;
+  }
+  set('overlay.queueError', null);
   set('overlay.queuePlaying', true);
-  show({ template: item.template, values: item.values, actor: 'queue', target: tgt });
   queueTimer = setTimeout(() => {
     hide({ target: tgt });
     queueTimer = setTimeout(() => nextInQueue(tgt), 500);

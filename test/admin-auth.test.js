@@ -103,6 +103,9 @@ test('★ 公开路径（签到 / 选曲）与渲染源只读接口无需令牌'
     mockReq({ path: '/api/match/public', method: 'GET' }),
     mockReq({ path: '/api/render/bootstrap', method: 'GET' }),
     mockReq({ path: '/api/match/pickUrl', method: 'GET' }),
+    // 页面里是 <img src="/api/.../qr">，图片请求带不了 Authorization
+    mockReq({ path: '/api/match/qr', method: 'GET' }),
+    mockReq({ path: '/api/lottery/qr', method: 'GET' }),
     mockReq({ path: '/api/health', method: 'GET' }),
   ]) {
     assert.equal((await run(r)).next, true, `${r.method} ${r.path} 应放行`);
