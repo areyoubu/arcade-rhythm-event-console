@@ -568,7 +568,7 @@
           el('div', { class: 'body' },
             top,
             el('div', { class: 'artist', text: `${song.artist || '—'} · ${song.genreLabel || song.genre || '未分类'}` }),
-            difficultyChips(song, isBanned, choose, fWe.checked),
+            difficultyChips(song, isBanned, choose, fWe.checked || fDiff.value === 'we'),
           ),
         );
         results.append(item);

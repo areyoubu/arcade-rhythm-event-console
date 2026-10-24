@@ -137,6 +137,7 @@ function main() {
       .find(Boolean);
 
     if (weChart) {
+      weChart.chartId = id;
       const originId = weChart.originId || id;
       cnIds.add(originId);
       let base = byId.get(originId);

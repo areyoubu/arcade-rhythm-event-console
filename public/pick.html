@@ -268,7 +268,7 @@
 
   function renderChips(song) {
     const order = [...(state.meta?.difficultyOrder || ['basic', 'advanced', 'expert', 'master', 'ultima'])];
-    const includeWe = $('includeWe').checked;
+    const includeWe = $('includeWe').checked || $('diff').value === 'we';
     if (includeWe && song.we) order.push('we');
     const banned = new Set(state.pub?.banned || []);
     const used = new Set((state.pub?.songs || []).map((s) => s.musicId));
