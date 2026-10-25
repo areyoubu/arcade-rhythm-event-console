@@ -45,5 +45,11 @@
     "tournament"
   ],
   "license": "MIT",
-  "author": "YEE"
+  "author": "YEE",
+  "contributors": [
+    {
+      "name": "DeepSeek",
+      "url": "https://www.deepseek.com"
+    }
+  ]
 }
