@@ -102,6 +102,10 @@ before(async () => {
         rs.writeHead(200, { 'content-type': 'text/css', 'set-cookie': 'should=not-leak' });
         return rs.end('body{}');
       }
+      if (u.pathname.startsWith('/covers/')) {
+        rs.writeHead(200, { 'content-type': 'image/webp' });
+        return rs.end(Buffer.from('cover-bytes'));
+      }
       if (u.pathname === '/join') {
         rs.writeHead(200, { 'content-type': 'text/html' });
         return rs.end('<!doctype html><title>join</title>');
@@ -156,6 +160,10 @@ test('★ Agent 出站接入后，公网页面 / API 通过隧道可达', async 
   assert.match(css.headers.get('content-type') || '', /text\/css/);
   assert.equal(css.headers.get('set-cookie'), null, '上游 Cookie 不应漏到公网');
   assert.ok(css.headers.get('content-security-policy'), '必须有 CSP');
+
+  const cover = await req('/covers/487.webp');
+  assert.equal(cover.status, 200, '选曲页曲绘应能经隧道取到');
+  assert.match(cover.headers.get('content-type') || '', /image\/webp/);
 
   const pub = await req('/api/match/public');
   assert.equal(pub.status, 200);

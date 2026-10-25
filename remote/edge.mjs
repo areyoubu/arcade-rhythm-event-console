@@ -24,7 +24,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
-import { isAllowed, isApiPath, getClientIp, normalizeIp, PUBLIC_GET, PUBLIC_POST } from './policy.mjs';
+import { isAllowed, isApiPath, getClientIp, normalizeIp, PUBLIC_GET, PUBLIC_POST, PUBLIC_GET_PREFIX } from './policy.mjs';
 import {
   boolOf, numOf, securityHeaders, isHttpsRequest, json, page, landingHtml,
   createLimiter, readBody, loadJsonFile,
@@ -333,7 +333,9 @@ export function createEdgeServer(input) {
     }
 
     if (!isAllowed(req.method, pathname)) {
-      const known = PUBLIC_GET.has(pathname) || PUBLIC_POST.has(pathname);
+      const known = PUBLIC_GET.has(pathname) || PUBLIC_POST.has(pathname)
+        || ((req.method === 'GET' || req.method === 'HEAD')
+          && PUBLIC_GET_PREFIX.some((prefix) => pathname.startsWith(prefix)));
       if (known) return respondError(res, api, 405, 'method_not_allowed', '该地址只支持 GET / POST 中对应的方法');
       return respondError(res, api, 404, 'not_found', '该地址不在公网开放范围');
     }
@@ -498,8 +500,8 @@ if (isMain()) {
   EDGE_RATE_*        限流；EDGE_MAX_BODY / EDGE_MAX_RESPONSE / EDGE_MAX_INFLIGHT
   EDGE_BLOCK_IPS     逗号分隔的封禁 IP
 
-公网只开放：/join /pick /shared/style.css /api/music /api/music/meta
-            /api/match/public /api/match/pick /api/lottery/join
+公网只开放：/join /pick /shared/style.css /shared/font.css /fonts/* /covers/*
+            /api/music /api/music/meta /api/match/public /api/match/pick /api/lottery/join
 Agent 通过 /tunnel（WSS + Bearer token）主动出站连接。`);
     process.exit(0);
   }

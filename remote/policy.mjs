@@ -8,11 +8,22 @@
 export const PUBLIC_GET = new Set([
   '/join',                 // 现场签到页
   '/pick',                 // 手机扫码选曲页
-  '/shared/style.css',     // 签到页使用的基础样式（仅此一个静态文件）
+  '/shared/style.css',     // 签到页使用的基础样式
+  '/shared/font.css',      // 页面统一字体（字由文艺黑）
   '/api/music',            // 选曲搜索（页面内部使用）
   '/api/music/meta',       // 分类 / 难度元信息
   '/api/match/public',     // 已选曲目 / ban 列表（无分数、无选手）
 ]);
+
+/**
+ * 前缀放行的只读静态资源。只允许固定前缀，且必须是 GET / HEAD ——
+ * 选曲页的曲绘 <img> 和页面字体必须能加载，否则手机端曲绘 / 文字会缺。
+ * 曲绘只是专辑封面（数据本就在 /api/music 里公开返回），不涉及控制数据。
+ */
+export const PUBLIC_GET_PREFIX = [
+  '/covers/',              // 曲目封面（选曲页 <img src="/covers/…">）
+  '/fonts/',               // 字体文件（font.css 里的 @font-face）
+];
 
 export const PUBLIC_POST = new Set([
   '/api/match/pick',       // 提交选曲（进入导播确认队列）
@@ -26,8 +37,12 @@ export function isApiPath(pathname) {
 /** @param {string} method @param {string} pathname 不含 query 的路径 */
 export function isAllowed(method, pathname) {
   const m = String(method || '').toUpperCase();
-  if (m === 'GET' || m === 'HEAD') return PUBLIC_GET.has(pathname);
-  if (m === 'POST') return PUBLIC_POST.has(pathname);
+  const p = String(pathname || '');
+  if (m === 'GET' || m === 'HEAD') {
+    if (PUBLIC_GET.has(p)) return true;
+    return PUBLIC_GET_PREFIX.some((prefix) => p.startsWith(prefix));
+  }
+  if (m === 'POST') return PUBLIC_POST.has(p);
   return false;
 }
 

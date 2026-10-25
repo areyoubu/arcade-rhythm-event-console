@@ -6,13 +6,24 @@ import assert from 'node:assert/strict';
 import { isAllowed, isApiPath, getClientIp } from '../remote/policy.mjs';
 
 test('★★ 只放行签到 / 选曲所需的公共路径', () => {
-  for (const p of ['/join', '/pick', '/shared/style.css', '/api/music', '/api/music/meta', '/api/match/public']) {
+  for (const p of ['/join', '/pick', '/shared/style.css', '/shared/font.css', '/api/music', '/api/music/meta', '/api/match/public']) {
     assert.equal(isAllowed('GET', p), true, `GET ${p} 应放行`);
     assert.equal(isAllowed('HEAD', p), true, `HEAD ${p} 应放行`);
   }
   for (const p of ['/api/match/pick', '/api/lottery/join']) {
     assert.equal(isAllowed('POST', p), true, `POST ${p} 应放行`);
   }
+});
+
+test('★★ 选曲页曲绘与字体（前缀路径）放行，但仍是只读', () => {
+  for (const p of ['/covers/487.webp', '/covers/1234.webp', '/fonts/zihui-wenyihei.ttf']) {
+    assert.equal(isAllowed('GET', p), true, `GET ${p} 应放行`);
+    assert.equal(isAllowed('HEAD', p), true, `HEAD ${p} 应放行`);
+  }
+  // 前缀路径绝不允许 POST / 其他方法
+  assert.equal(isAllowed('POST', '/covers/487.webp'), false, '曲绘不能走 POST');
+  assert.equal(isAllowed('DELETE', '/covers/487.webp'), false, '曲绘不能走 DELETE');
+  assert.equal(isAllowed('POST', '/fonts/zihui-wenyihei.ttf'), false, '字体不能走 POST');
 });
 
 test('★★ 控制接口 / OBS 源 / 设置 / WebSocket 一律不放行', () => {
@@ -22,6 +33,7 @@ test('★★ 控制接口 / OBS 源 / 设置 / WebSocket 一律不放行', () =>
     '/api/config', '/api/entities', '/api/score/state', '/api/match/pickUrl',
     '/api/match/qr', '/api/lottery/qr', '/api/overlay/state',
     '/api/music/songs', '/api/music/import', '/api/music/1',
+    '/media/x.png', '/assets/x.png', '/data/covers/1.webp',
   ];
   for (const p of denied) assert.equal(isAllowed('GET', p), false, `GET ${p} 不应放行`);
   assert.equal(isAllowed('POST', '/api/music/import'), false, '曲目库导入是控制端接口，不能走公网');

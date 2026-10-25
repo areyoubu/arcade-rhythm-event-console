@@ -21,7 +21,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Transform } from 'node:stream';
-import { isAllowed, isApiPath, getClientIp, PUBLIC_GET, PUBLIC_POST } from './policy.mjs';
+import { isAllowed, isApiPath, getClientIp, PUBLIC_GET, PUBLIC_POST, PUBLIC_GET_PREFIX } from './policy.mjs';
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
@@ -322,8 +322,10 @@ export function createRemoteServer(input) {
     }
   }
 
-  function notAllowed(res, pathname) {
-    const known = PUBLIC_GET.has(pathname) || PUBLIC_POST.has(pathname);
+  function notAllowed(res, pathname, method) {
+    const known = PUBLIC_GET.has(pathname) || PUBLIC_POST.has(pathname)
+      || ((method === 'GET' || method === 'HEAD')
+        && PUBLIC_GET_PREFIX.some((prefix) => pathname.startsWith(prefix)));
     if (known) {
       if (isApiPath(pathname)) {
         json(res, 405, { ok: false, nack: { code: 'method_not_allowed', msg: '该接口只允许 GET / POST 中对应的方法' } });
@@ -470,7 +472,7 @@ export function createRemoteServer(input) {
       if (pathname === '/favicon.ico') { res.writeHead(204, securityHeaders(false)); return res.end(); }
     }
 
-    if (!isAllowed(req.method, pathname)) return notAllowed(res, pathname);
+    if (!isAllowed(req.method, pathname)) return notAllowed(res, pathname, req.method);
 
     if (pathname === '/api/lottery/join' && !limitJoin(ip)) return rateLimited(req, res, pathname);
     if (pathname === '/api/match/pick' && !limitPick(ip)) return rateLimited(req, res, pathname);
@@ -515,8 +517,8 @@ if (isMain()) {
   REMOTE_RATE_GENERAL / REMOTE_RATE_JOIN / REMOTE_RATE_PICK
   REMOTE_MAX_BODY / REMOTE_TIMEOUT_MS / REMOTE_QUIET
 
-只开放：/join /pick /shared/style.css /api/music /api/music/meta
-        /api/match/public /api/match/pick /api/lottery/join
+只开放：/join /pick /shared/style.css /shared/font.css /fonts/* /covers/*
+        /api/music /api/music/meta /api/match/public /api/match/pick /api/lottery/join
 详见 remote/README.md。`);
     process.exit(0);
   }
@@ -535,7 +537,7 @@ if (isMain()) {
     const scheme = config.tlsCert ? 'https' : 'http';
     console.log(`[remote] 公网入口已启动：${scheme}://${config.host}:${port}`);
     console.log(`[remote] 上游：${config.upstream}`);
-    console.log('[remote] 开放：/join /pick /shared/style.css /api/music /api/music/meta /api/match/public /api/match/pick /api/lottery/join');
+    console.log('[remote] 开放：/join /pick /shared/style.css /shared/font.css /fonts/* /covers/* /api/music /api/music/meta /api/match/public /api/match/pick /api/lottery/join');
     console.log('[remote] 控制台 / OBS / vMix / 设置等路径不会经过这里。');
     if (!config.token) {
       console.log('[remote] 提示：未设置 REMOTE_TOKEN；若远端不在主控同一台机器，主控可能把所有公网请求当成同一个 IP。');

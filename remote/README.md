@@ -229,9 +229,11 @@ curl -i http://127.0.0.1:8790/outputs
 
 公网 Edge 是唯一暴露面，做了这些限制：
 
-- **路径白名单**：只允许 `/join`、`/pick`、`/shared/style.css`、`/api/music`、
-  `/api/music/meta`、`/api/match/public`、`POST /api/match/pick`、`POST /api/lottery/join`；
+- **路径白名单**：只允许 `/join`、`/pick`、`/shared/style.css`、`/shared/font.css`、
+  `/fonts/*`、`/covers/*`、`/api/music`、`/api/music/meta`、`/api/match/public`、
+  `POST /api/match/pick`、`POST /api/lottery/join`；
   其他一概 404 / 405；没有开放代理，也没有 `/api` 前缀放行；
+  `/fonts/*` / `/covers/*` 只对 GET / HEAD 放行，且只用于选曲页的字体与曲绘；
 - **每 IP 限流**：总请求 + 签到提交 + 选曲提交分别计数；超限 429；
 - **并发上限**：`maxInflight` 限制同时等待本体的请求；`server.maxConnections` 限制连接数；
 - **body / 响应上限**：默认 32KB / 2MB；超限 413 / 502；
@@ -556,10 +558,11 @@ Environment=LP_REMOTE_TOKEN=<与 remote token 相同>
 - 远端和主控不在同一台机器，且没有设置 `LP_REMOTE_TOKEN`；
 - 或者远端在前面有反代，但 `trustProxy` 没开，所有人被当成同一个反代 IP。
 
-**页面没样式 / 404**
+**页面没样式 / 曲绘不显示 / 404**
 
-- 只代理了 `/join` / `/pick`，签到页需要的 `/shared/style.css` 已在白名单；
-- 如果自定义了签到页并引用了别的静态资源，需要同步往 `remote/policy.mjs` 加白名单。
+- 只代理了 `/join` / `/pick`，签到页 / 选曲页需要的 `/shared/style.css`、
+  `/shared/font.css`、`/fonts/*`、`/covers/*` 已在白名单；
+- 如果自定义了签到页 / 选曲页并引用了别的静态资源，需要同步往 `remote/policy.mjs` 加白名单。
 
 **想临时关掉公网入口**
 
