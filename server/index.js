@@ -34,6 +34,7 @@ import * as lottery from './lottery.js';
 import * as randomScene from './random-scene.js';
 import * as pickshow from './pickshow.js';
 import * as gameAudio from './game-audio.js';
+import * as cnMusic from './cn-music.js';
 import * as cue from './cue/engine.js';
 import * as countdown from './cue/countdown.js';
 import * as orchestration from './cue/orchestration.js';
@@ -86,6 +87,8 @@ wireMediaReferences();
 
 // 曲目库（比赛计分 / 扫码选曲都要用）
 await music.load();
+// 国服曲目 / 定数的待确认状态 + 自动同步计时器（默认关闭）
+cnMusic.init();
 
 // 比分条先读回手动比分与队色（比赛画面的颜色从这里取）
 score.load();
@@ -187,10 +190,26 @@ app.use('/covers', express.static(path.join(ROOT, 'data', 'covers'), { maxAge: '
  * 总比分画面（/render/match）作为独立整屏场景时复用它，
  * 所以这里显式暴露三个文件，而不是把整个项目目录静态化。
  */
+/**
+ * assets/ 已按用途分目录（backgrounds / transitions / layouts / mascot），
+ * 但**对外 URL 保持不变** —— 现场 OBS 里可能已经填好了这些地址，
+ * 改 URL 等于让所有浏览器源一起失效。
+ */
 const ROOT_ASSETS = [
-  ['/assets/liveroom-background.mp4', path.join('assets', '直播间背景-动态.mp4'), 'video/mp4'],
-  ['/assets/liveroom-background.png', path.join('assets', '直播间背景.png'), 'image/png'],
-  ['/assets/liveroom-background.svg', path.join('assets', '直播间背景.svg'), 'image/svg+xml'],
+  // 深色整屏背景（总比分 / 随机选曲 / 选曲展示 / 奖品大屏）
+  ['/assets/liveroom-background.mp4', path.join('assets', 'backgrounds', 'dark', '直播间背景-动态.mp4'), 'video/mp4'],
+  ['/assets/liveroom-background.png', path.join('assets', 'backgrounds', 'dark', '直播间背景.png'), 'image/png'],
+  ['/assets/liveroom-background.svg', path.join('assets', 'backgrounds', 'dark', '直播间背景.svg'), 'image/svg+xml'],
+  // 直播待机画面：动态背景（12s 循环）+ 静帧兜底 + 看板娘立绘（透明 PNG）
+  ['/assets/standby-bg.mp4', path.join('assets', 'backgrounds', 'light', 'standby-bg.mp4'), 'video/mp4'],
+  ['/assets/standby-bg.png', path.join('assets', 'backgrounds', 'light', 'standby-bg.png'), 'image/png'],
+  ['/assets/standby-mascot.png', path.join('assets', 'mascot', 'standby-mascot.png'), 'image/png'],
+  // 明亮风格：整屏场景的动态背景（由 shared/scene-bg.js 按主题切换）
+  ['/assets/light-background.mp4', path.join('assets', 'backgrounds', 'light', 'light-bg.mp4'), 'video/mp4'],
+  ['/assets/light-background.png', path.join('assets', 'backgrounds', 'light', 'light-bg.png'), 'image/png'],
+  // 同一条动画的压暗版：放在游戏画面 / 摄像头后面当直播底色（纯白太亮会盖过机台）
+  ['/assets/light-background-dim.mp4', path.join('assets', 'backgrounds', 'light', 'light-bg-dim.mp4'), 'video/mp4'],
+  ['/assets/light-background-dim.png', path.join('assets', 'backgrounds', 'light', 'light-bg-dim.png'), 'image/png'],
 ];
 for (const [url, filename, type] of ROOT_ASSETS) {
   const send = (req, res) => {
@@ -458,6 +477,14 @@ configEvents.on('change', (patch, changed) => {
   if (changed.some((p) => p.startsWith('cast.'))) {
     set('config.cast', structuredClone(getConfig().cast || {}));
   }
+  // 输出配色主题：变更后广播给所有渲染源，OBS 场景即时换色
+  if (changed.some((p) => p.startsWith('theme.'))) {
+    set('config.theme', structuredClone(getConfig().theme || {}));
+  }
+  // 待机画面文案：同上，渲染源热更新
+  if (changed.some((p) => p.startsWith('standby.'))) {
+    set('config.standby', structuredClone(getConfig().standby || {}));
+  }
   // 抽奖中继地址 / 令牌 / 轮询间隔变更后立刻重新轮询
   if (changed.some((p) => p.startsWith('lottery.relay'))) lottery.startRelay();
   // 游戏音频目录 / 开关变化：重建索引（后台扫描）；其他音频参数变化只刷新展示信息
@@ -467,6 +494,8 @@ configEvents.on('change', (patch, changed) => {
     }
     pickshow.refresh();
   }
+  // 国服 API 自动同步配置变化：重排计时器
+  if (changed.some((p) => p.startsWith('cnMusic.'))) cnMusic.startAutoSync();
   set('config.loadedAt', Date.now());
   set('config.errors', {});
 });
@@ -606,6 +635,7 @@ function registerOps() {
   H('match.ban', (c, a) => nackOr(match.ban(a?.musicId, a?.banned !== false, a?.actor || 'ws')));
   H('match.clearBans', (c, a) => nackOr(match.clearBans(a?.actor || 'ws')));
   H('match.finish', (c, a) => nackOr(match.finish(a?.actor || 'ws')));
+  H('match.resetSeq', (c, a) => nackOr(match.resetRoundSeq(a?.next ?? a?.start ?? 1, a?.actor || 'ws')));
   H('match.pickApply', (c, a) => nackOr(match.applyPick(a?.id, a?.index ?? null, a?.actor || 'ws')));
   H('random.spin', (c, a) => nackOr(randomScene.spin(a?.filters || a || {}, a?.actor || 'ws')));
   H('random.clear', (c, a) => nackOr(randomScene.clear(a?.actor || 'ws')));
@@ -638,6 +668,10 @@ function nackOr(r) {
 applyFeatures();
 // 解说页的显示模板（非敏感），随 hello 一起下发；OBS 浏览器源无法登录读取 /api/config
 set('config.cast', structuredClone(getConfig().cast || {}));
+// OBS 输出配色主题：同样随 hello 下发，渲染源无需登录即可换色
+set('config.theme', structuredClone(getConfig().theme || {}));
+// 待机画面文案：整屏场景由 OBS 直接打开，不能要求登录，所以也镜像进共享状态
+set('config.standby', structuredClone(getConfig().standby || {}));
 templates.startWatch();
 
 log.info('server', '全部模块已启动', {
@@ -706,6 +740,7 @@ async function shutdown(signal) {
   try { replay.stopPolling(); } catch { /* ignore */ }
   try { match.shutdown(); } catch { /* ignore */ }
   try { lottery.shutdown(); } catch { /* ignore */ }
+  try { cnMusic.shutdown(); } catch { /* ignore */ }
   try { transitions.stopPolling(); } catch { /* ignore */ }
   try { vmix.stopHeartbeat(); } catch { /* ignore */ }
   try { templates.stopWatch(); } catch { /* ignore */ }

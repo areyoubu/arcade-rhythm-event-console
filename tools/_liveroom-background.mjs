@@ -97,7 +97,7 @@ const svg = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http
 </svg>`;
 
 fs.mkdirSync('assets', { recursive: true });
-fs.writeFileSync('assets/直播间背景.svg', svg, 'utf8');
+fs.writeFileSync('assets/backgrounds/dark/直播间背景.svg', svg, 'utf8');
 const png = await sharp(Buffer.from(svg)).png({ compressionLevel: 9 }).toBuffer();
-fs.writeFileSync('assets/直播间背景.png', png);
+fs.writeFileSync('assets/backgrounds/dark/直播间背景.png', png);
 console.log('generated: assets/直播间背景.png / assets/直播间背景.svg');

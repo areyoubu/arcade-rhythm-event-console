@@ -118,6 +118,7 @@
         chip.className = 'diff-chip';
         chip.textContent = `${pick.difficultyName || ''} ${pick.levelText || pick.level || ''}`.trim();
         chip.style.background = pick.difficultyColor || '#4a4e56';
+        chip.style.color = window.renderTheme?.contrastInk(pick.difficultyColor) || '#ffffff';
         meta.append(chip);
         card.append(meta);
       } else {

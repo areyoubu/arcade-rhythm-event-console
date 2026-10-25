@@ -32,10 +32,22 @@
   .music-table .actions { text-align: right; white-space: nowrap; }
   .music-table .actions .btn { min-height: 24px; padding: 1px 7px; font-size: 11px; }
   .music-table .cn { text-align: center; }
+  .cn-diff-list { max-height: 54vh; overflow: auto; border: 1px solid var(--border); border-radius: 4px; margin-top: 8px; }
+  .cn-diff-row { padding: 7px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+  .cn-diff-row:last-child { border-bottom: 0; }
+  .cn-diff-name { color: var(--text); margin-bottom: 3px; }
+  .cn-diff-changes { color: var(--text-mute); font-family: var(--mono); font-size: 11px; line-height: 1.55; }
 
   .pager { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding-top: 12px; }
   .pager .info { font-family: var(--mono); font-size: 11.5px; color: var(--text-mute); }
   .pager .spacer { flex: 1; }
+  .pager-jump { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-mute); }
+  .pager-jump input {
+    width: 54px; min-height: 28px; padding: 2px 6px; text-align: center;
+    background: #17181b; color: var(--text); border: 1px solid var(--border-strong);
+    border-radius: 3px; font-family: var(--mono); font-size: 12px;
+  }
+  .pager-jump input:focus { outline: none; border-color: var(--accent); }
 
   .diff-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
   .diff-grid .field { margin: 0; }
@@ -62,7 +74,7 @@
   const page = mount({
     current: '/music',
     title: '曲目库',
-    subtitle: '曲目增改删 · 难度定数 · 国服标记 · 上传 xlsx 全量更新',
+    subtitle: '曲目增改删 · 日服 / 国服定数切换 · 游戏目录导入 · 国服公共 API 同步',
   });
 
   const DIFF_ORDER = ['basic', 'advanced', 'expert', 'master', 'ultima'];
@@ -81,6 +93,8 @@
     genre: '',
     difficulty: '',
     cnOnly: false,
+    levelSource: 'jp',
+    cnPending: null,
   };
 
   // ── 概览 ────────────────────────────────────────────────
@@ -91,9 +105,20 @@
   const wePill = el('span', { class: 'pill mute', text: 'WE 0' });
   const timeText = el('span', { class: 'small muted' });
   const importBtn = el('button', { class: 'btn primary sm', text: '⇪ 导入 xlsx' });
+  const gameBtn = el('button', { class: 'btn sm', text: '🎮 从游戏导入' });
+  const cnSyncBtn = el('button', { class: 'btn sm', text: '☁ 同步国服数据' });
   const addBtn = el('button', { class: 'btn sm', text: '＋ 添加曲目' });
   const reloadBtn = el('button', { class: 'btn ghost sm', text: '⟳ 重新载入' });
   const fileInput = el('input', { type: 'file', accept: '.xlsx,.xls', class: 'hidden' });
+  const levelSourceSel = el('select', {
+    style: { width: 'auto', minHeight: '30px', padding: '3px 7px', fontSize: '12px' },
+    title: '切换曲目库使用的定数来源',
+  },
+    el('option', { value: 'jp', text: '日服定数（游戏）' }),
+    el('option', { value: 'cn', text: '国服定数（API）' }),
+  );
+  const cnInfo = el('span', { class: 'small muted' });
+  const cnBanner = el('div', { class: 'note warn', style: { display: 'none' } });
 
   page.append(el('section', { class: 'card mb12' },
     el('header', null,
@@ -105,10 +130,13 @@
       el('div', { class: 'music-stats' },
         totalPill, cnPill, genrePill, coverPill, wePill, timeText,
         el('span', { class: 'spacer' }),
-        importBtn, addBtn, reloadBtn,
+        el('span', { class: 'small muted', text: '定数来源' }), levelSourceSel,
+        importBtn, gameBtn, cnSyncBtn, addBtn, reloadBtn,
       ),
       fileInput,
-      el('div', { class: 'hint mt8', text: '比赛页 / 手机选曲页读取的是 data/music.json。上传 xlsx 会全量替换曲目库（旧文件备份为 data/music.json.bak），并同步更新 data/source 里的源文件。' }),
+      el('div', { class: 'inline mt8' }, cnInfo),
+      cnBanner,
+      el('div', { class: 'hint mt8', text: '比赛页 / 手机选曲页读取的是 data/music.json。上传 xlsx 会全量替换曲目库（旧文件备份为 data/music.json.bak），并同步更新 data/source 里的源文件。游戏导入只合并/更新游戏内曲目，保留国服定数与现有封面失败时的旧封面。' }),
     ),
   ));
 
@@ -126,6 +154,8 @@
   const pager = el('div', { class: 'pager' });
 
   let qTimer = null;
+  let cnModal = null;
+  let lastPromptedId = null;
   search.oninput = () => {
     clearTimeout(qTimer);
     qTimer = setTimeout(() => { S.q = search.value.trim(); S.offset = 0; loadList(); }, 250);
@@ -142,6 +172,58 @@
     if (file) importXlsx(file);
   };
   addBtn.onclick = () => openEditor(null);
+
+  levelSourceSel.onchange = async () => {
+    const source = levelSourceSel.value;
+    levelSourceSel.disabled = true;
+    try {
+      const r = await api('/api/music/level-source', { method: 'POST', body: { source } });
+      S.meta = r.meta;
+      renderMeta();
+      await loadList();
+      ok(`已切换为${source === 'cn' ? '国服' : '日服'}定数`);
+    } catch (e) {
+      levelSourceSel.value = S.meta?.levelSource || 'jp';
+      cmdError(e, '切换定数来源');
+    } finally {
+      levelSourceSel.disabled = false;
+    }
+  };
+
+  gameBtn.onclick = () => withBusy(gameBtn, async () => {
+    const yes = await confirm({
+      title: '从游戏目录导入曲目',
+      message: '按本地游戏目录更新曲名、曲师、分类、日服定数与曲绘？国服定数 / 国服标记会保留，游戏内没有的旧曲目也会保留。',
+      confirmText: '开始导入',
+    });
+    if (!yes) return;
+    try {
+      const r = await api('/api/music/game/import', { method: 'POST', body: {} });
+      await reload();
+      const s = r.summary || {};
+      ok(`游戏导入完成：新增 ${s.added || 0}，更新 ${s.updated || 0}，封面 ${s.covers || 0}，WE ${s.weUpdated || 0}`);
+      if (s.errors?.length) err(`有 ${s.errors.length} 条警告：${s.errors.slice(0, 3).join('；')}`);
+    } catch (e) { cmdError(e, '从游戏目录导入'); }
+  });
+
+  cnSyncBtn.onclick = () => withBusy(cnSyncBtn, async () => {
+    try {
+      const r = await api('/api/music/cn/sync', { method: 'POST', body: {} });
+      if (r.changed && r.pending) {
+        S.cnPending = r.pending;
+        renderCnPending();
+        openCnPending(r.pending);
+      } else {
+        await reload();
+        ok('国服数据已是最新');
+      }
+    } catch (e) { cmdError(e, '同步国服数据'); }
+  });
+
+  cnBanner.onclick = (e) => {
+    if (e.target.closest('button')) return;
+    if (S.cnPending) openCnPending(S.cnPending);
+  };
 
   const tableCard = el('section', { class: 'card' },
     el('header', null,
@@ -162,8 +244,8 @@
             el('th', { text: '曲名 / 曲师' }),
             el('th', { text: '分类' }),
             el('th', { text: '国服' }),
-            ...DIFF_ORDER.map((k) => el('th', { text: k.toUpperCase(), style: { textAlign: 'center' } })),
-            el('th', { text: 'WE', style: { textAlign: 'center' } }),
+            ...DIFF_ORDER.map((k) => el('th', { text: k.toUpperCase(), dataset: { diff: k }, style: { textAlign: 'center' } })),
+            el('th', { text: 'WE', dataset: { diff: 'we' }, style: { textAlign: 'center' } }),
             el('th', { text: '操作', style: { textAlign: 'right' } }),
           )),
           tbody,
@@ -174,6 +256,19 @@
   );
 
   page.append(tableCard);
+
+  // 难度表头单元格：加载到曲库元数据后按官方难度色上色
+  const diffHeaderCells = {};
+  tableCard.querySelectorAll('th[data-diff]').forEach((th) => { diffHeaderCells[th.dataset.diff] = th; });
+
+  function applyDiffColors() {
+    const d = S.meta?.difficulties || {};
+    for (const k of DIFF_ORDER) {
+      const th = diffHeaderCells[k];
+      if (th) th.style.color = d[k]?.color || '';
+    }
+    if (diffHeaderCells.we) diffHeaderCells.we.style.color = S.meta?.we?.color || '#c98bff';
+  }
 
   // ── 数据 ────────────────────────────────────────────────
   function fillGenres(meta) {
@@ -199,7 +294,114 @@
       ? `${m.updatedAt ? '最后修改' : '导入'} ${fmt.datetime(time)}${m.sourceSheet ? ` · ${m.sourceSheet}` : ''}`
       : '尚未导入曲目';
     totalPill.className = `pill ${m.counts?.songs ? 'ok' : 'mute'}`;
+    S.levelSource = m.levelSource || 'jp';
+    levelSourceSel.value = S.levelSource;
+    const cn = m.cn || {};
+    const last = Number(cn.lastSyncAt) || 0;
+    cnInfo.textContent = [
+      `定数：${S.levelSource === 'cn' ? '国服（API）' : '日服（游戏）'}`,
+      `国服数据：${last ? fmt.datetime(new Date(last).toISOString()) : '尚未同步'}`,
+      cn.version ? `API v${cn.version}` : '',
+      m.counts?.cnLevels ? `已有国服定数 ${m.counts.cnLevels} 首` : '',
+      '来源：LXNS 公共 API',
+    ].filter(Boolean).join(' · ');
+    if (cn.pending) {
+      S.cnPending = cn.pending;
+      renderCnPending();
+      if (cn.pending.id !== lastPromptedId) openCnPending(cn.pending);
+    }
     fillGenres(m);
+    applyDiffColors();
+  }
+
+  function changeSummary(p) {
+    const s = p?.summary || {};
+    return `新增国服 ${s.cnAdded || 0} · 移除标记 ${s.cnRemoved || 0} · 定数变化 ${s.levelChanged || 0} · WE 变化 ${s.weChanged || 0}`;
+  }
+
+  function renderCnPending() {
+    const p = S.cnPending;
+    if (!p) { cnBanner.style.display = 'none'; return; }
+    cnBanner.style.display = '';
+    clear(cnBanner);
+    cnBanner.append(
+      el('div', { class: 'inline' },
+        el('span', { text: `国服 API 有 ${p.summary?.entries ?? 0} 项变化待确认：${changeSummary(p)}` }),
+        el('span', { class: 'spacer' }),
+        el('button', {
+          class: 'btn sm', text: '查看并确认',
+          onclick: () => openCnPending(p),
+        }),
+      ),
+      el('div', { class: 'small muted mt8', text: `拉取时间 ${fmt.datetime(new Date(p.at).toISOString())} · API v${p.version || '—'}。确认前不会修改曲目库。` }),
+    );
+  }
+
+  function openCnPending(p) {
+    if (!p) return;
+    if (cnModal && lastPromptedId === p.id) return;
+    if (cnModal) { try { cnModal.close(); } catch { /* ignore */ } }
+    lastPromptedId = p.id;
+    const entries = p.entries || [];
+    const list = el('div', { class: 'cn-diff-list' });
+    for (const entry of entries) {
+      const bits = [];
+      if (entry.cn && entry.cn.from !== entry.cn.to) {
+        bits.push(`国服：${entry.cn.from ? '可用' : '不可用'} → ${entry.cn.to ? '可用' : '不可用'}`);
+      }
+      if (entry.releaseDate && entry.releaseDate.from !== entry.releaseDate.to) {
+        bits.push(`配信：${entry.releaseDate.from || '—'} → ${entry.releaseDate.to || '—'}`);
+      }
+      for (const [k, v] of Object.entries(entry.levels || {})) {
+        bits.push(`${k.toUpperCase()} ${v.from ?? '—'} → ${v.to ?? '—'}`);
+      }
+      if (entry.we) {
+        bits.push(`WE：${entry.we.from?.cn ? '可用' : '不可用'}${entry.we.from?.cnStar ? `★${entry.we.from.cnStar}` : ''} → ${entry.we.to?.cn ? '可用' : '不可用'}${entry.we.to?.cnStar ? `★${entry.we.to.cnStar}` : ''}`);
+      }
+      list.append(el('div', { class: 'cn-diff-row' },
+        el('div', { class: 'cn-diff-name' }, el('b', { text: `#${entry.id}` }), ` ${entry.name || ''}`),
+        el('div', { class: 'cn-diff-changes', text: bits.join(' · ') || '相关元数据变化' }),
+      ));
+    }
+    const body = el('div', null,
+      el('div', { class: 'note warn', text: `待确认 ${p.summary?.entries ?? 0} 项：${changeSummary(p)}。请抽查定数与国服标记是否符合预期，确认后写入 data/music.json。` }),
+      el('div', { class: 'small muted mt8 mb8', text: `API v${p.version || '—'} · 国服日期 ${p.today || '—'} · 显示前 ${entries.length} 项${p.truncated ? '（其余已省略）' : ''}` }),
+      list,
+    );
+    let discardBtn;
+    const applyBtn = el('button', {
+      class: 'btn primary', text: '确认应用',
+      onclick: () => withBusy(applyBtn, async () => {
+        try {
+          const r = await api('/api/music/cn/confirm', { method: 'POST', body: {} });
+          m.close();
+          S.cnPending = null;
+          renderCnPending();
+          await reload();
+          ok(`已应用 ${r.applied ?? 0} 项国服更新`);
+        } catch (ex) { cmdError(ex, '应用国服更新'); }
+      }),
+    });
+    discardBtn = el('button', {
+      class: 'btn ghost', text: '放弃本次更新',
+      onclick: () => withBusy(discardBtn, async () => {
+        try {
+          await api('/api/music/cn/discard', { method: 'POST', body: {} });
+          m.close();
+          S.cnPending = null;
+          renderCnPending();
+          ok('已放弃本次国服更新');
+        } catch (e) { cmdError(e, '放弃更新'); }
+      }),
+    });
+    const m = modal({
+      title: '国服数据更新待确认',
+      wide: true,
+      body,
+      onClose: () => { if (cnModal === m) cnModal = null; },
+      footer: [discardBtn, applyBtn],
+    });
+    cnModal = m;
   }
 
   async function loadMeta() {
@@ -262,7 +464,12 @@
           el('span', { class: `pill ${song.cn ? 'ok' : 'mute'}`, text: song.cn ? '国服' : '日服' })),
         ...DIFF_ORDER.map((k) => {
           const lv = song.difficulties?.[k];
-          return el('td', { class: `lv${lv ? '' : ' missing'}`, text: lv ? levelText(lv) : '—' });
+          const color = S.meta?.difficulties?.[k]?.color;
+          return el('td', {
+            class: `lv${lv ? '' : ' missing'}`,
+            text: lv ? levelText(lv) : '—',
+            style: lv && color ? { color, fontWeight: '800' } : null,
+          });
         }),
         el('td', { class: `lv${song.we ? '' : ' missing'}`, style: { color: song.we ? '#c98bff' : '' }, text: song.we ? `${song.we.kanji}★${song.we.star}` : '—' }),
         el('td', { class: 'actions' },
@@ -279,6 +486,24 @@
     clear(pager);
     const pages = Math.max(1, Math.ceil(S.total / S.limit));
     const cur = Math.floor(S.offset / S.limit) + 1;
+    const pageIn = el('input', {
+      type: 'number', min: '1', max: String(pages), step: '1', value: String(cur),
+      title: '输入页码后按回车跳转', 'aria-label': '跳转页码',
+    });
+    const goPage = () => {
+      const raw = Math.round(Number(pageIn.value));
+      if (!Number.isFinite(raw)) { pageIn.value = String(cur); return; }
+      const page = Math.max(1, Math.min(pages, raw));
+      pageIn.value = String(page);
+      if (page === cur) return;
+      S.offset = (page - 1) * S.limit;
+      loadList();
+    };
+    pageIn.onchange = goPage;
+    pageIn.onkeydown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); goPage(); }
+      if (e.key === 'Escape') { pageIn.value = String(cur); pageIn.blur(); }
+    };
     pager.append(
       el('span', { class: 'info', text: `显示 ${S.total ? S.offset + 1 : 0}–${Math.min(S.offset + S.items.length, S.total)} / ${S.total}` }),
       el('span', { class: 'spacer' }),
@@ -291,6 +516,7 @@
         class: 'btn ghost sm', text: '下一页 ›', disabled: cur >= pages,
         onclick: () => { if (cur < pages) { S.offset += S.limit; loadList(); } },
       }),
+      el('label', { class: 'pager-jump' }, '跳至', pageIn, `/ ${pages} 页`),
     );
   }
 
@@ -301,6 +527,8 @@
 
   function openEditor(song) {
     const isEdit = !!song;
+    const source = S.meta?.levelSource || 'jp';
+    const sourceLabel = source === 'cn' ? '国服' : '日服';
     const idIn = el('input', {
       type: 'number', min: 1, step: 1,
       value: song?.id ?? '',
@@ -311,8 +539,14 @@
     const artistIn = el('input', { type: 'text', maxLength: 120, value: song?.artist || '', placeholder: '曲师' });
     const genreIn = el('input', { type: 'text', maxLength: 40, value: song?.genre || '', placeholder: '分类，例如 ORIGINAL', list: 'genre-list' });
     const coverIn = el('input', { type: 'text', maxLength: 500, value: song?.cover || '', placeholder: '/covers/123.webp（留空则没有封面）' });
-    const weKanjiIn = el('input', { type: 'text', maxLength: 8, value: song?.we?.kanji || '', placeholder: 'WE 汉字，如 止（留空=无）' });
-    const weStarIn = el('input', { type: 'number', min: 1, max: 10, step: 1, value: song?.we?.star ?? '', placeholder: '1–10' });
+    const weKanjiVal = source === 'cn'
+      ? (song?.we?.cnKanji || song?.we?.kanji || '')
+      : (song?.we?.jpKanji || song?.we?.kanji || '');
+    const weStarVal = source === 'cn'
+      ? (song?.we?.cnStar ?? song?.we?.star ?? '')
+      : (song?.we?.jpStar ?? song?.we?.star ?? '');
+    const weKanjiIn = el('input', { type: 'text', maxLength: 8, value: weKanjiVal, placeholder: 'WE 汉字，如 止（留空=无）' });
+    const weStarIn = el('input', { type: 'number', min: 1, max: 10, step: 1, value: weStarVal, placeholder: '1–10' });
     const coverPreview = el('img', { src: song?.cover || '', alt: '', style: { width: '64px', height: '64px', objectFit: 'cover', borderRadius: '4px', border: '1px solid var(--border)', background: '#111', display: song?.cover ? 'block' : 'none' } });
     coverIn.oninput = () => {
       const src = coverIn.value.trim();
@@ -324,10 +558,15 @@
     for (const k of DIFF_ORDER) {
       diffIns[k] = el('input', {
         type: 'number', min: 0, max: 20, step: 0.1,
-        value: song?.difficulties?.[k] ?? '',
+        value: song?.levels?.[source]?.[k] ?? song?.difficulties?.[k] ?? '',
         placeholder: '—',
       });
     }
+    const otherSource = source === 'cn' ? 'jp' : 'cn';
+    const otherText = DIFF_ORDER
+      .filter((k) => song?.levels?.[otherSource]?.[k])
+      .map((k) => `${k.toUpperCase()} ${levelText(song.levels[otherSource][k])}`)
+      .join(' · ');
 
     const datalist = el('datalist', { id: 'genre-list' });
     for (const g of S.meta?.genres || []) datalist.append(el('option', { value: g.name }));
@@ -354,13 +593,14 @@
         ),
         el('label', { class: 'check' }, cnIn, el('span', { class: 'label', text: '国服可用' })),
         el('div', null,
-          el('div', { class: 'small muted mb8', text: '难度定数' }),
+          el('div', { class: 'small muted mb8', text: `难度定数（${sourceLabel}）` }),
           el('div', { class: 'diff-grid' },
             ...DIFF_ORDER.map((k) => field(k.toUpperCase(), diffIns[k])),
           ),
+          otherText ? el('div', { class: 'tiny muted mt8', text: `另一侧定数（${otherSource === 'cn' ? '国服' : '日服'}）：${otherText}` }) : null,
         ),
         datalist,
-        el('div', { class: 'hint', text: '定数支持 0.1 步进（例如 13.7）。至少填一个难度；留空的难度不会出现在选曲 / 比赛页。' }),
+        el('div', { class: 'hint', text: `当前保存到「${sourceLabel}」定数。定数支持 0.1 步进（例如 13.7）；留空的难度不会出现在选曲 / 比赛页。` }),
       ),
       footer: [
         el('button', { class: 'btn ghost', text: '取消', onclick: () => m.close() }),
@@ -372,15 +612,28 @@
               const v = Number(diffIns[k].value);
               if (Number.isFinite(v) && v > 0) difficulties[k] = Math.round(v * 100) / 100;
             }
+            const weRaw = { ...(song?.we || {}) };
+            if (source === 'cn') {
+              weRaw.cnKanji = weKanjiIn.value.trim();
+              weRaw.cnStar = weStarIn.value === '' ? null : Number(weStarIn.value);
+              if (!weRaw.jpKanji) weRaw.jpKanji = weKanjiIn.value.trim();
+              if (!weRaw.jpStar) weRaw.jpStar = weStarIn.value === '' ? null : Number(weStarIn.value);
+              if (!weRaw.kanji) weRaw.kanji = weKanjiIn.value.trim();
+              if (!weRaw.star) weRaw.star = weStarIn.value === '' ? null : Number(weStarIn.value);
+            } else {
+              weRaw.kanji = weKanjiIn.value.trim();
+              weRaw.star = weStarIn.value === '' ? null : Number(weStarIn.value);
+              weRaw.jpKanji = weKanjiIn.value.trim();
+              weRaw.jpStar = weStarIn.value === '' ? null : Number(weStarIn.value);
+            }
             const body = {
               name: nameIn.value,
               artist: artistIn.value,
               genre: genreIn.value,
               cn: cnIn.checked,
               cover: coverIn.value,
-              we: weKanjiIn.value.trim() && weStarIn.value !== ''
-                ? { kanji: weKanjiIn.value.trim(), star: Number(weStarIn.value) }
-                : null,
+              levelSource: source,
+              we: weKanjiIn.value.trim() && weStarIn.value !== '' ? weRaw : null,
               difficulties,
             };
             if (!isEdit && String(idIn.value).trim() !== '') body.id = Number(idIn.value);
@@ -436,6 +689,18 @@
     } catch (e) {
       err(e.message);
     }
+  }
+
+  if (window.arcadeWS) {
+    arcadeWS.watch('music.cnSync', (v) => {
+      S.cnPending = v || null;
+      renderCnPending();
+      if (v && v.id !== lastPromptedId) openCnPending(v);
+      if (!v) {
+        lastPromptedId = null;
+        if (cnModal) { try { cnModal.close(); } catch { /* ignore */ } }
+      }
+    });
   }
 
   reload();

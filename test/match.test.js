@@ -328,3 +328,63 @@ test('★ 空行规则：只录一方分数也算「有内容」，但不参与�
   assert.equal(s.current.derived.displayLeft, 0);
   assert.equal(s.current.songs[0].winner, null);
 });
+
+// ─────────────────────────────────────────────────────────────
+// 局号重置（回归：自动局号只能随历史场次累加，彩排后回不到第 1 局）
+// ─────────────────────────────────────────────────────────────
+
+test('★ 自动局号：开局递增，且不依赖历史场次', () => {
+  match.resetRoundSeq(1, 'test');
+  assert.equal(match.snapshot().roundSeq, 1);
+  match.start({ name: '', force: true }, 'test');
+  assert.equal(match.snapshot().current.name, '第 1 局');
+  assert.equal(match.snapshot().roundSeq, 2, '开局后局号应前进');
+  match.start({ name: '', force: true }, 'test');
+  assert.equal(match.snapshot().current.name, '第 2 局');
+});
+
+test('★★ 重置局号：当前进行中的自动命名局改名，历史不动', () => {
+  match.start({ name: '', force: true }, 'test');
+  // 造几场历史，制造「第 N 局」被顶到很大的情况
+  for (let i = 0; i < 5; i++) {
+    match.setScore(0, 'left', 100, 'test');
+    match.finish('test');
+    match.start({ name: '', force: true }, 'test');
+  }
+  const before = match.snapshot();
+  assert.ok(before.historyTotal >= 5, '应有历史场次');
+  const historyNames = before.history.map((h) => h.name);
+
+  const r = match.resetRoundSeq(1, 'test');
+  assert.equal(r.ok, true);
+  assert.equal(r.renamed, true, '进行中的自动命名局应一并改名');
+  assert.equal(r.state.current.name, '第 1 局');
+  assert.equal(r.nextRoundNo, 2, '下一局顺延到第 2 局');
+  assert.deepEqual(r.state.history.map((h) => h.name), historyNames, '历史名称不能被改写');
+  assert.equal(r.state.historyTotal, before.historyTotal, '历史不能丢');
+});
+
+test('★ 重置局号：自定义名称 / 已结束的局不改名，只改下一个自动局号', () => {
+  match.start({ name: '决赛 · 冠军战', force: true }, 'test');
+  const custom = match.resetRoundSeq(5, 'test');
+  assert.equal(custom.renamed, false);
+  assert.equal(custom.state.current.name, '决赛 · 冠军战');
+  assert.equal(custom.nextRoundNo, 5);
+
+  match.setScore(0, 'left', 100, 'test');
+  match.finish('test');
+  const finished = match.resetRoundSeq(9, 'test');
+  assert.equal(finished.renamed, false, '已结束的局不能改名（历史记录必须对得上）');
+  assert.equal(finished.nextRoundNo, 9);
+});
+
+test('★ 重置局号：非法值拒绝；清空历史后局号回到 1', () => {
+  assert.equal(match.resetRoundSeq(0, 'test').ok, false);
+  assert.equal(match.resetRoundSeq(-3, 'test').ok, false);
+  assert.equal(match.resetRoundSeq('abc', 'test').ok, false);
+  assert.equal(match.resetRoundSeq(10_000, 'test').ok, false);
+
+  match.resetRoundSeq(42, 'test');
+  match.clearHistory('test');
+  assert.equal(match.snapshot().roundSeq, 1, '清空历史 = 从头开始，局号回 1');
+});

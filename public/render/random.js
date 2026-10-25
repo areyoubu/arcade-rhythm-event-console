@@ -12,8 +12,6 @@
   const Q = new URLSearchParams(location.search);
   const PREVIEW = Q.get('preview') === '1';
   const CANVAS = { width: 1920, height: 1080 };
-  const DIFF_ORDER = ['basic', 'advanced', 'expert', 'master', 'ultima'];
-  const DIFF_NAME = { basic: 'BASIC', advanced: 'ADVANCED', expert: 'EXPERT', master: 'MASTER', ultima: 'ULTIMA' };
 
   const $ = (id) => document.getElementById(id);
   const stage = $('stage');
@@ -23,7 +21,7 @@
     pointer: $('pointer'),
     idle: $('idle'), result: $('result'),
     cover: $('resultCover'), title: $('resultTitle'), artist: $('resultArtist'),
-    meta: $('resultMeta'), diffs: $('resultDiffs'), note: $('resultNote'),
+    meta: $('resultMeta'), note: $('resultNote'),
     video: $('bgVideo'),
     audio: $('previewAudio'),
   };
@@ -137,6 +135,7 @@
     chip.className = 'diff-chip';
     chip.textContent = `${item.difficultyName || '—'} ${item.levelText || ''}`.trim();
     chip.style.background = item.difficultyColor || '#4a4e56';
+    chip.style.color = window.renderTheme?.contrastInk(item.difficultyColor) || '#ffffff';
     meta.append(chip);
     const genre = document.createElement('span');
     genre.className = 'a';
@@ -188,35 +187,22 @@
       g.textContent = picked.genreLabel || picked.genre;
       meta.append(g);
     }
-    if (picked.we) {
-      const w = document.createElement('span');
-      w.className = 'tag we';
-      w.textContent = `WORLD'S END ${picked.weText || ''}`.trim();
-      meta.append(w);
-    }
-    const chosen = document.createElement('span');
-    chosen.className = 'result-level';
-    chosen.textContent = `${picked.difficultyName || ''} ${picked.levelText || ''}`.trim();
-    meta.append(chosen);
+    /*
+     * 只显示**抽中的那个难度**。
+     * 以前这里会把 BASIC–ULTIMA 全部列一遍再高亮其中一个，观众一眼看不出抽的是哪张谱面，
+     * 而且曲目有没有 WE 也属于「别的难度」的信息，一并去掉。
+     * 现在把难度做成一颗按官方难度色填充的胶囊：颜色 + 名称 + 定数，一个都不缺。
+     */
+    const color = picked.difficultyColor || '#7030a0';
+    const chip = document.createElement('span');
+    chip.className = 'result-level';
+    chip.textContent = `${picked.difficultyName || ''} ${picked.levelText || ''}`.trim();
+    chip.style.background = color;
+    chip.style.color = window.renderTheme?.contrastInk(color) || '#fff';
+    chip.style.boxShadow = `0 8px 24px ${window.renderTheme?.alpha(color, 0.35) || 'rgba(0,0,0,.25)'}`;
+    meta.append(chip);
     el.meta.replaceChildren(meta);
 
-    const diffs = document.createDocumentFragment();
-    for (const key of DIFF_ORDER) {
-      const lv = picked.difficulties?.[key];
-      if (!lv) continue;
-      const pill = document.createElement('span');
-      pill.className = `diff-pill${picked.difficulty === key ? ' active' : ''}`;
-      pill.textContent = `${DIFF_NAME[key]} ${lv}`;
-      diffs.append(pill);
-    }
-    if (picked.we) {
-      const pill = document.createElement('span');
-      pill.className = `diff-pill${picked.difficulty === 'we' ? ' active' : ''}`;
-      pill.textContent = `WE ${picked.weText || ''}`.trim();
-      pill.style.color = '#d7b6ff';
-      diffs.append(pill);
-    }
-    el.diffs.replaceChildren(diffs);
     setText(el.note, 'RANDOM SELECT · 曲目信息来自本地曲库');
   }
 

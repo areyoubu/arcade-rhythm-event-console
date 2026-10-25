@@ -15,7 +15,7 @@ import { getConfig } from '../server/config.js';
 import * as media from '../server/media.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const REAL_PNG = fs.readFileSync(path.join(ROOT, 'assets', '直播间模板.png'));
+const REAL_PNG = fs.readFileSync(path.join(ROOT, 'assets', 'layouts', '直播间模板.png'));
 
 // 媒体目录受 withinRoot 钳制，测试目录必须落在项目目录内，否则会退回真实 media/
 const TMP = fs.mkdtempSync(path.join(ROOT, 'data', '_test-media-'));

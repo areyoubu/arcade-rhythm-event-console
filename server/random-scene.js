@@ -47,6 +47,7 @@ function pickedView(target) {
   return {
     ...item,
     difficulties: { ...(target.song.difficulties || {}) },
+    difficultyColors: music.difficultyColors(),
     we: target.song.we ? { ...target.song.we } : null,
     weText: target.song.weText || '',
   };

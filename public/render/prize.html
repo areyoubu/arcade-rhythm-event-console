@@ -120,7 +120,7 @@
     flex: 0 0 auto;
     display: flex; align-items: center; justify-content: center; gap: 24px;
     padding: 18px 32px;
-    border-top: 1px solid rgba(217, 164, 65, .45);
+    border-top: 1px solid rgba(var(--accent-rgb), .45);
     background: linear-gradient(0deg, rgba(0, 0, 0, .55), rgba(0, 0, 0, .05));
     opacity: 0; transform: translateY(18px);
     transition: opacity .45s ease, transform .45s ease;
@@ -156,6 +156,7 @@
 </style>
   <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/shared/font.css">
+  <link rel="stylesheet" href="/shared/scene-light.css?v=20261026">
 </head>
 <body>
 <div id="stage">
@@ -188,6 +189,8 @@
   </div>
 </div>
 <script src="/shared/ws.js"></script>
+<script src="/shared/scene-bg.js?v=20261026"></script>
+<script src="/shared/render-theme.js?v=20261026"></script>
 <script src="/render/prize.js"></script>
 </body>
 </html>

@@ -20,6 +20,7 @@
   :root {
     --left-color: #d0344e;
     --right-color: #3d78c9;
+    --gold: #d9a441;             /* 兜底：渲染主题脚本会覆盖它 */
     --plate-bg: rgba(10, 10, 12, .96);
     --plate-border: #33333a;
     --ink: #ffffff;
@@ -88,12 +89,12 @@
     box-sizing: border-box;
   }
   /* 比赛结束后标记胜方 —— 只用一条内侧金线 + WIN，不改变比分数字颜色 */
-  .team.is-winner { box-shadow: inset 0 0 0 2px rgba(217, 164, 65, .62); }
+  .team.is-winner { box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), .62); }
   .team.is-winner::after {
     content: 'WIN';
     position: absolute; top: 5px;
     font-family: var(--mono); font-size: 11px; font-weight: 800;
-    letter-spacing: 2px; color: #d9a441;
+    letter-spacing: 2px; color: var(--gold);
   }
   .team-left.is-winner::after { left: 16px; }
   .team-right.is-winner::after { right: 16px; }
@@ -187,12 +188,12 @@
     flex-direction: row-reverse; border-right: 5px solid var(--right-color);
     padding: 0 0 0 28px;
   }
-  .plate.is-winner { box-shadow: inset 0 0 0 2px rgba(217, 164, 65, .55); }
+  .plate.is-winner { box-shadow: inset 0 0 0 2px rgba(var(--accent-rgb), .55); }
   .plate.is-winner::after {
     content: 'WIN';
     position: absolute; top: 7px;
     font-family: var(--mono); font-size: 10px; font-weight: 800;
-    letter-spacing: 2px; color: #d9a441;
+    letter-spacing: 2px; color: var(--gold);
   }
   .plate-left.is-winner::after { right: 12px; }
   .plate-right.is-winner::after { left: 12px; }
@@ -230,6 +231,7 @@
 </style>
   <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/shared/font.css">
+  <link rel="stylesheet" href="/shared/scene-light.css?v=20261026">
 </head>
 <body>
 <div id="stage">
@@ -271,6 +273,7 @@
   </div>
 </div>
 <script src="/shared/ws.js"></script>
+<script src="/shared/render-theme.js?v=20261026"></script>
 <script src="/render/score.js"></script>
 </body>
 </html>

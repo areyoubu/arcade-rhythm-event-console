@@ -322,6 +322,8 @@ function filterPatchForClients(path, value) {
   // 解说页 / 摄像头叠加的显示配置、赛程条、随机选曲大屏状态：
   // 渲染端也必须收到，否则 OBS 源无法热更新
   if (path === 'config.cast' || path.startsWith('config.cast.')
+      || path === 'config.theme' || path.startsWith('config.theme.')
+      || path === 'config.standby' || path.startsWith('config.standby.')
       || path === 'match.ticker' || path.startsWith('match.ticker.')
       || path === 'random.state' || path.startsWith('random.state.')
       || path === 'pickshow.state' || path.startsWith('pickshow.state.')) {

@@ -16,7 +16,7 @@
   },
   "obs": {
     "host": "127.0.0.1",
-    "port": 4444,
+    "port": 4455,
     "password": ""
   },
   "vmix": {
@@ -43,6 +43,13 @@
     "fallbackStartSec": 0,
     "volume": 0.8,
     "cacheLimitMB": 512
+  },
+  "cnMusic": {
+    "autoSync": false,
+    "intervalHours": 24,
+    "version": 24000,
+    "apiBase": "https://maimai.lxns.net",
+    "timeoutMs": 20000
   },
   "match": {
     "pickBaseUrl": "",
@@ -124,6 +131,20 @@
     "keepLastFrameOnDisconnect": true,
     "preloadImages": true
   },
+  "theme": {
+    "scheme": "default",
+    "style": "dark"
+  },
+  "standby": {
+    "eventName": "CHUNITHM TOURNAMENT",
+    "matchName": "比赛即将开始",
+    "matchTime": "",
+    "note": "欢迎来到现场 · 比赛即将开始 · 请选手就位",
+    "statusText": "STANDBY",
+    "showClock": true,
+    "showMascot": true,
+    "followMatch": false
+  },
   "templates": {
     "builtinDir": "./templates/builtin",
     "customDir": "./templates/custom",
@@ -132,7 +153,7 @@
   },
   "media": {
     "dir": "./media",
-    "maxFileSizeMB": 20,
+    "maxFileSizeMB": 5,
     "allowedTypes": [
       "png",
       "jpg",

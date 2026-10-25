@@ -19,12 +19,15 @@ export const DIFFICULTY_ORDER = ['basic', 'advanced', 'expert', 'master', 'ultim
 export const DIFFICULTY_NAMES = {
   basic: 'BASIC', advanced: 'ADVANCED', expert: 'EXPERT', master: 'MASTER', ultima: 'ULTIMA',
 };
+/** 定数来源：jp = 游戏 / 日服；cn = 公共 API / 国服 */
+export const LEVEL_SOURCES = ['jp', 'cn'];
+export const LEVEL_SOURCE_LABELS = { jp: '日服（游戏）', cn: '国服（API）' };
 /** 特殊谱面：WORLD'S END。默认不进随机池，需显式勾选。 */
 export const WE_KEY = 'we';
 export const WE_NAME = "WORLD'S END";
 export const WE_COLOR = '#b04ad9';
 const FALLBACK_COLORS = {
-  basic: '#00b050', advanced: '#e46c0a', expert: '#ff0000', master: '#7030a0', ultima: '#262626',
+  basic: '#3fb950', advanced: '#f0a000', expert: '#e53935', master: '#8e44e8', ultima: '#e11d74',
 };
 
 const collator = new Intl.Collator('zh-Hans', { numeric: true, sensitivity: 'base' });
@@ -36,11 +39,13 @@ const db = {
   updatedAt: '',
   source: '',
   sourceSheet: '',
+  levelSource: 'jp',
+  cnSync: null,
   songs: [],
   byId: new Map(),
   difficulties: {},
   genres: [],
-  counts: { songs: 0, cn: 0, covers: 0, we: 0 },
+  counts: { songs: 0, cn: 0, covers: 0, we: 0, jpLevels: 0, cnLevels: 0 },
 };
 
 function filePath() {
@@ -49,20 +54,34 @@ function filePath() {
 
 function applyData(raw) {
   const songs = Array.isArray(raw?.songs) ? raw.songs : [];
+  db.levelSource = LEVEL_SOURCES.includes(raw?.levelSource) ? raw.levelSource : 'jp';
+  db.cnSync = normalizeCnSync(raw?.cnSync);
   db.songs = songs
     .filter((s) => s && Number.isFinite(Number(s.id)) && s.name)
-    .map((s) => ({
-      id: Number(s.id),
-      name: String(s.name),
-      artist: String(s.artist || ''),
-      genre: String(s.genre || ''),
-      cn: s.cn !== false,
-      difficulties: normalizeDiffs(s.difficulties),
-      cover: safeCover(s.cover),
-      we: normalizeWe(s.we),
-      _name: norm(s.name),
-      _artist: norm(s.artist || ''),
-    }))
+    .map((s) => {
+      const legacy = normalizeDiffs(s.difficulties);
+      const levels = normalizeLevels(s.levels, legacy);
+      const effective = pickLevels(levels, db.levelSource, legacy);
+      const we = normalizeWe(s.we, db.levelSource);
+      return {
+        id: Number(s.id),
+        name: String(s.name),
+        artist: String(s.artist || ''),
+        genre: String(s.genre || ''),
+        cn: s.cn !== false,
+        cnReleaseDate: cleanDate(s.cnReleaseDate),
+        cnVersion: s.cnVersion === null || s.cnVersion === undefined || s.cnVersion === ''
+          ? null
+          : (Number.isFinite(Number(s.cnVersion)) ? Number(s.cnVersion) : null),
+        levels,
+        difficulties: effective,
+        cover: safeCover(s.cover),
+        we,
+        game: normalizeGame(s.game),
+        _name: norm(s.name),
+        _artist: norm(s.artist || ''),
+      };
+    })
     .sort((a, b) => collator.compare(a.name, b.name) || a.id - b.id);
   db.byId = new Map(db.songs.map((s) => [s.id, s]));
   db.difficulties = {};
@@ -98,20 +117,94 @@ function applyData(raw) {
     cn: db.songs.filter((s) => s.cn).length,
     covers: db.songs.filter((s) => s.cover).length,
     we: db.songs.filter((s) => s.we).length,
+    jpLevels: db.songs.filter((s) => Object.keys(s.levels.jp || {}).length).length,
+    cnLevels: db.songs.filter((s) => Object.keys(s.levels.cn || {}).length).length,
   };
   db.file = filePath();
   db.loaded = true;
 }
 
-/** WORLD'S END 特殊谱面：汉字 + 星数（1–10） */
-function normalizeWe(v) {
+function cleanDate(v) {
+  const s = String(v || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  // 游戏 Music.xml 的 releaseDate 常见格式是 YYYYMMDD
+  if (/^\d{8}$/.test(s)) return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+  return '';
+}
+
+function normalizeLevels(input, legacy) {
+  const jp = normalizeDiffs(input?.jp);
+  const cn = normalizeDiffs(input?.cn);
+  return {
+    jp: Object.keys(jp).length ? jp : { ...(legacy || {}) },
+    cn,
+  };
+}
+
+/** 当前来源的定数；缺失时回退到另一侧，避免切到国服后整库不可用 */
+function pickLevels(levels, source, legacy = {}) {
+  const primary = levels?.[source] || {};
+  if (Object.keys(primary).length) return { ...primary };
+  const other = source === 'cn' ? levels?.jp : levels?.cn;
+  if (other && Object.keys(other).length) return { ...other };
+  return { ...(legacy || {}) };
+}
+
+function normalizeCnSync(v) {
   if (!v || typeof v !== 'object') return null;
-  const kanji = String(v.kanji || '').trim().slice(0, 8);
-  const star = Math.round(Number(v.star));
-  if (!kanji || !Number.isFinite(star) || star < 1 || star > 10) return null;
+  return {
+    lastSyncAt: Number(v.lastSyncAt) || 0,
+    apiVersion: Number(v.apiVersion) || null,
+    source: String(v.source || 'lxns'),
+    songs: Number(v.songs) || 0,
+    updatedAt: Number(v.updatedAt) || 0,
+  };
+}
+
+function normalizeGame(v) {
+  if (!v || typeof v !== 'object') return null;
+  const source = String(v.source || '').slice(0, 60);
+  const musicDir = String(v.musicDir || '').slice(0, 300);
+  if (!source && !musicDir) return null;
+  return {
+    source,
+    musicDir,
+    jacket: String(v.jacket || '').slice(0, 200),
+    cueFile: String(v.cueFile || '').slice(0, 120),
+    releaseDate: cleanDate(v.releaseDate),
+    versionTitle: String(v.versionTitle || '').slice(0, 80),
+    exType: Number.isFinite(Number(v.exType)) ? Number(v.exType) : null,
+    disabled: v.disabled === true,
+  };
+}
+
+/**
+ * WORLD'S END 特殊谱面：汉字 + 星数（1–10）。
+ *
+ * 日服 / 国服的星级与汉字可能不同（国服可能晚开或不同版本），因此分别保存
+ * jpStar / cnStar / jpKanji / cnKanji；`kanji` / `star` 是当前来源的展示值。
+ */
+function normalizeWe(v, source = 'jp') {
+  if (!v || typeof v !== 'object') return null;
+  const jpKanji = String(v.jpKanji ?? v.kanji ?? '').trim().slice(0, 8);
+  const cnKanji = String(v.cnKanji ?? '').trim().slice(0, 8);
+  const jpStar = Math.round(Number(v.jpStar ?? v.star));
+  const cnStarRaw = Math.round(Number(v.cnStar));
+  const cnStar = Number.isFinite(cnStarRaw) && cnStarRaw >= 1 && cnStarRaw <= 10 ? cnStarRaw : null;
+  if (!jpKanji || !Number.isFinite(jpStar) || jpStar < 1 || jpStar > 10) return null;
+
+  const useCn = source === 'cn';
+  const kanji = (useCn && cnKanji) || jpKanji;
+  const star = (useCn && cnStar) || jpStar;
   return {
     kanji,
     star,
+    jpKanji,
+    cnKanji,
+    jpStar,
+    cnStar,
+    cn: v.cn === true,
+    cnReleaseDate: cleanDate(v.cnReleaseDate),
     noteDesigner: String(v.noteDesigner || '').slice(0, 120),
     originId: Number.isFinite(Number(v.originId)) ? Number(v.originId) : null,
     chartId: Number.isFinite(Number(v.chartId)) ? Number(v.chartId) : null,
@@ -181,6 +274,9 @@ export function meta() {
     updatedAt: db.updatedAt,
     source: db.source,
     sourceSheet: db.sourceSheet,
+    levelSource: db.levelSource,
+    levelSources: LEVEL_SOURCES.map((k) => ({ key: k, label: LEVEL_SOURCE_LABELS[k] })),
+    cnSync: db.cnSync ? { ...db.cnSync } : null,
     counts: { ...db.counts },
     difficulties: Object.fromEntries(DIFFICULTY_ORDER.map((k) => [k, { ...db.difficulties[k] }])),
     difficultyOrder: [...DIFFICULTY_ORDER],
@@ -199,10 +295,18 @@ export function view(song) {
     genre: song.genre,
     genreLabel: db.genres.find((g) => g.name === song.genre)?.label || song.genre,
     cn: song.cn,
+    cnReleaseDate: song.cnReleaseDate || '',
+    cnVersion: song.cnVersion ?? null,
     cover: song.cover || '',
+    levels: {
+      jp: { ...(song.levels?.jp || {}) },
+      cn: { ...(song.levels?.cn || {}) },
+    },
+    levelSource: db.levelSource,
     difficulties: { ...song.difficulties },
     we: song.we ? { ...song.we } : null,
     weText: song.we ? `${song.we.kanji}★${song.we.star}` : '',
+    game: song.game ? { ...song.game } : null,
     levelText: DIFFICULTY_ORDER
       .filter((k) => song.difficulties[k])
       .map((k) => `${DIFFICULTY_NAMES[k]} ${fmtLevel(song.difficulties[k])}`)
@@ -427,6 +531,15 @@ export function difficultyMeta(key) {
   return db.difficulties[key] ? { ...db.difficulties[key] } : null;
 }
 
+/** 全部常规难度的官方色映射（供渲染端给「难度列表」上色）。 */
+export function difficultyColors() {
+  const out = {};
+  for (const key of DIFFICULTY_ORDER) {
+    out[key] = db.difficulties[key]?.color || FALLBACK_COLORS[key];
+  }
+  return out;
+}
+
 export function difficultiesOf(id) {
   const s = get(id);
   if (!s) return null;
@@ -465,9 +578,17 @@ function plainSong(s) {
     artist: s.artist,
     genre: s.genre,
     cn: s.cn !== false,
+    cnReleaseDate: s.cnReleaseDate || '',
+    cnVersion: s.cnVersion ?? null,
     cover: s.cover || '',
+    levels: {
+      jp: { ...(s.levels?.jp || {}) },
+      cn: { ...(s.levels?.cn || {}) },
+    },
+    // 兼容仍在读 difficulties 的旧页面 / 脚本：写入当前来源的生效值
     difficulties: { ...s.difficulties },
     we: s.we ? { ...s.we } : null,
+    game: s.game ? { ...s.game } : null,
   };
 }
 
@@ -491,11 +612,15 @@ function buildRaw(songs) {
     updatedAt: new Date().toISOString(),
     source: db.source || 'manual',
     sourceSheet: db.sourceSheet || '',
+    levelSource: db.levelSource,
+    cnSync: db.cnSync ? { ...db.cnSync } : null,
     counts: {
       songs: list.length,
       cn: list.filter((s) => s.cn).length,
       covers: list.filter((s) => s.cover).length,
       we: list.filter((s) => s.we).length,
+      jpLevels: list.filter((s) => Object.keys(s.levels?.jp || {}).length).length,
+      cnLevels: list.filter((s) => Object.keys(s.levels?.cn || {}).length).length,
     },
     difficulties: Object.fromEntries(DIFFICULTY_ORDER.map((k) => [
       k,
@@ -514,6 +639,51 @@ function persist(raw) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, `${JSON.stringify(raw)}\n`, 'utf8');
   applyData(raw);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 定数来源 / 外部导入（游戏曲库 + 国服 API）
+// ─────────────────────────────────────────────────────────────
+
+export function getLevelSource() { return db.levelSource; }
+
+/** 切换日服 / 国服定数。只改生效值，不丢另一套数据。 */
+export function setLevelSource(source, actor = 'operator') {
+  if (!LEVEL_SOURCES.includes(source)) {
+    return nack('bad_source', '定数来源必须是 jp 或 cn');
+  }
+  if (db.levelSource === source) return { ok: true, source, meta: meta() };
+  db.levelSource = source;
+  const songs = db.songs.map(plainSong);
+  persist(buildRaw(songs));
+  log.audit('music', 'level-source', { source, actor });
+  return { ok: true, source, meta: meta() };
+}
+
+/** 所有曲目的原始记录（含 levels.jp / levels.cn / 国服元数据），供导入模块合并 */
+export function getRawSongs() {
+  return db.songs.map(plainSong);
+}
+
+/**
+ * 用外部模块计算出的曲目列表整体写回。
+ * 传入的每首歌应带 levels（jp/cn）；difficulties 会按当前来源重新计算。
+ */
+export function replaceSongs(songs, { actor = 'operator', reason = 'external', cnSync } = {}) {
+  if (!Array.isArray(songs)) return nack('bad_songs', '曲目列表格式不正确');
+  if (cnSync !== undefined) db.cnSync = normalizeCnSync(cnSync);
+  persist(buildRaw(songs));
+  log.audit('music', reason, { songs: songs.length, levelSource: db.levelSource, actor });
+  return { ok: true, meta: meta() };
+}
+
+/** 只更新国服同步元信息（没有曲目差异时使用） */
+export function setCnSync(patch, { actor = 'operator' } = {}) {
+  db.cnSync = normalizeCnSync({ ...(db.cnSync || {}), ...(patch || {}) });
+  const songs = db.songs.map(plainSong);
+  persist(buildRaw(songs));
+  log.audit('music', 'cn-sync-meta', { ...db.cnSync, actor });
+  return { ok: true, meta: meta() };
 }
 
 /**
@@ -538,6 +708,9 @@ export function addSong(input = {}, actor = 'operator') {
   const difficulties = normalizeDiffs(input.difficulties);
   if (!Object.keys(difficulties).length) return nack('no_difficulty', '至少填写一个难度定数');
 
+  const source = LEVEL_SOURCES.includes(input.levelSource) ? input.levelSource : db.levelSource;
+  const levels = { jp: {}, cn: {} };
+  levels[source] = difficulties;
   const songs = db.songs.map(plainSong);
   songs.push({
     id,
@@ -545,9 +718,15 @@ export function addSong(input = {}, actor = 'operator') {
     artist: cleanText(input.artist, 120),
     genre: cleanText(input.genre, 40),
     cn: input.cn !== false,
+    cnReleaseDate: cleanDate(input.cnReleaseDate),
+    cnVersion: input.cnVersion === null || input.cnVersion === undefined || input.cnVersion === ''
+      ? null
+      : (Number.isFinite(Number(input.cnVersion)) ? Number(input.cnVersion) : null),
     cover: safeCover(input.cover),
+    levels,
     difficulties,
-    we: normalizeWe(input.we),
+    we: normalizeWe(input.we, source),
+    game: null,
   });
   persist(buildRaw(songs));
   log.audit('music', 'song-add', { id, name, actor });
@@ -562,9 +741,14 @@ export function updateSong(id, patch = {}, actor = 'operator') {
 
   const name = patch.name !== undefined ? cleanText(patch.name, 120) : cur.name;
   if (!name) return nack('empty_name', '曲名不能为空');
-  const difficulties = patch.difficulties !== undefined
-    ? normalizeDiffs(patch.difficulties)
-    : { ...cur.difficulties };
+
+  const source = LEVEL_SOURCES.includes(patch.levelSource) ? patch.levelSource : db.levelSource;
+  const levels = {
+    jp: { ...(cur.levels?.jp || {}) },
+    cn: { ...(cur.levels?.cn || {}) },
+  };
+  if (patch.difficulties !== undefined) levels[source] = normalizeDiffs(patch.difficulties);
+  const difficulties = pickLevels(levels, db.levelSource, cur.difficulties);
   if (!Object.keys(difficulties).length) return nack('no_difficulty', '至少填写一个难度定数');
 
   const songs = db.songs.map(plainSong);
@@ -575,9 +759,17 @@ export function updateSong(id, patch = {}, actor = 'operator') {
     artist: patch.artist !== undefined ? cleanText(patch.artist, 120) : cur.artist,
     genre: patch.genre !== undefined ? cleanText(patch.genre, 40) : cur.genre,
     cn: patch.cn !== undefined ? !!patch.cn : cur.cn,
+    cnReleaseDate: patch.cnReleaseDate !== undefined ? cleanDate(patch.cnReleaseDate) : cur.cnReleaseDate,
+    cnVersion: patch.cnVersion !== undefined
+      ? (patch.cnVersion === null || patch.cnVersion === ''
+        ? null
+        : (Number.isFinite(Number(patch.cnVersion)) ? Number(patch.cnVersion) : null))
+      : cur.cnVersion,
     cover: patch.cover !== undefined ? safeCover(patch.cover) : (cur.cover || ''),
+    levels,
     difficulties,
-    we: patch.we !== undefined ? normalizeWe(patch.we) : (cur.we || null),
+    we: patch.we !== undefined ? normalizeWe(patch.we, source) : (cur.we || null),
+    game: cur.game || null,
   };
   persist(buildRaw(songs));
   log.audit('music', 'song-update', { id: numericId, name, actor });
@@ -615,21 +807,39 @@ export async function importBuffer(buffer, { actor = 'operator' } = {}) {
   } catch (e) {
     log.warn('music', '旧曲目库备份失败', { err: e.message });
   }
-  // 重新导入 xlsx 时保留已有封面（按曲目 ID 合并），避免一导入就全丢
-  const oldCovers = new Map(db.songs.map((s) => [s.id, s.cover || '']));
-  const oldWe = new Map(db.songs.map((s) => [s.id, s.we || null]));
-  const songs = data.songs.map((s) => ({
-    ...s,
-    cover: s.cover || oldCovers.get(s.id) || '',
-    we: s.we || oldWe.get(s.id) || null,
-  }));
+  // 重新导入 xlsx 时保留已有封面 / 国服定数 / 国服标记 / 游戏元数据（按曲目 ID 合并）
+  const old = new Map(db.songs.map((s) => [s.id, s]));
+  const songs = data.songs.map((s) => {
+    const prev = old.get(s.id);
+    const jp = normalizeDiffs(s.difficulties);
+    return {
+      ...s,
+      cn: prev ? prev.cn : s.cn !== false,
+      cnReleaseDate: prev?.cnReleaseDate || '',
+      cnVersion: prev?.cnVersion ?? null,
+      cover: s.cover || prev?.cover || '',
+      levels: { jp, cn: { ...(prev?.levels?.cn || {}) } },
+      difficulties: jp,
+      we: s.we || prev?.we || null,
+      game: prev?.game || null,
+    };
+  });
   const counts = {
     songs: songs.length,
     cn: songs.filter((s) => s.cn).length,
     covers: songs.filter((s) => s.cover).length,
     we: songs.filter((s) => s.we).length,
+    jpLevels: songs.filter((s) => Object.keys(s.levels?.jp || {}).length).length,
+    cnLevels: songs.filter((s) => Object.keys(s.levels?.cn || {}).length).length,
   };
-  persist({ ...data, songs, counts, updatedAt: new Date().toISOString() });
+  persist({
+    ...data,
+    songs,
+    counts,
+    levelSource: db.levelSource,
+    cnSync: db.cnSync ? { ...db.cnSync } : null,
+    updatedAt: new Date().toISOString(),
+  });
   log.audit('music', 'import', { songs: counts.songs, cn: counts.cn, covers: counts.covers, actor });
   return {
     ok: true,

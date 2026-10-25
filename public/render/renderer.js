@@ -101,6 +101,211 @@
   // A-REQ-536：握手日志，便于在 OBS 日志里排查
   console.log('[overlay] ready');
 
+  // ══════════════════════════════════════════════════════════
+  // 输出风格：明亮 / 暗（config.theme.style）
+  //
+  // 模板是「各写各的 CSS」的，所以这里不做 19 份重复模板，而是在生成模板 CSS 时
+  // 按颜色亮度 + 属性种类重映射：深色面板 → 半透明白面板，浅色文字 → 深色墨字，
+  // 强调色（高饱和）原样保留。模板热重载 / 新增模板都会自动获得明亮版。
+  // ══════════════════════════════════════════════════════════
+  const STYLE_FORCED = Q.get('style') === 'light' ? 'light'
+    : Q.get('style') === 'dark' ? 'dark' : null;
+  let STYLE_MODE = STYLE_FORCED || 'dark';
+  document.documentElement.dataset.style = STYLE_MODE;
+
+  /** 明亮皮肤的墨色 / 面板色（刻意不做纯白：叠加在机台画面上不能太抢） */
+  const LIGHT_INK = '#0d1a24';
+  const LIGHT_INK2 = '#33506a';
+  const LIGHT_INK3 = '#4a6579';
+  const LIGHT_HAIR = { r: 18, g: 52, b: 80 };
+  const LIGHT_SURFACE = { r: 252, g: 254, b: 255 };
+
+  const COLOR_RE = /#[0-9a-fA-F]{3,8}\b|rgba?\([^)]*\)/g;
+
+  function parseColor(raw) {
+    const s = String(raw || '').trim();
+    let m = /^#([0-9a-fA-F]{3,8})$/.exec(s);
+    if (m) {
+      let hex = m[1];
+      if (hex.length === 3) hex = hex.split('').map((c) => c + c).join('');
+      if (hex.length !== 6 && hex.length !== 8) return null;
+      const n = (i) => parseInt(hex.slice(i, i + 2), 16);
+      return { r: n(0), g: n(2), b: n(4), a: hex.length === 8 ? n(6) / 255 : 1 };
+    }
+    m = /^rgba?\(([^)]+)\)$/.exec(s);
+    if (m) {
+      const p = m[1].split(',').map((x) => x.trim());
+      if (p.length < 3) return null;
+      const num = (x) => Number.parseFloat(x);
+      if ([p[0], p[1], p[2]].some((x) => !Number.isFinite(num(x)))) return null;
+      return { r: num(p[0]), g: num(p[1]), b: num(p[2]), a: p[3] === undefined ? 1 : Math.max(0, Math.min(1, num(p[3]))) };
+    }
+    return null;
+  }
+  function cssColor(c) {
+    const r = Math.round(Math.max(0, Math.min(255, c.r)));
+    const g = Math.round(Math.max(0, Math.min(255, c.g)));
+    const b = Math.round(Math.max(0, Math.min(255, c.b)));
+    const a = Math.round(Math.max(0, Math.min(1, c.a ?? 1)) * 1000) / 1000;
+    return a >= 1 ? `rgb(${r},${g},${b})` : `rgba(${r},${g},${b},${a})`;
+  }
+  const hexToRgb = (hex) => parseColor(hex) || { r: 13, g: 26, b: 36, a: 1 };
+  const lumOf = (c) => (0.299 * c.r + 0.587 * c.g + 0.114 * c.b) / 255;
+  const satOf = (c) => (Math.max(c.r, c.g, c.b) - Math.min(c.r, c.g, c.b)) / 255;
+
+  /**
+   * 单个颜色的明亮化。
+   * @param {'bg'|'ink'|'line'|'shadow'|'glowText'} kind
+   */
+  function lightenColor(c, kind) {
+    if (!c || c.a < 0.03) return c;
+    const L = lumOf(c);
+    const S = satOf(c);
+    // 高饱和 = 品牌色 / 选手色 / 霓虹光，一律保留（只把过亮的文字色压一点）
+    const accent = S > 0.24 && L > 0.12 && L < 0.97;
+
+    if (kind === 'bg') {
+      if (accent) return c;
+      if (L >= 0.78) return c;                                  // 本来就是浅色面板
+      return { ...LIGHT_SURFACE, a: Math.min(0.90, Math.max(0.82, c.a || 0.88)) };
+    }
+    if (kind === 'ink') {
+      if (accent) return c;
+      const a = Math.max(0.82, c.a);
+      if (L >= 0.84) return { ...hexToRgb(LIGHT_INK), a };
+      if (L >= 0.58) return { ...hexToRgb(LIGHT_INK2), a };
+      if (L >= 0.34) return { ...hexToRgb(LIGHT_INK3), a };
+      return c;
+    }
+    if (kind === 'line') {
+      if (accent) return c;
+      return { ...LIGHT_HAIR, a: 0.22 };
+    }
+    if (kind === 'shadow') {
+      // 深色投影 → 冷灰柔影（不要黑糊糊一片）
+      if (L < 0.5 && S < 0.22) return { ...LIGHT_HAIR, a: Math.min(0.16, Math.max(0.06, c.a * 0.4)) };
+      return { ...c, a: Math.min(0.6, c.a * 0.55) };
+    }
+    if (kind === 'glowText') {
+      // 深色文字阴影 → 白色描边光：亮底与机台画面上都能读
+      if (L < 0.5 && S < 0.22) return { r: 255, g: 255, b: 255, a: 0.85 };
+      return { ...c, a: Math.min(0.55, c.a * 0.5) };
+    }
+    return c;
+  }
+
+  function replaceColors(value, kind) {
+    return String(value).replace(COLOR_RE, (raw) => {
+      const c = parseColor(raw);
+      if (!c) return raw;
+      return cssColor(lightenColor(c, kind));
+    });
+  }
+
+  /** 属性 → 颜色角色 */
+  function kindOfProp(prop) {
+    if (prop === 'background' || prop === 'background-color' || prop === 'background-image') return 'bg';
+    if (prop === 'color') return 'ink';
+    if (prop === 'box-shadow') return 'shadow';
+    if (prop === 'text-shadow') return 'glowText';
+    if (/^border(-(top|right|bottom|left))?$/.test(prop) || /^border-(top|right|bottom|left)-color$/.test(prop) || prop === 'outline' || prop === 'outline-color') return 'line';
+    return null;
+  }
+
+  /**
+   * 模板是不是「直接压在画面上」的（没有底板）。
+   *
+   * 判据：给文字配了**深色** text-shadow —— 这是模板作者为了让白字在任意画面上
+   * 都读得清而加的描边光，只有无底板的样式才会这么写。
+   * 这类模板在明亮风格下必须保持白字 + 深色描边，改成深色字反而看不清。
+   */
+  function isOverVideoCss(css) {
+    const shadows = String(css).match(/text-shadow:[^;}]*/g) || [];
+    for (const decl of shadows) {
+      for (const raw of decl.match(COLOR_RE) || []) {
+        const c = parseColor(raw);
+        if (c && c.a > 0.25 && lumOf(c) < 0.45 && satOf(c) < 0.25) return true;
+      }
+    }
+    return false;
+  }
+
+  /** 把一段模板 CSS 变成明亮版（逐条声明重映射颜色） */
+  function lightenCss(css, { keepInk = false } = {}) {
+    return String(css).replace(/([^{}]+)\{([^{}]*)\}/g, (whole, sel, decls) => {
+      const out = decls.split(';').map((decl) => {
+        const i = decl.indexOf(':');
+        if (i < 0) return decl;
+        const prop = decl.slice(0, i).trim().toLowerCase();
+        const kind = kindOfProp(prop);
+        if (!kind) return decl;
+        // 无底板模板：文字与描边光保持原样（白字 + 深色描边在任何画面上都成立）
+        if (keepInk && (kind === 'ink' || kind === 'glowText')) return decl;
+        return `${decl.slice(0, i + 1)}${replaceColors(decl.slice(i + 1), kind)}`;
+      }).join(';');
+      return `${sel}{${out}}`;
+    });
+  }
+
+  /**
+   * cssVars 里的近白色强调色（默认 #d9d9d9）在亮底上会糊掉，
+   * 只把「很亮且不太饱和」的值压到中等明度，选手色 / 品牌色不动。
+   */
+  function lightenVars(vars) {
+    const out = {};
+    for (const [k, v] of Object.entries(vars || {})) {
+      const c = parseColor(v);
+      if (!c || c.a < 0.5) { out[k] = v; continue; }
+      const L = lumOf(c);
+      const S = satOf(c);
+      if (S < 0.3 && L > 0.76) {
+        const k2 = 0.45 / L;
+        out[k] = cssColor({ r: c.r * k2, g: c.g * k2, b: c.b * k2, a: c.a });
+      } else {
+        out[k] = v;
+      }
+    }
+    return out;
+  }
+
+  function setStyleMode(mode) {
+    const next = STYLE_FORCED || (mode === 'light' ? 'light' : 'dark');
+    const changed = next !== STYLE_MODE;
+    STYLE_MODE = next;
+    document.documentElement.dataset.style = next;
+    if (changed) refreshAllTemplateCss();
+  }
+
+  /**
+   * 槽位值直接写进 CSS 变量时（强调色 / 选手色），近白色在亮底上会糊成一片，
+   * 明亮风格下压到中等明度；品牌色 / 选手色（有饱和度）保持原样。
+   */
+  function adaptiveVarValue(value) {
+    if (STYLE_MODE !== 'light') return String(value ?? '');
+    const c = parseColor(value);
+    if (!c) return String(value ?? '');
+    const L = lumOf(c);
+    const S = satOf(c);
+    if (S >= 0.3 || L <= 0.7) return String(value);
+    const k = 0.45 / Math.max(L, 0.001);
+    return cssColor({ r: c.r * k, g: c.g * k, b: c.b * k, a: c.a });
+  }
+
+  /** 风格切换后：全部模板样式 + 当前上屏模板的 shadow 样式都要重算 */
+  function refreshAllTemplateCss() {
+    for (const [id, t] of templates) {
+      const s = document.querySelector(`style[data-tpl="${cssEscape(id)}"]`);
+      if (s) s.textContent = buildTemplateCss(t);
+    }
+    const sr = current?.host?.shadowRoot;
+    if (sr && current?.tpl) {
+      const s = sr.querySelector('style');
+      if (s) s.textContent = buildTemplateCss(current.tpl);
+      // 强调色是写在行内样式里的，样式表换了也得重新套一遍
+      applyValues(current.shadow, current.tpl, current.values);
+    }
+  }
+
   // ── 服务端 → 渲染端 ──────────────────────────────────────
   ws.on('overlay:hello', (m) => {
     if (m.templates) applyTemplateList(m.templates);
@@ -162,7 +367,9 @@
   ws.on('hello', (m) => {
     const st = m.state || {};
     if (st.overlay?.mode) setMode(st.overlay.mode, st.overlay.modeLabel);
+    setStyleMode(st.config?.theme?.style || 'dark');
   });
+  ws.watch?.('config.theme.style', (v) => setStyleMode(v || 'dark'));
 
   // 兜底：HTTP 拉一次模板表（WS 尚未连上时也能先渲染）
   if (IS_PREVIEW) {
@@ -215,9 +422,19 @@
 
   /** A-REQ-211 CSS 变量 + A-REQ-212 自定义 CSS 片段注入 + 自定义动画 */
   function buildTemplateCss(t) {
-    const vars = Object.entries(t.cssVars || {}).map(([k, v]) => `${k}:${v};`).join('');
+    const light = STYLE_MODE === 'light';
+    const vars = Object.entries(light ? lightenVars(t.cssVars) : (t.cssVars || {}))
+      .map(([k, v]) => `${k}:${v};`).join('');
+    const baseCss = t.css || '';
     const caster = keyframesCss(t);
-    return `${caster}\n[tpl="${t.id}"]{${vars}}\n${t.css || ''}`;
+    if (!light) return `${caster}\n[tpl="${t.id}"]{${vars}}\n${baseCss}`;
+    /*
+     * 明亮风格额外补一条「无阴影面板」的柔影。
+     * :where() = 零优先级，模板自己写了 box-shadow（霓虹发光等）时不会被覆盖，
+     * 只给原本没有任何阴影的白面板一个边界，避免叠在亮画面上糊成一片。
+     */
+    const skin = ':where([class$="-panel"],[class$="-card"]){box-shadow:0 10px 26px rgba(18,52,80,.16);}';
+    return `${caster}\n[tpl="${t.id}"]{${vars}}\n${lightenCss(baseCss, { keepInk: isOverVideoCss(baseCss) })}\n${skin}`;
   }
 
   function removeStyle(id) {
@@ -407,7 +624,7 @@
       for (const p of pairs) {
         const [varName, key] = p.split(':').map((s) => s.trim());
         if (key === slot && varName?.startsWith('--')) {
-          node.style.setProperty(varName, String(value ?? ''));
+          node.style.setProperty(varName, adaptiveVarValue(value));
           varHits++;
         }
       }
@@ -427,7 +644,7 @@
 
     if (kind.startsWith('stylevar:')) {
       const varName = kind.slice('stylevar:'.length);
-      node.style.setProperty(varName, String(value ?? ''));
+      node.style.setProperty(varName, adaptiveVarValue(value));
       return;
     }
     if (kind.startsWith('attr:')) {
@@ -463,7 +680,7 @@
       const pairs = String(node.dataset.setVar).split(',').map((s) => s.trim()).filter(Boolean);
       for (const p of pairs) {
         const [varName, key] = p.split(':').map((s) => s.trim());
-        if (varName?.startsWith('--')) node.style.setProperty(varName, String(values[key] ?? ''));
+        if (varName?.startsWith('--')) node.style.setProperty(varName, adaptiveVarValue(values[key]));
       }
     }
   }
@@ -861,6 +1078,10 @@
     }
     .ov-replay-badge .dot{width:10px;height:10px;border-radius:50%;background:#c04c4c;
       animation:ov-blink 1.2s ease-in-out infinite;}
+    /* 明亮风格下，回放标识也要在白底上读得清 */
+    html[data-style="light"] .ov-replay-badge{
+      background:rgba(255,255,255,.92);border-color:#c0392b;color:#8f1f14;
+      box-shadow:0 10px 30px rgba(18,52,80,.18);}
     @keyframes ov-blink{0%,100%{opacity:1}50%{opacity:.25}}
     .ov-guides{position:fixed;inset:0;pointer-events:none;z-index:9999;
       font:12px/1.4 ui-monospace,Consolas,monospace;color:rgba(255,255,255,.5);}

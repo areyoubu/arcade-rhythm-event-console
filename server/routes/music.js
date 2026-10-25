@@ -21,6 +21,8 @@ import path from 'node:path';
 import { respond } from './http.js';
 import { ROOT } from '../config.js';
 import * as music from '../music.js';
+import * as cnMusic from '../cn-music.js';
+import * as gameMusic from '../game-music.js';
 import * as log from '../logger.js';
 
 const upload = multer({
@@ -39,7 +41,8 @@ export default function musicRoutes() {
   const r = express.Router();
 
   r.get('/music/meta', (req, res) => {
-    res.json({ ok: true, ...music.meta() });
+    // 这是公开接口（手机选曲页也会读）：不带待确认补丁内容，避免把内部 diff 发到公网
+    res.json({ ok: true, ...music.meta(), cn: cnMusic.status() });
   });
 
   r.get('/music', (req, res) => {
@@ -63,7 +66,7 @@ export default function musicRoutes() {
       limit: Number(limit) || 60,
       offset: Number(offset) || 0,
     });
-    res.json({ ok: true, ...out, meta: music.meta() });
+    res.json({ ok: true, ...out, meta: { ...music.meta(), cn: cnMusic.status() } });
   });
 
   r.get('/music/:id', (req, res) => {
@@ -73,6 +76,40 @@ export default function musicRoutes() {
   });
 
   // ── 管理端 ──
+  r.post('/music/level-source', (req, res) => {
+    const body = req.body || {};
+    respond(res, music.setLevelSource(body.source, body.actor || 'operator'));
+  });
+
+  /** 从本地游戏目录导入曲目信息 / 日服定数 / 曲绘 */
+  r.post('/music/game/import', async (req, res) => {
+    const body = req.body || {};
+    try {
+      respond(res, await gameMusic.importGameMusic({ actor: body.actor || 'operator' }));
+    } catch (e) {
+      log.warn('music', '游戏曲目导入失败', { err: e.message });
+      res.status(500).json({ ok: false, nack: { code: 'game_import_failed', msg: e.message } });
+    }
+  });
+
+  /** 拉取国服曲目/定数；有变化时只返回待确认补丁 */
+  r.post('/music/cn/sync', async (req, res) => {
+    const body = req.body || {};
+    respond(res, await cnMusic.syncNow({ actor: body.actor || 'operator', source: 'manual' }));
+  });
+
+  r.post('/music/cn/confirm', (req, res) => {
+    respond(res, cnMusic.confirmPending(req.body?.actor || 'operator'));
+  });
+
+  r.post('/music/cn/discard', (req, res) => {
+    respond(res, cnMusic.discardPending(req.body?.actor || 'operator'));
+  });
+
+  r.get('/music/cn/status', (req, res) => {
+    res.json({ ok: true, ...cnMusic.status({ includePending: true }) });
+  });
+
   r.post('/music/songs', (req, res) => {
     const { actor, ...input } = req.body || {};
     respond(res, music.addSong(input, actor || 'operator'));

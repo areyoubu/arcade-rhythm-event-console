@@ -130,6 +130,14 @@ export default function matchRoutes() {
   r.post('/match/mode', (req, res) => respond(res, match.setMode(req.body?.mode, req.body?.actor || 'operator')));
   r.post('/match/finish', (req, res) => respond(res, match.finish(req.body?.actor || 'operator')));
   r.post('/match/history/clear', (req, res) => respond(res, match.clearHistory(req.body?.actor || 'operator')));
+  /**
+   * 重置局号 —— 只改「下一个自动局号」，不删历史。
+   * 彩排留下十几场记录后，正式比赛从这里回到第 1 局。
+   */
+  r.post('/match/sequence', (req, res) => respond(res, match.resetRoundSeq(
+    req.body?.next ?? req.body?.start ?? 1,
+    req.body?.actor || 'operator',
+  )));
   r.post('/match/upcomingPicks/clear', (req, res) => respond(res, match.clearUpcomingPicks(req.body?.actor || 'operator')));
 
   // ── 曲目行 ──

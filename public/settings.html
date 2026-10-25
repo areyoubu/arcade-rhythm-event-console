@@ -84,6 +84,22 @@
   }
   .toc a:hover { background: var(--surface-3); color: var(--text); text-decoration: none; }
   .toc a.on { background: rgba(255,255,255,.10); color: #fff; }
+  /* 目录里的一级分类 */
+  .toc .toc-tier {
+    margin: 10px 0 3px; padding: 0 10px;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .1em;
+    color: var(--text-mute);
+  }
+  .toc .toc-tier:first-child { margin-top: 2px; }
+  /* 正文里的一级分类标题 */
+  .tier-head {
+    display: flex; align-items: baseline; gap: 10px;
+    margin: 6px 0 -4px; padding: 0 2px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  .tier-head b { font-size: 14px; letter-spacing: .04em; }
+  .tier-head span { font-size: 11.5px; color: var(--text-mute); }
+  .tier-head:not(:first-child) { margin-top: 22px; }
 </style>
   <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/shared/font.css">
@@ -167,7 +183,27 @@
 
     const toc = document.getElementById('toc');
 
-    for (const g of SCHEMA.groups) {
+    /*
+     * 按一级分类（tier）分块渲染：常用 / 设备与连接 / 直播画面 / 比赛与互动 /
+     * 回放与转场 / 数据与日志。以前 20 多个分区平铺，找一项要滚很久。
+     */
+    const tiers = SCHEMA.tiers || [{ id: null, label: '', desc: '' }];
+    const tierOf = (g) => (SCHEMA.tiers || []).find((t) => t.id === g.tier);
+
+    for (const tier of tiers) {
+      const groups = SCHEMA.groups.filter((g) => (tier.id ? g.tier === tier.id : true));
+      const visible = groups.filter((g) => SCHEMA.fields.some((f) => f.group === g.id));
+      if (!visible.length) continue;
+
+      if (tier.label) {
+        mainCol.append(el('div', { class: 'tier-head' },
+          el('b', { text: tier.label }),
+          tier.desc ? el('span', { text: tier.desc }) : null,
+        ));
+        toc.append(el('div', { class: 'toc-tier', text: tier.label }));
+      }
+
+      for (const g of visible) {
       const fields = SCHEMA.fields.filter((f) => f.group === g.id);
       if (!fields.length) continue;
 
@@ -211,6 +247,7 @@
       cards.set(g.id, card);
 
       toc.append(el('a', { href: `#${g.id}`, text: g.label, onclick: (e) => { e.preventDefault(); jumpTo(g.id); } }));
+      }
     }
 
     syncDirty();
@@ -497,6 +534,17 @@
             el('span', { class: 'small muted', text: '试听使用已保存的设置；修改目录后请先保存。' })),
         );
       }
+      case 'cnMusic':
+        return el('div', null,
+          el('div', { class: 'note info', html:
+            '国服曲目与定数来自 <a href="https://maimai.lxns.net/docs/api/chunithm" target="_blank" rel="noopener">LXNS 公共 API</a>。'
+            + '自动同步只会在后台拉取并生成「待确认更新」，仍需在 <a href="/music">曲目库</a> 弹窗里手动确认后才会写入。'
+            + '<br>日服定数与曲绘来自本地游戏目录，目录在「游戏音频」分区设置；导入入口也在 <a href="/music">曲目库</a>。' }),
+          el('div', { class: 'inline mt12' },
+            el('a', { class: 'btn sm', href: '/music', text: '打开曲目库 →' }),
+            el('span', { class: 'small muted', text: '在曲目库可切换日服 / 国服定数、导入游戏曲目、手动同步国服数据。' }),
+          ),
+        );
       case 'transitions':
         return el('div', null,
           el('div', { class: 'inline' },

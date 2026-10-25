@@ -17,7 +17,7 @@ import {
 } from '../server/image-validate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const REAL_PNG = fs.readFileSync(path.join(ROOT, 'assets', '直播间模板.png'));
+const REAL_PNG = fs.readFileSync(path.join(ROOT, 'assets', 'layouts', '直播间模板.png'));
 
 test('★ 真实 PNG：magic、结构、解码尺寸都通过', async () => {
   assert.deepEqual(sniffImage(REAL_PNG), { format: 'png', ext: 'png', mime: 'image/png' });

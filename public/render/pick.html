@@ -56,7 +56,7 @@
     padding: 4px 10px; border: 1px solid var(--line); color: var(--ink-mute);
   }
   .status.live { color: #8fc7a2; border-color: #345641; }
-  .status.finished { color: var(--gold); border-color: #5a4a22; }
+  .status.finished { color: var(--gold); border-color: var(--accent-border); }
 
   .main { display: grid; grid-template-columns: 460px minmax(0, 1fr); gap: 28px; padding: 26px 30px 24px; }
   .qr-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
@@ -74,7 +74,7 @@
     width: 34px; height: 34px; flex: 0 0 auto;
     display: flex; align-items: center; justify-content: center;
     font-family: var(--mono); font-size: 15px; font-weight: 800;
-    color: var(--gold); border: 1px solid #5a4a22;
+    color: var(--gold); border: 1px solid var(--accent-border);
   }
   .step .txt { font-size: 17px; color: var(--ink-dim); line-height: 1.45; }
   .step .txt b { color: var(--ink); }
@@ -123,6 +123,7 @@
 </style>
   <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/shared/font.css">
+  <link rel="stylesheet" href="/shared/scene-light.css?v=20261026">
 </head>
 <body>
 <div id="stage">
@@ -178,6 +179,7 @@
   </div>
 </div>
 <script src="/shared/ws.js"></script>
+<script src="/shared/render-theme.js?v=20261026"></script>
 <script src="/render/pick.js"></script>
 </body>
 </html>

@@ -91,12 +91,37 @@ kbd {
   font-weight: 700; font-size: 13px; letter-spacing: .06em; white-space: nowrap;
 }
 .topbar .brand .dot { width: 9px; height: 9px; background: var(--accent); display: inline-block; }
-.topbar nav { display: flex; gap: 2px; flex-wrap: wrap; align-items: center; }
-/* 顶栏按「直播图形 / 比赛 / 互动 / 播控 / 系统」分组，用细线分隔 */
-.topbar nav .nav-sep {
-  width: 1px; height: 15px; flex: 0 0 auto;
-  background: var(--border); margin: 0 4px;
+.topbar nav { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/*
+ * 导航分组：每个分类是一个带小标题的块。
+ * 早期只有 1px 竖线分隔，条目一多（叠加/模板/媒体/人物/致谢…）就看不出从哪开始算另一类，
+ * 所以这里给每组一个底色块 + 一眼能读到的小标题，当前页所在组整体高亮。
+ */
+.topbar nav .nav-group {
+  display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px 8px 2px 6px; border-radius: 4px;
+  background: rgba(255, 255, 255, .028);
+  border: 1px solid var(--border);
+  transition: background .12s, border-color .12s;
 }
+.topbar nav .nav-group[hidden] { display: none !important; }
+.topbar nav .nav-group-label {
+  display: inline-flex; align-items: center; gap: 5px;
+  margin-right: 4px; padding-right: 8px;
+  font-size: 11px; font-weight: 800; letter-spacing: .06em;
+  color: var(--text-dim); white-space: nowrap;
+  border-right: 1px solid var(--border);
+}
+.topbar nav .nav-group-label::before {
+  content: ''; width: 5px; height: 5px; flex: 0 0 auto;
+  background: var(--text-mute);
+}
+.topbar nav .nav-group.has-active {
+  background: rgba(74, 158, 255, .09);
+  border-color: rgba(74, 158, 255, .38);
+}
+.topbar nav .nav-group.has-active .nav-group-label { color: var(--accent); }
+.topbar nav .nav-group.has-active .nav-group-label::before { background: var(--accent); }
 .topbar nav a {
   padding: 6px 10px; border-radius: 3px; color: var(--text-dim);
   font-weight: 600; font-size: 12.5px; white-space: nowrap;
@@ -436,6 +461,18 @@ table.tbl td.num, table.tbl th.num { text-align: right; font-family: var(--mono)
 }
 .tabs button:hover { color: var(--text); }
 .tabs button.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+/* ── OBS 输出预览 / 输出地址行（控制页共用） ─────────────── */
+.preview-frame {
+  width: 100%; aspect-ratio: 16 / 9; border: 0; display: block;
+  background: #0b0b0b; border-radius: var(--radius);
+}
+.out-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.out-url {
+  flex: 1; min-width: 220px; font-family: var(--mono); font-size: 11.5px;
+  color: var(--text-mute); background: #17181b; border: 1px solid var(--border);
+  border-radius: 3px; padding: 5px 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 
 /* ── 工具类 ─────────────────────────────────────────────── */
 .muted { color: var(--text-mute); }

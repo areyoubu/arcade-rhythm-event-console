@@ -342,3 +342,85 @@ test('每个页面都必须有 <title> 与 viewport（移动端/浏览器源都�
     assert.match(html, /name=["']viewport["']/, `${f} 缺少 viewport`);
   }
 });
+
+test('★ 直播待机画面：整屏场景 + 动态背景 + 抠好的看板娘', () => {
+  const html = readPage('render/standby.html');
+  const visible = html.replace(/<!--[\s\S]*?-->/g, '');
+  assert.match(visible, /standby-bg\.mp4/, '背景必须用生成的动态 mp4');
+  assert.match(visible, /standby-bg\.png/, '必须有静态 PNG 兜底（视频解码失败时）');
+  assert.match(visible, /<video[^>]*autoplay[^>]*muted[^>]*loop/i,
+    '背景视频必须自动播放、静音、循环');
+  assert.match(visible, /standby-mascot\.png/, '必须引用抠好的看板娘立绘');
+  assert.match(visible, /background:\s*#f3f9fd/i, '待机画面是明亮整屏场景，需要不透明底色');
+  assert.ok(!/background\s*:\s*transparent/i.test(visible), '待机画面不是透明叠加');
+  assert.ok(!/(渲染失败|加载失败|出错了|Error:)/.test(visible), '画面里不能出现用户可见的错误文案');
+
+  // 三份素材必须真的在仓库里，否则 OBS 源打开就是一片空白（assets/ 已按用途分目录）
+  for (const f of ['backgrounds/light/standby-bg.mp4', 'backgrounds/light/standby-bg.png', 'mascot/standby-mascot.png']) {
+    const file = path.join(ROOT, 'assets', f);
+    assert.ok(fs.existsSync(file), `缺少素材 assets/${f}（运行 tools/make-standby-*.mjs 生成）`);
+    assert.ok(fs.statSync(file).size > 1024, `assets/${f} 是空文件`);
+  }
+});
+
+test('★ 待机画面页面在服务端登记过，并已加入输出页目录', () => {
+  assert.ok(SERVER_PAGES.some((p) => p.path === '/render/standby'),
+    'server/pages.js 缺少 /render/standby');
+  const ui = fs.readFileSync(path.join(SHARED, 'ui.js'), 'utf8');
+  assert.match(ui, /href: '\/render\/standby'/, 'CATALOG 里应登记待机画面，输出页才能看到地址');
+});
+
+test('★ 明亮风格：渲染端皮肤 + 场景背景切换 + 配套素材齐全', () => {
+  const renderer = fs.readFileSync(path.join(PUBLIC, 'render', 'renderer.js'), 'utf8');
+  assert.match(renderer, /function lightenCss/, '渲染端缺少明亮皮肤的颜色重映射');
+  assert.match(renderer, /config\.theme\.style/, '渲染端必须跟随 theme.style');
+  assert.match(renderer, /function isOverVideoCss/, '需要识别「无底板」模板，避免深色字压在画面上');
+
+  const sceneBg = fs.readFileSync(path.join(SHARED, 'scene-bg.js'), 'utf8');
+  assert.match(sceneBg, /light-background\.mp4/, '场景背景脚本必须切到明亮背景');
+  assert.match(sceneBg, /config\.theme\.style/, '场景背景必须跟随 theme.style');
+
+  for (const f of ['render/match.html', 'render/random.html', 'render/pickshow.html', 'render/prize.html']) {
+    const html = readPage(f);
+    assert.ok(html.includes('/shared/scene-bg.js'), `${f} 缺少背景切换脚本`);
+    assert.ok(html.includes('/shared/scene-light.css'), `${f} 缺少明亮风格的样式表`);
+  }
+
+  for (const f of [
+    'backgrounds/light/light-bg.mp4',
+    'backgrounds/light/light-bg.png',
+    'backgrounds/light/light-bg-dim.mp4',
+    'backgrounds/light/light-bg-dim.png',
+    'transitions/transition-light.webm',
+    'transitions/transition-light-preview.png',
+  ]) {
+    const file = path.join(ROOT, 'assets', f);
+    assert.ok(fs.existsSync(file), `缺少素材 assets/${f}`);
+    assert.ok(fs.statSync(file).size > 1024, `assets/${f} 是空文件`);
+  }
+});
+
+test('★ 明亮风格：整屏场景有自己的浅色皮肤，且素材齐全', () => {
+  const css = fs.readFileSync(path.join(SHARED, 'scene-light.css'), 'utf8');
+  // 场景页必须引入浅色皮肤，且覆盖到「压暗遮罩」——否则浅底会被压成脏灰
+  for (const f of ['render/match.html', 'render/random.html', 'render/pickshow.html',
+    'render/prize.html', 'render/score.html', 'render/pick.html', 'render/lottery.html',
+    'render/castcam.html', 'cast.html']) {
+    const html = f === 'cast.html' ? fs.readFileSync(path.join(PUBLIC, 'cast.html'), 'utf8') : readPage(f);
+    assert.ok(html.includes('/shared/scene-light.css'), `${f} 缺少明亮皮肤样式表`);
+  }
+  assert.match(css, /html\[data-style="light"\] \.bg-shade/, '缺少压暗遮罩的浅色覆盖');
+  assert.match(css, /html\[data-style="light"\] \.shade/, '奖品大屏的 .shade 也要覆盖');
+
+  // 渲染端的明亮皮肤
+  const theme = fs.readFileSync(path.join(SHARED, 'render-theme.js'), 'utf8');
+  assert.match(theme, /LIGHT_VARS/, '主题脚本必须翻转深/浅中性色');
+  assert.match(theme, /'--ink': '#0e1b26'/, '明亮风格的正文色应为深墨色');
+
+  // 布局模板的两个明亮版本
+  for (const f of ['layouts/直播间模板-明亮.png', 'layouts/直播间模板-明亮-降亮.png']) {
+    const file = path.join(ROOT, 'assets', f);
+    assert.ok(fs.existsSync(file), `缺少素材 assets/${f}（运行 tools/_liveroom.mjs 生成）`);
+    assert.ok(fs.statSync(file).size > 1024, `assets/${f} 是空文件`);
+  }
+});

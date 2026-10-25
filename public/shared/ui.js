@@ -264,13 +264,21 @@
    *   qr          'lottery' | 'match'（公共页的二维码接口）
    */
   const CATALOG = [
+    /*
+     * 顶栏分组口径：按「操作场景」分，不按实现模块分。
+     *   画面  —— 上屏的图形与整屏场景（开播前 / 节目中都会用到）
+     *   比赛  —— 计分、选曲与比分条
+     *   播控  —— 导播、解说、话术、回放与转场
+     *   互动  —— 抽奖与现场签到
+     *   资源  —— 人物、媒体、曲库（赛前准备，不是直播中的操作）
+     *   系统  —— 输出地址、日志与设置
+     */
     {
-      id: 'live', label: '直播图形', desc: '叠加、模板、媒体、人物与致谢',
+      id: 'live', label: '画面', desc: '开播前后的整屏场景与叠加图形',
       items: [
+        { href: '/standby', label: '待机', title: '直播待机画面', desc: '赛事名 / 比赛名称 / 比赛时间 / 滚动公告 · 动态背景 + 看板娘 · 输出预览与地址', badge: 'A' },
         { href: '/overlay', label: '叠加', title: '叠加主控制台', desc: '模板选择 · 实体填充 · 槽位热改 · 预览 / 输出分离 · 队列与撤销', badge: 'A' },
         { href: '/templates', label: '模板', title: '模板管理', desc: '槽位编辑 · schema 校验 · 热重载实时预览', badge: 'A' },
-        { href: '/media', label: '媒体', title: '媒体库', desc: '上传 / 缩略图 / 引用检查 / 目录直投自动索引', badge: 'A' },
-        { href: '/people', label: '人物', title: '人物与角色', desc: '队伍 / 选手 / 解说·导播 / 赞助商统一管理，选手按队伍分组', badge: 'A' },
         { href: '/credits', label: '致谢', title: '感谢列表', desc: '滚动 / 网格 · 拖拽排序 · 按标签导入 · 时长预估', badge: 'A' },
         {
           id: 'render-main', kind: 'render', href: '/render/main', label: '主叠加源', title: '主叠加（浮窗-主）',
@@ -284,28 +292,21 @@
           badge: 'A', nav: false, size: '1920×1080', layer: '透明叠加',
           open: 'preview', previewHref: '/render/credits?preview=1',
         },
+        {
+          id: 'render-standby', kind: 'render', href: '/render/standby', label: '待机画面', title: '直播待机画面（/render/standby）',
+          desc: '整屏场景：明亮科技风 · 动态背景 + 看板娘 · 赛事名 / 比赛名称 / 比赛时间 / 滚动公告',
+          target: 'standby', badge: 'A', nav: false, size: '1920×1080', layer: '整屏场景',
+          open: 'preview', previewHref: '/render/standby?preview=1&fit=1',
+        },
       ],
     },
     {
-      id: 'match', label: '比赛', desc: '计分、比分条与比赛画面',
+      id: 'match', label: '比赛', desc: '计分、选曲与比分条',
       items: [
-        { href: '/match', label: '比赛', title: '比赛计分', desc: '1–4 首自适应 · 总分 / 小局制 · 曲目与难度 · Ban · 扫码选曲 · 历史', badge: 'F' },
-        { href: '/random', label: '随机选曲', title: '随机选曲大屏', desc: '全屏滚动随机 · 缓停后放大曲绘与曲目信息 · 可应用到比赛', badge: 'F' },
-        { href: '/pickshow', label: '选曲展示', title: '选手选曲展示', desc: '手机选歌器 → 选曲队列 · P1/P2/同时 · 每人 2 首或 4 首', badge: 'F' },
-        {
-          id: 'render-pickshow', kind: 'render', href: '/render/pickshow', label: '选曲大屏', title: '选手选曲展示（/render/pickshow）',
-          desc: '整屏场景：展示 P1 / P2 / 同时的选曲，支持 2 首 / 4 首布局',
-          target: 'pickshow', badge: 'F', nav: false, size: '1920×1080', layer: '整屏场景',
-          open: 'preview', previewHref: '/render/pickshow?preview=1&fit=1',
-        },
-        {
-          id: 'render-random', kind: 'render', href: '/render/random', label: '随机大屏', title: '随机选曲大屏（/render/random）',
-          desc: '整屏场景：右向左滚动抽选，抽中后放大曲绘与详情；动态 / 静态背景可选',
-          target: 'random', badge: 'F', nav: false, size: '1920×1080', layer: '整屏场景',
-          open: 'preview', previewHref: '/render/random?preview=1&fit=1',
-        },
-        { href: '/music', label: '曲目库', title: '曲目库管理', desc: '曲目增改删 · 难度定数 · 国服标记 · 上传 xlsx 全量更新', badge: 'F' },
-        { href: '/scoreboard', label: '比分', title: '比分条', desc: '常驻比分 + P1/P2 选手牌 · 加一减一暂存确认 · 布局与分件输出', badge: 'D' },
+        { href: '/match', label: '计分', title: '比赛计分', desc: '1–4 首自适应 · 总分 / 小局制 · 曲目与难度 · Ban · 扫码选曲 · 历史', badge: 'F' },
+        { href: '/random', label: '随机', title: '随机选曲大屏', desc: '全屏滚动随机 · 缓停后放大曲绘与曲目信息 · 可应用到比赛', badge: 'F' },
+        { href: '/pickshow', label: '选曲', title: '选手选曲展示', desc: '手机选歌器 → 选曲队列 · P1/P2/同时 · 每人 2 首或 4 首', badge: 'F' },
+        { href: '/scoreboard', label: '比分条', title: '比分条', desc: '常驻比分 + P1/P2 选手牌 · 加一减一暂存确认 · 布局与分件输出', badge: 'D' },
         {
           id: 'render-match', kind: 'render', href: '/render/match', label: '总比分', title: '总比分画面',
           desc: '独立整屏场景 · 复用直播间动态背景 · 每首曲目 / 双方成绩 / 胜负',
@@ -315,6 +316,18 @@
           id: 'render-score', kind: 'render', href: '/render/score', label: '比分条源', title: '比分条 / 选手牌',
           desc: '比分条 + 两块选手牌常驻叠加；也可以拆成三路分件', target: 'score',
           badge: 'D', nav: false, size: '1920×1080', layer: '透明叠加', open: 'window',
+        },
+        {
+          id: 'render-random', kind: 'render', href: '/render/random', label: '随机大屏', title: '随机选曲大屏（/render/random）',
+          desc: '整屏场景：右向左滚动抽选，抽中后放大曲绘与详情；动态 / 静态背景可选',
+          target: 'random', badge: 'F', nav: false, size: '1920×1080', layer: '整屏场景',
+          open: 'preview', previewHref: '/render/random?preview=1&fit=1',
+        },
+        {
+          id: 'render-pickshow', kind: 'render', href: '/render/pickshow', label: '选曲大屏', title: '选手选曲展示（/render/pickshow）',
+          desc: '整屏场景：展示 P1 / P2 / 同时的选曲，支持 2 首 / 4 首布局',
+          target: 'pickshow', badge: 'F', nav: false, size: '1920×1080', layer: '整屏场景',
+          open: 'preview', previewHref: '/render/pickshow?preview=1&fit=1',
         },
         {
           id: 'render-pick', kind: 'render', href: '/render/pick', label: '选曲二维码', title: '选曲二维码大屏',
@@ -329,7 +342,29 @@
       ],
     },
     {
-      id: 'interactive', label: '互动', desc: '抽奖、签到与现场互动',
+      id: 'playout', label: '播控', desc: '导播、解说、话术、回放与转场',
+      items: [
+        { href: '/director', label: '导播', title: '导播页', desc: '编排倒计时 · 回执看板 · 转场大提醒', badge: 'C' },
+        { href: '/commentary', label: '解说', title: '解说控制台', desc: '解说提示叠加 + 解说摄像头叠加 · 两路预览与配置', badge: 'C' },
+        { href: '/cues', label: '话术', title: '话术模板', desc: '内置话术 · 变量插值 · 自定义', badge: 'C' },
+        { href: '/replay', label: '回放', title: '回放控制器', desc: '13 个功能区 / 151 个 vMix 函数', badge: 'B', feature: 'replay' },
+        { href: '/transitions', label: '转场', title: 'OBS 转场', desc: '转场切换 · 场景覆盖 · 防穿帮方案', badge: 'B', feature: 'transitions' },
+        {
+          id: 'cast-source', kind: 'render', href: '/cast', label: '提示源', title: '解说提示叠加（/cast）',
+          desc: '透明 OBS 浏览器源：提示收进「提示预览」区域，并可显示比赛 / 比分 / 当前曲目', target: 'cast',
+          badge: 'C', nav: false, size: '1920×1080', layer: '透明叠加',
+          open: 'preview', previewHref: '/cast?preview=1&config=1',
+        },
+        {
+          id: 'cast-cam-source', kind: 'render', href: '/render/castcam', label: '摄像头源', title: '解说摄像头叠加（/render/castcam）',
+          desc: '透明 OBS 浏览器源：摄像头边框 / 解说标签 / LIVE / 姓名牌，中心留空给摄像头画面',
+          target: 'castcam', badge: 'C', nav: false, size: '1920×1080', layer: '透明叠加',
+          open: 'preview', previewHref: '/render/castcam?preview=1&fit=1',
+        },
+      ],
+    },
+    {
+      id: 'interactive', label: '互动', desc: '抽奖与现场签到',
       items: [
         { href: '/lottery', label: '抽奖', title: '抽奖控制台', desc: '抽奖池筛选 · 大屏动画 · 中奖记录 · 现场签到二维码', badge: 'E' },
         { href: '/guests', label: '签到', title: '签到管理', desc: '现场签到名单 · 添加 / 编辑 / 删除 · 导入 CSV · 导出 / 二维码', badge: 'E' },
@@ -351,25 +386,11 @@
       ],
     },
     {
-      id: 'playout', label: '播控', desc: '导播、解说、提示、回放与转场',
+      id: 'library', label: '资源', desc: '人物、媒体与曲库',
       items: [
-        { href: '/director', label: '导播', title: '导播页', desc: '编排倒计时 · 回执看板 · 转场大提醒', badge: 'C' },
-        { href: '/commentary', label: '解说', title: '解说控制台', desc: '解说提示叠加 + 解说摄像头叠加 · 两路预览与配置', badge: 'C' },
-        {
-          id: 'cast-source', kind: 'render', href: '/cast', label: '提示源', title: '解说提示叠加（/cast）',
-          desc: '透明 OBS 浏览器源：提示收进「提示预览」区域，并可显示比赛 / 比分 / 当前曲目', target: 'cast',
-          badge: 'C', nav: false, size: '1920×1080', layer: '透明叠加',
-          open: 'preview', previewHref: '/cast?preview=1&config=1',
-        },
-        {
-          id: 'cast-cam-source', kind: 'render', href: '/render/castcam', label: '摄像头源', title: '解说摄像头叠加（/render/castcam）',
-          desc: '透明 OBS 浏览器源：摄像头边框 / 解说标签 / LIVE / 姓名牌，中心留空给摄像头画面',
-          target: 'castcam', badge: 'C', nav: false, size: '1920×1080', layer: '透明叠加',
-          open: 'preview', previewHref: '/render/castcam?preview=1&fit=1',
-        },
-        { href: '/cues', label: '话术', title: '话术模板', desc: '内置话术 · 变量插值 · 自定义', badge: 'C' },
-        { href: '/replay', label: '回放', title: '回放控制器', desc: '13 个功能区 / 151 个 vMix 函数', badge: 'B', feature: 'replay' },
-        { href: '/transitions', label: '转场', title: 'OBS 转场', desc: '转场切换 · 场景覆盖 · 防穿帮方案', badge: 'B', feature: 'transitions' },
+        { href: '/people', label: '人物', title: '人物与角色', desc: '队伍 / 选手 / 解说·导播 / 赞助商统一管理，选手按队伍分组', badge: 'A' },
+        { href: '/media', label: '媒体', title: '媒体库', desc: '上传 / 缩略图 / 引用检查 / 目录直投自动索引', badge: 'A' },
+        { href: '/music', label: '曲库', title: '曲目库管理', desc: '曲目增改删 · 日服 / 国服定数切换 · 游戏曲目导入 · 国服公共 API 同步 · 上传 xlsx', badge: 'F' },
       ],
     },
     {
@@ -377,7 +398,7 @@
       items: [
         { href: '/outputs', label: '输出', title: '输出与场景', desc: '全部 OBS 浏览器源 · 公共扫码入口 · 连接状态 · 背景素材', badge: '共享' },
         { href: '/logs', label: '日志', title: '日志与历史', desc: 'JSONL 检索 · 提示历史', badge: '共享' },
-        { href: '/settings', label: '设置', title: '设置', desc: 'OBS / vMix / 比赛 / 抽奖 / 提示与数据', badge: '共享' },
+        { href: '/settings', label: '设置', title: '设置', desc: '按「常用 / 设备 / 画面 / 比赛 / 回放 / 数据」分类的全部运行参数', badge: '共享' },
       ],
     },
   ];
@@ -435,17 +456,36 @@
       title: groupLabel ? `${groupLabel} · ${n.title || n.label}` : (n.title || n.label),
       text: n.label,
     });
+    /*
+     * 导航按分组做成「块」：每个分类有自己的小标题，当前页所在的分组会亮起来。
+     * 以前只用 1px 竖线分隔，条目一多就分不清哪几个属于同一类。
+     */
     const navChildren = [linkOf({ href: '/', label: '首页', title: '系统总览' })];
     for (const g of NAV_GROUPS) {
-      navChildren.push(el('span', { class: 'nav-sep', 'aria-hidden': 'true' }));
-      for (const n of g.items) navChildren.push(linkOf(n, g.label));
+      const links = g.items.map((n) => linkOf(n, g.label));
+      navChildren.push(el('span', { class: 'nav-group', dataset: { group: g.label } },
+        el('span', { class: 'nav-group-label', text: g.label }),
+        ...links,
+      ));
     }
     const nav = el('nav', null, navChildren);
+    const markActiveGroup = () => {
+      for (const grp of nav.querySelectorAll('.nav-group')) {
+        grp.classList.toggle('has-active', !!grp.querySelector('a.active'));
+      }
+    };
+    markActiveGroup();
     // 功能未启用的入口直接隐藏 —— 避免操作员点进去看到一个什么都做不了的页面
     const applyFeatureNav = () => {
       for (const a of nav.querySelectorAll('[data-feature]')) {
         a.hidden = !featureEnabled(a.dataset.feature);
       }
+      // 整组都不可用时，连分类标题一起去掉，别留一个空壳
+      for (const grp of nav.querySelectorAll('.nav-group')) {
+        const links = [...grp.querySelectorAll('a')];
+        grp.hidden = links.length > 0 && links.every((a) => a.hidden);
+      }
+      markActiveGroup();
     };
     window.arcadeWS?.on('hello', applyFeatureNav);
     window.arcadeWS?.on('patch', (m) => {

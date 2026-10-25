@@ -195,7 +195,7 @@ if (TEST) {
 }
 
 fs.mkdirSync('assets', { recursive: true });
-const out = 'assets/直播间背景-动态.mp4';
+const out = 'assets/backgrounds/dark/直播间背景-动态.mp4';
 const ff = spawn('ffmpeg', [
   '-y',
   '-f', 'image2pipe',

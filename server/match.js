@@ -39,6 +39,15 @@ const st = {
   history: [],
   picks: [],           // 当前局的待确认选曲
   upcomingPicks: [],   // 「即将进行」赛程的选曲（可跨当前局结束保留）
+  /**
+   * 下一个「开启新一轮」自动使用的局号。
+   *
+   * 早先直接用「历史场次数 + 1」推算，于是彩排 / 测试留下几场记录后，
+   * 正式比赛就从「第 13 局」开始，而且只有清空历史才能回到 1 —— 而清空历史
+   * 又会把真正的比赛记录一起删掉。这里改成独立计数：重置局号不动历史。
+   * 0 = 尚未初始化，按历史场次回推（兼容旧数据）。
+   */
+  roundSeq: 0,
   revision: 0,
 };
 
@@ -105,9 +114,19 @@ function blankMatch({ name = '', mode = 'total' } = {}) {
   };
 }
 
+/**
+ * 下一个「开启新一轮」自动使用的局号。
+ *
+ * 显式重置过就用 st.roundSeq；否则（旧数据 / 首次启动）按历史场次回推，
+ * 保持原有「第 N 局」的手感。
+ */
+export function nextRoundNo() {
+  const n = Math.floor(Number(st.roundSeq));
+  return Number.isFinite(n) && n >= 1 ? n : st.history.length + 1;
+}
+
 function defaultName() {
-  const n = st.history.length + 1;
-  return `第 ${n} 局`;
+  return `第 ${nextRoundNo()} 局`;
 }
 
 function normalizeName(s) {
@@ -148,6 +167,9 @@ export function load() {
     if (Array.isArray(raw?.history)) {
       st.history = raw.history.filter((h) => h && h.id && h.name).slice(0, HISTORY_LIMIT);
     }
+    const seq = Math.floor(Number(raw?.roundSeq));
+    // 只在明确重置过（≥1）时采用；否则保持 0，交给 nextRoundNo() 按历史回推
+    st.roundSeq = Number.isFinite(seq) && seq >= 1 ? seq : 0;
   } catch { /* 首次启动没有文件 */ }
   if (!st.current) st.current = blankMatch();
   // 待处理的扫码选曲不跨重启保留：上一场的请求不应该弹到下一场
@@ -164,6 +186,8 @@ function save() {
     fs.writeFileSync(filePath(), `${JSON.stringify({
       current: st.current,
       history: st.history.slice(0, HISTORY_LIMIT),
+      // 局号计数必须落盘：重启后仍从用户重置的局号继续
+      roundSeq: Math.floor(Number(st.roundSeq)) || 0,
       savedAt: now(),
     }, null, 2)}\n`, 'utf8');
   } catch (e) {
@@ -492,6 +516,8 @@ export function snapshot({ historyLimit = null } = {}) {
     current: currentView(),
     history: hist.map(historySummary),
     historyTotal: st.history.length,
+    /** 「开启新一轮」将会自动使用的局号（可在比赛页「重置局号」修改） */
+    roundSeq: nextRoundNo(),
     picks: picksView(),
     revision: st.revision,
   };
@@ -568,6 +594,8 @@ export function start({ name = '', mode = null, force = false, keepBans = false,
   if (m.status === 'live' && hasContent(m) && force) {
     archiveCurrent('abandoned');
   }
+  // 先记下本局使用的局号，blankMatch() 里的默认名也读同一个值
+  const roundNo = nextRoundNo();
   st.current = blankMatch({ name, mode: wantedMode });
   if (keepBans) st.current.bans = [...m.bans];
   // 「即将进行」阶段收到的选曲，进入新局后变成待确认队列
@@ -580,9 +608,50 @@ export function start({ name = '', mode = null, force = false, keepBans = false,
   prepareIncomingLineup(incoming, st.current.name);
   // 选曲展示如果正停在「即将进行」，开新局后自动跟着切到当前局
   matchEvents.emit('start');
-  log.audit('match', 'start', { name: st.current.name, mode: st.current.mode, force, actor });
+  // 自动局号前进一：下一轮默认拿到的编号不会和本局重复
+  st.roundSeq = roundNo + 1;
+  log.audit('match', 'start', { name: st.current.name, mode: st.current.mode, roundNo, force, actor });
   changed();
   return { ok: true, state: snapshot() };
+}
+
+/** 自动命名形如「第 12 局」——只有这种名字才会被局号重置改写 */
+const AUTO_NAME_RE = /^第\s*\d+\s*局$/;
+
+/**
+ * 重置局号。**不影响比赛历史**（历史里的旧场次保留原名）。
+ *
+ * 语义：
+ *   · 当前局「进行中」且名字是自动生成的「第 N 局」→ 一并改名成「第 n 局」，
+ *     下一个自动局号 = n + 1（用户心智：把现在这局设为第 1 局，下一局是第 2 局）。
+ *   · 其余情况（当前局已结束 / 自定义名称）→ 只设置下一个自动局号 = n。
+ *
+ * 之前局号只能靠「历史场次 + 1」推算，彩排留下十几场记录后就再也回不到 1 了。
+ *
+ * @param {number} start 起始局号（1–9999）
+ */
+export function resetRoundSeq(start = 1, actor = 'operator') {
+  const n = Math.floor(Number(start));
+  if (!Number.isFinite(n) || n < 1 || n > 9999) {
+    return { ok: false, nack: { code: 'bad_number', msg: '局号必须是 1–9999 的整数' } };
+  }
+  const before = nextRoundNo();
+  const m = ensure();
+  let renamed = false;
+  if (m.status === 'live' && AUTO_NAME_RE.test(String(m.name || '').trim())) {
+    m.name = `第 ${n} 局`;
+    renamed = true;
+  }
+  st.roundSeq = renamed ? n + 1 : n;
+  log.audit('match', 'round-seq-reset', { from: before, to: n, renamed, actor });
+  changed();
+  return {
+    ok: true,
+    state: snapshot(),
+    resetTo: n,
+    renamed,
+    nextRoundNo: st.roundSeq,
+  };
 }
 
 /** 新局开始时把待确认选曲写进空行（同步开启时使用；内部不额外广播） */
@@ -778,6 +847,9 @@ export function getHistory(id) {
 
 export function clearHistory(actor = 'operator') {
   st.history = [];
+  // 清空历史 = 完全从头开始：局号也回到 1（沿用旧行为）。
+  // 只重置局号、保留历史的话用 resetRoundSeq()。
+  st.roundSeq = 0;
   log.audit('match', 'history-clear', { actor });
   changed();
   return { ok: true, state: snapshot() };

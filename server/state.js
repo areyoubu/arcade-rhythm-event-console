@@ -117,6 +117,11 @@ const state = {
     state: null,                // lottery.snapshot()
   },
 
+  // ── 曲目库同步（国服 API 待确认补丁） ──
+  music: {
+    cnSync: null,
+  },
+
   // ── 随机选曲大屏（全屏场景） ──
   random: {
     state: null,                // 最近一次随机结果 + 转盘序列

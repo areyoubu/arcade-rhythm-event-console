@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import {
-  DEFAULT_CONFIG, CONFIG_GROUPS, FIELD_SCHEMA,
+  DEFAULT_CONFIG, CONFIG_GROUPS, CONFIG_TIERS, FIELD_SCHEMA,
   deepMerge, getPath, setPath, deletePath, extractKnownFields,
   validateConfig, normalizeConfig, RESTART_PATHS, SENSITIVE_PATHS,
 } from './config-schema.js';
@@ -293,6 +293,7 @@ function pick(cfg, p) {
 /** schema 摘要，供设置页渲染 */
 export function getSchemaForUI() {
   return {
+    tiers: CONFIG_TIERS,
     groups: CONFIG_GROUPS,
     fields: FIELD_SCHEMA.map((f) => ({
       ...f,
@@ -301,4 +302,4 @@ export function getSchemaForUI() {
   };
 }
 
-export { CONFIG_GROUPS, FIELD_SCHEMA, SENSITIVE_PATHS, RESTART_PATHS, CONFIG_FILE, DEFAULT_CONFIG };
+export { CONFIG_GROUPS, CONFIG_TIERS, FIELD_SCHEMA, SENSITIVE_PATHS, RESTART_PATHS, CONFIG_FILE, DEFAULT_CONFIG };

@@ -1,0 +1,304 @@
+/*
+ * 整屏场景的「明亮风格」覆盖。
+ *
+ * 只在 <html data-style="light"> 时生效（由 shared/render-theme.js 根据
+ * 设置 → 输出配色 → 输出风格 打标）。深色是默认样式，这里只写差异部分。
+ *
+ * 原则：
+ *   · 面板换成半透明白 + 深色字，避免「亮底 + 暗卡」那种割裂感；
+ *   · 分隔线统一用冷灰发丝线 rgba(18,52,80,.16)；
+ *   · 选手色 / 强调色 / 难度色一律不动，它们才是识别信息；
+ *   · 叠在机台画面上的场景（比分条 / 选曲二维码 / 解说摄像头）面板不做到纯白，
+ *     保持 82–92% 不透明，别盖掉游戏画面。
+ */
+
+/* ══════════════════════════════════════════════════════════
+   基础：页面底色与正文色（深色页面里 body 常写死 #fff）
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] body { color: #0e1b26; }
+/*
+ * ⚠️ 这里**不能**给 #stage 加底色。
+ * 比分条 / 选曲二维码 / 抽奖 / 解说提示 / 解说摄像头都是透明叠加，
+ * 整屏场景自己有 .bg 背景图层；给 #stage 上色会让它们把摄像机与游戏画面盖住。
+ */
+
+/*
+ * 压暗遮罩反过来：深色风格的 .bg-shade / .shade 是「把背景压暗」，换成浅色背景后
+ * 必须改成白色雾面，否则整个场景会被压成一片脏灰。
+ */
+html[data-style="light"] .bg-shade {
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.58) 0%, rgba(255,255,255,.12) 24%, rgba(255,255,255,.10) 62%, rgba(255,255,255,.52) 100%),
+    radial-gradient(120% 90% at 50% 45%, rgba(255,255,255,0) 30%, rgba(219,236,248,.32) 100%);
+}
+/* 奖品大屏用的是 .shade（径向 + 线性两层） */
+html[data-style="light"] .shade {
+  background:
+    radial-gradient(ellipse at 50% 42%, rgba(255,255,255,.1), rgba(255,255,255,.55) 72%),
+    linear-gradient(180deg, rgba(255,255,255,.62), rgba(255,255,255,.16) 26%, rgba(255,255,255,.2) 62%, rgba(235,245,252,.7));
+}
+
+/* ══════════════════════════════════════════════════════════
+   随机选曲 /render/random
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .brand { color: #5c7890; }
+html[data-style="light"] .head .title { color: #0e1b26; }
+html[data-style="light"] .phase { background: rgba(255,255,255,.74); border-color: rgba(18,52,80,.18); }
+/* 两侧的渐隐遮边原来是深色 —— 浅底上会变成两条黑边 */
+html[data-style="light"] .reel-viewport::before {
+  background: linear-gradient(90deg, rgba(242,249,253,.97), rgba(242,249,253,0));
+}
+html[data-style="light"] .reel-viewport::after {
+  background: linear-gradient(270deg, rgba(242,249,253,.97), rgba(242,249,253,0));
+}
+html[data-style="light"] .reel-card {
+  background: rgba(255,255,255,.9);
+  border-color: rgba(18,52,80,.16);
+  box-shadow: 0 14px 34px rgba(18,52,80,.14);
+}
+html[data-style="light"] .reel-card .cover { background: #edf4f9; border-color: rgba(18,52,80,.12); }
+html[data-style="light"] .reel-card .cover.ph { color: #93a9ba; }
+html[data-style="light"] .reel-card .t { color: #10202e; }
+html[data-style="light"] .reel-card.target { border-color: var(--accent); }
+
+html[data-style="light"] .idle .t { color: #24435c; }
+html[data-style="light"] .idle .s { color: #6b8299; }
+
+html[data-style="light"] .result-card {
+  background: linear-gradient(135deg, rgba(255,255,255,.97), rgba(245,251,255,.93));
+  border-color: rgba(var(--accent-rgb), .5);
+  border-left-color: var(--accent);
+  box-shadow: 0 30px 84px rgba(18,52,80,.18);
+}
+html[data-style="light"] .result-cover { background: #edf4f9; border-color: rgba(18,52,80,.14); box-shadow: 0 18px 46px rgba(18,52,80,.16); }
+html[data-style="light"] .result-cover .ph { color: #93a9ba; }
+html[data-style="light"] .result-title { color: #0b1b2a; text-shadow: 0 4px 18px rgba(255,255,255,.6); }
+html[data-style="light"] .result-artist { color: #3a566e; }
+html[data-style="light"] .tag { background: rgba(255,255,255,.7); border-color: rgba(18,52,80,.18); color: #3a566e; }
+html[data-style="light"] .tag.cn { color: #2f7a54; border-color: rgba(47,122,84,.45); }
+html[data-style="light"] .tag.we { color: #7b3fa8; border-color: rgba(123,63,168,.4); }
+html[data-style="light"] .result-note { color: #6b8299; }
+
+/* ══════════════════════════════════════════════════════════
+   选手选曲展示 /render/pickshow
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .brand { color: #5c7890; }
+html[data-style="light"] .head .title { color: #0e1b26; }
+html[data-style="light"] .chip {
+  background: rgba(255,255,255,.78);
+  border-color: rgba(18,52,80,.18);
+  color: #3a566e;
+}
+html[data-style="light"] .match-name { color: #0b1b2a; text-shadow: 0 4px 16px rgba(255,255,255,.6); }
+html[data-style="light"] .match-sub { color: #6b8299; }
+
+html[data-style="light"] .p-head {
+  background: linear-gradient(90deg, rgba(255,255,255,.95), rgba(255,255,255,.72));
+  border-color: rgba(18,52,80,.16);
+}
+html[data-style="light"] .panel.right .p-head {
+  background: linear-gradient(270deg, rgba(255,255,255,.95), rgba(255,255,255,.72));
+}
+html[data-style="light"] .avatar { background: #edf4f9; border-color: rgba(18,52,80,.2); }
+html[data-style="light"] .avatar .fb { color: #93a9ba; }
+html[data-style="light"] .card {
+  background: rgba(255,255,255,.92);
+  border-color: rgba(18,52,80,.16);
+  box-shadow: 0 14px 34px rgba(18,52,80,.14);
+}
+html[data-style="light"] .card .cover { background: #edf4f9; border-color: rgba(18,52,80,.12); }
+html[data-style="light"] .card .t { color: #10202e; }
+html[data-style="light"] .card .a { color: #6b8299; }
+html[data-style="light"] .card.empty {
+  border-color: rgba(18,52,80,.22);
+  background: rgba(255,255,255,.55);
+  box-shadow: none;
+}
+html[data-style="light"] .card.empty .cover.ph { color: #a8bccb; }
+html[data-style="light"] .card.empty .t { color: #7a92a6; }
+html[data-style="light"] .card.empty .a { color: #93a9ba; }
+html[data-style="light"] .waiting .box .big { color: #24435c; }
+html[data-style="light"] .waiting .box .small { color: #6b8299; }
+
+html[data-style="light"] .idle-frame {
+  background: rgba(255,255,255,.6);
+  border-color: rgba(18,52,80,.14);
+  box-shadow: 0 24px 70px rgba(18,52,80,.16);
+}
+html[data-style="light"] .idle-brand { color: #5c7890; }
+html[data-style="light"] .idle-title { color: #0b1b2a; text-shadow: 0 8px 30px rgba(255,255,255,.7); }
+html[data-style="light"] .idle-sub { color: #6b8299; }
+
+/* ══════════════════════════════════════════════════════════
+   总比分画面 /render/match
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .scene-head {
+  background: linear-gradient(90deg, rgba(255,255,255,.95), rgba(255,255,255,.72));
+  border-color: rgba(18,52,80,.16);
+  box-shadow: 0 10px 28px rgba(18,52,80,.12);
+}
+html[data-style="light"] .brand { color: #4a6579; }
+html[data-style="light"] .brand b { color: #10202e; }
+html[data-style="light"] .status.live { color: #2f7a54; border-color: rgba(47,122,84,.4); }
+
+html[data-style="light"] .player {
+  background: linear-gradient(90deg, rgba(255,255,255,.95), rgba(255,255,255,.72));
+  border-color: rgba(18,52,80,.16);
+}
+html[data-style="light"] .player.right {
+  background: linear-gradient(270deg, rgba(255,255,255,.95), rgba(255,255,255,.72));
+}
+html[data-style="light"] .player.left.is-winner {
+  background: linear-gradient(90deg, rgba(var(--accent-rgb),.16), rgba(255,255,255,.62));
+}
+html[data-style="light"] .player.right.is-winner {
+  background: linear-gradient(270deg, rgba(var(--accent-rgb),.16), rgba(255,255,255,.62));
+}
+html[data-style="light"] .p-avatar { background: #edf4f9; border-color: rgba(18,52,80,.2); }
+html[data-style="light"] .p-fb { color: #93a9ba; }
+html[data-style="light"] .p-name { color: #0b1b2a; text-shadow: none; }
+html[data-style="light"] .p-agg { text-shadow: none; }
+html[data-style="light"] .center {
+  background: rgba(255,255,255,.9);
+  border-top-color: rgba(18,52,80,.14);
+  border-bottom-color: rgba(18,52,80,.14);
+}
+html[data-style="light"] .vs { color: #10202e; }
+
+html[data-style="light"] .song-panel {
+  background: linear-gradient(180deg, rgba(255,255,255,.96), rgba(255,255,255,.9));
+  border-color: rgba(18,52,80,.16);
+  box-shadow: 0 16px 42px rgba(18,52,80,.14);
+}
+html[data-style="light"] .score-num { text-shadow: none; color: #0b1b2a; }
+html[data-style="light"] .score-num.empty { color: #a8bccb; }
+html[data-style="light"] .score-flag { background: rgba(255,255,255,.85); }
+html[data-style="light"] .song-cover { background: #edf4f9; border-color: rgba(18,52,80,.14); box-shadow: 0 6px 16px rgba(18,52,80,.14); }
+html[data-style="light"] .song-title { color: #10202e; }
+html[data-style="light"] .diff { color: #10202e; border-color: rgba(18,52,80,.2); }
+html[data-style="light"] .foot {
+  background: linear-gradient(90deg, rgba(255,255,255,.9), rgba(255,255,255,.66));
+  border-color: rgba(18,52,80,.14);
+  color: #4a6579;
+}
+
+/* ══════════════════════════════════════════════════════════
+   奖品大屏 /render/prize
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .status {
+  color: #3a566e;
+  border-color: rgba(18,52,80,.22);
+  background: rgba(255,255,255,.7);
+}
+html[data-style="light"] .status.spinning { color: #8a6420; border-color: rgba(217,164,65,.55); }
+html[data-style="light"] .status.revealed { color: #2f7a54; border-color: rgba(47,122,84,.45); }
+html[data-style="light"] #prizeName { color: #0b1b2a; text-shadow: 0 8px 30px rgba(255,255,255,.75); }
+html[data-style="light"] #prizeNote { color: #3a566e; text-shadow: none; }
+html[data-style="light"] .winner {
+  background: linear-gradient(0deg, rgba(255,255,255,.9), rgba(255,255,255,.5));
+  border-top-color: rgba(var(--accent-rgb), .5);
+}
+html[data-style="light"] #winnerName { color: #0b1b2a; text-shadow: 0 6px 22px rgba(255,255,255,.7); }
+html[data-style="light"] #winnerTeam { color: #3a566e; }
+html[data-style="light"] .empty-hint { color: #6b8299; }
+html[data-style="light"] body.preview::after { color: #33506a; background: rgba(255,255,255,.7); border-color: rgba(18,52,80,.2); }
+
+/* ══════════════════════════════════════════════════════════
+   比分条 /render/score（透明叠加，面板不做到纯白）
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] {
+  --plate-bg: rgba(255,255,255,.9);
+  --plate-border: rgba(18,52,80,.2);
+}
+html[data-style="light"] .team.is-draw { box-shadow: inset 0 0 0 2px rgba(18,52,80,.25); }
+html[data-style="light"] .mid { background: #e9f2f8; color: #121c26; }
+html[data-style="light"] .mid-meta { color: #5a7288; }
+html[data-style="light"] .mid-vs { color: #3a566e; }
+html[data-style="light"] .pavatar,
+html[data-style="light"] .pavatar-fb { background: #edf4f9; border-color: rgba(18,52,80,.2); }
+
+/* ══════════════════════════════════════════════════════════
+   选曲二维码 /render/pick（透明叠加）
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .status.live { color: #2f7a54; border-color: rgba(47,122,84,.4); }
+html[data-style="light"] .qr-frame { border-color: rgba(18,52,80,.2); }
+html[data-style="light"] .pick .cover { background: #edf4f9; }
+html[data-style="light"] .pick .side { color: #fff; }   /* 左右色块上的白字，保持不变 */
+
+/* ══════════════════════════════════════════════════════════
+   抽奖大屏 /render/lottery（透明叠加）
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .card {
+  background: rgba(255,255,255,.92);
+  border-color: rgba(18,52,80,.18);
+  box-shadow: 0 24px 70px rgba(18,52,80,.2);
+}
+html[data-style="light"] .winAvatar { background: #edf4f9; }
+html[data-style="light"] .spinName { text-shadow: 0 6px 24px rgba(255,255,255,.75); }
+html[data-style="light"] .winName { text-shadow: none; }
+html[data-style="light"] .hintline { color: #6b8299; }
+html[data-style="light"] #stage .idleHint { color: #6b8299; }
+html[data-style="light"] body.windowed { background: #eef6fb !important; }
+
+/* ══════════════════════════════════════════════════════════
+   解说摄像头叠加 /render/castcam（透明叠加）
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .logo-block {
+  background: linear-gradient(90deg, rgba(255,255,255,.92), rgba(255,255,255,.4));
+}
+html[data-style="light"] body.logo-tr .logo-block {
+  background: linear-gradient(270deg, rgba(255,255,255,.92), rgba(255,255,255,.4));
+}
+html[data-style="light"] .carousel {
+  background: rgba(255,255,255,.8);
+  border-color: rgba(18,52,80,.18);
+  box-shadow: 0 14px 30px rgba(18,52,80,.16);
+}
+/* 底部赛程条：不做到纯白，压在摄像头上也要能看清画面边缘 */
+html[data-style="light"] .ticker {
+  background: rgba(255,255,255,var(--ticker-alpha, .88));
+  box-shadow: 0 -14px 34px rgba(18,52,80,.14);
+}
+html[data-style="light"] body.ticker-top .ticker { box-shadow: 0 14px 34px rgba(18,52,80,.14); }
+html[data-style="light"] .tick-sep { background: rgba(18,52,80,.18); }
+html[data-style="light"] .tick-live { border-color: rgba(18,52,80,.2); color: #10202e; }
+html[data-style="light"] .event-title { color: #0b1b2a; }
+
+/* ══════════════════════════════════════════════════════════
+   解说提示叠加 /cast（透明叠加）
+   ══════════════════════════════════════════════════════════ */
+html[data-style="light"] .brand { color: #4a6579; }
+html[data-style="light"] .cast-title { color: #0b1b2a; }
+html[data-style="light"] .clock,
+html[data-style="light"] .audio-dot {
+  color: #33506a;
+  background: rgba(255,255,255,.72);
+  border-color: rgba(18,52,80,.18);
+}
+html[data-style="light"] .audio-dot.ok { color: #2f7a54; border-color: rgba(47,122,84,.4); }
+
+html[data-style="light"] .match-strip {
+  background: rgba(255,255,255,.88);
+  border-color: rgba(18,52,80,.16);
+}
+html[data-style="light"] .ms-match,
+html[data-style="light"] .ms-meta { color: #3a566e; }
+html[data-style="light"] .ms-song { color: #0b1b2a; }
+
+html[data-style="light"] .cue-preview {
+  background: rgba(255,255,255,.9);
+  border-color: rgba(18,52,80,.16);
+}
+/* 提示卡：保留优先级色，但底色改成浅色，文字转深色 */
+html[data-style="light"] .cue-card { background: rgba(255,255,255,.86); }
+html[data-style="light"] .cue-card.P0 { background: rgba(255,236,236,.92); }
+html[data-style="light"] .cue-card.P1 { background: rgba(255,243,232,.92); }
+html[data-style="light"] .cue-card.P2 { background: rgba(255,250,232,.92); }
+html[data-style="light"] .tpl-minimal .cue-card { background: rgba(255,255,255,.9); box-shadow: 0 12px 28px rgba(18,52,80,.18); }
+/* minimal 模板本来就没有面板底色，浅色下也不能给它加一块白底 */
+html[data-style="light"] .tpl-minimal .cue-preview { background: transparent; border-color: transparent; box-shadow: none; }
+html[data-style="light"] .cue-title { color: #10202e; }
+html[data-style="light"] .cue-body { color: #3a566e; }
+html[data-style="light"] .cue-count-wrap .unit { color: #4a6579; }
+html[data-style="light"] .cue-label { color: var(--accent); }
+html[data-style="light"] .cue-empty { color: #6b8299; }

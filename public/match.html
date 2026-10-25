@@ -10,7 +10,10 @@
   .match-head .body { display: flex; flex-direction: column; gap: 12px; }
   .match-line { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .match-line .grow { flex: 1; min-width: 220px; }
-  .match-name { font-size: 18px; font-weight: 700; }
+  /* 下拉不要吃满整行：宽度按内容，和旁边的按钮留在一行 */
+  .match-line select { width: auto; min-width: 150px; max-width: 320px; }
+  /* 名称输入框跟同一行的按钮/下拉共享宽度，不要独占一整行 */
+  .match-name { font-size: 18px; font-weight: 700; flex: 1 1 320px; width: auto; min-width: 0; }
   .match-summary {
     display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
     padding: 8px 11px; background: var(--surface-2); border: 1px solid var(--border);
@@ -221,6 +224,13 @@
   const summaryBox = el('div', { class: 'match-summary' });
   const finishBtn = el('button', { class: 'btn danger', text: '结束本局并保存' });
   const newBtn = el('button', { class: 'btn primary', text: '开启新一轮' });
+  // 「开启新一轮」的自动局号一直按历史场次累加（彩排几场后就从第 13 局开始），
+  // 这里给一个独立的重置入口：只改局号，不动比赛历史。
+  const resetSeqBtn = el('button', {
+    class: 'btn ghost', text: '重置局号',
+    title: '修改「开启新一轮」自动使用的局号；不会删除比赛历史',
+  });
+  const seqHint = el('span', { class: 'small muted' });
   const randomBtn = el('button', { class: 'btn', text: '随机选曲' });
 
   const headCard = el('section', { class: 'card match-head' },
@@ -235,7 +245,7 @@
         nameInput, nameBtn,
         el('span', { class: 'small muted', text: '计分模式' }), modeSel,
         el('span', { class: 'spacer' }),
-        randomBtn, finishBtn, newBtn,
+        seqHint, resetSeqBtn, randomBtn, finishBtn, newBtn,
       ),
       el('div', { class: 'match-line' },
         el('span', { class: 'small muted', text: '即将进行' }),
@@ -999,8 +1009,29 @@
     } catch (e) { cmdError(e, '结束本局'); }
   };
 
+  resetSeqBtn.onclick = async () => {
+    const cur = Number(S.match?.roundSeq) || 1;
+    const raw = await prompt({
+      title: '重置局号',
+      label: `「开启新一轮」自动使用的局号（当前：第 ${cur} 局）。`
+        + '当前局若还在进行且是自动命名「第 N 局」，会一并改成这个局号、下一局顺延；比赛历史不受影响。',
+      value: '1',
+    });
+    if (raw === null) return;
+    const n = Math.round(Number(raw));
+    if (!Number.isFinite(n) || n < 1) { warn('局号必须是 1 以上的整数'); return; }
+    try {
+      const r = await api('/api/match/sequence', { method: 'POST', body: { next: n } });
+      applyMatchState(r.state);
+      ok(r.renamed
+        ? `当前局已改名为「第 ${n} 局」，下一局将从第 ${r.nextRoundNo} 局开始`
+        : `下一个自动局号：第 ${r.nextRoundNo} 局（当前局名称未改）`);
+    } catch (e) { cmdError(e, '重置局号'); }
+  };
+
   newBtn.onclick = async () => {
-    const nextNo = (S.match?.historyTotal || S.match?.history?.length || 0) + 1;
+    // 局号由服务端维护（可在「重置局号」里改），历史场次只作为没有记录时的兜底
+    const nextNo = Number(S.match?.roundSeq) || ((S.match?.historyTotal || S.match?.history?.length || 0) + 1);
     const name = await prompt({ title: '开启新一轮', label: '比赛名称', value: `第 ${nextNo} 局`, placeholder: '如：决赛 第 2 局' });
     if (name === null) return;
     const cur = S.match?.current;
@@ -1102,6 +1133,10 @@
     nameInput.disabled = cur?.status === 'finished';
     finishBtn.disabled = cur?.status === 'finished';
     randomBtn.disabled = cur?.status === 'finished';
+
+    // 局号提示：让操作员一眼看到「下次开新局会叫什么」
+    const seq = Number(S.match?.roundSeq);
+    seqHint.textContent = Number.isFinite(seq) && seq >= 1 ? `下一局：第 ${seq} 局` : '';
 
     const finished = cur?.status === 'finished';
     statusPill.className = `pill ${finished ? 'warn' : 'ok'}`;

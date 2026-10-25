@@ -95,6 +95,19 @@ export const DEFAULT_CONFIG = {
     cacheLimitMB: 512,
   },
 
+  /**
+   * 国服曲目列表 / 定数同步（LXNS 公共 API）。
+   *
+   * 只拉取国服曲目与定数，不写入游戏资源；有变化时先在 /music 待确认。
+   */
+  cnMusic: {
+    autoSync: false,
+    intervalHours: 24,
+    version: 24000,
+    apiBase: 'https://maimai.lxns.net',
+    timeoutMs: 20000,
+  },
+
   match: {
     pickBaseUrl: '',
     publicPickBaseUrl: '',
@@ -158,6 +171,45 @@ export const DEFAULT_CONFIG = {
     autoReconnectMaxMs: 10000,
     keepLastFrameOnDisconnect: true,
     preloadImages: true,
+  },
+
+  /**
+   * OBS 输出配色主题 —— 对所有输出给 OBS 的场景统一换色。
+   *
+   *   default  —— 经典金（深灰 + 琥珀金，当前默认）
+   *   official —— CHUNITHM 官网：青蓝霓虹 + 深海军蓝
+   *   xverse   —— CHUNITHM X-VERSE-X：洋红 + 青霓虹
+   *
+   * 只改品牌色 / 面板描边 / 文字观感，不动选手侧颜色与提示优先级色。
+   * 渲染源通过 WS hello / patch 读取（无需登录），改完刷新 OBS 源即可生效。
+   */
+  theme: {
+    scheme: 'default',
+    /**
+     * 风格：dark = 深色面板 + 浅色字（原样）；light = 半透明白面板 + 深色字。
+     *
+     * 明亮风格是**皮肤**而不是另一套模板：渲染端按颜色亮度重映射模板 CSS，
+     * 19 套叠加模板一次性获得明亮版，之后新增模板也自动跟上。
+     * 面板刻意做成 84–94% 不透明，避免叠在机台画面上过亮影响观感。
+     */
+    style: 'dark',
+  },
+
+  /**
+   * 直播待机画面（/render/standby）的文字内容。
+   *
+   * 整屏场景，开播前挂在 OBS 上：赛事名、比赛名称、比赛时间、底部滚动文案。
+   * 勾了 followMatch 就直接显示比赛计分当前局的名称，不用两边各改一次。
+   */
+  standby: {
+    eventName: 'CHUNITHM TOURNAMENT',
+    matchName: '比赛即将开始',
+    matchTime: '',
+    note: '欢迎来到现场 · 比赛即将开始 · 请选手就位',
+    statusText: 'STANDBY',
+    showClock: true,
+    showMascot: true,
+    followMatch: false,
   },
 
   templates: {
@@ -327,27 +379,55 @@ export const DEFAULT_CONFIG = {
 // ─────────────────────────────────────────────────────────────
 // 分组（设置页的卡片顺序 / 标题）
 // ─────────────────────────────────────────────────────────────
+/**
+ * 设置页的「一级分类」。分组按操作场景归类，不再按实现顺序堆在一起：
+ *   常用 → 设备与连接 → 直播画面 → 比赛与互动 → 回放与转场 → 数据与日志
+ * 每个分组通过 tier 字段挂到某个一级分类下。
+ */
+export const CONFIG_TIERS = [
+  { id: 'basic',  label: '常用',       desc: '开播前最常改的几项' },
+  { id: 'device', label: '设备与连接', desc: 'OBS、vMix 与本机服务' },
+  { id: 'live',   label: '直播画面',   desc: '场景、叠加、解说页与提示' },
+  { id: 'match',  label: '比赛与互动', desc: '比赛计分、曲库、音频与抽奖' },
+  { id: 'replay', label: '回放与转场', desc: '回放裁切、转场与时序编排' },
+  { id: 'data',   label: '数据与日志', desc: '媒体库、数据文件与日志' },
+];
+
 export const CONFIG_GROUPS = [
-  { id: 'features',  label: '功能开关',        icon: '🧰', desc: '按需启用。默认全部关闭 —— 关闭时服务端不会连接对应设备，也不会反复报连接失败。勾选后立即生效，无需重启。' },
-  { id: 'server',    label: '服务',            icon: '🖧',  desc: '中转服务的监听端口与日志。单机部署无需修改。' },
-  { id: 'obs',       label: 'OBS WebSocket',   icon: '🎬', desc: 'OBS 的 WebSocket 服务（工具 → WebSocket 服务器设置）。双机模式下填 OBS 机 IP。需先开启「功能开关 → OBS 控制」。' },
-  { id: 'vmix',      label: 'vMix HTTP API',   icon: '⏪', desc: 'vMix 的 Web API 端口（设置 → Web Controller，默认 8088）。⚠️ vMix API 无鉴权，切勿暴露到公网。需先开启「功能开关 → vMix 控制」。' },
-  { id: 'competition', label: '比赛模式',      icon: '🏆', desc: '团队赛 / 单人赛切换。团队赛的叠加会显示「队伍 + 选手名」，单人赛只显示选手名。' },
-  { id: 'gameAudio', label: '游戏音频',        icon: '🔊', desc: '从本地游戏目录读取曲目预览音频：随机选曲与选手选曲展示会在 OBS 里播放短预览。程序只读游戏目录、不修改游戏文件；不同版本/区服的音频密钥可能不同。' },
-  { id: 'match',     label: '比赛计分与选曲',  icon: '🎼', desc: '扫码选曲的局域网 / 公网地址，以及随机选曲默认使用的难度。' },
-  { id: 'scenes',    label: '场景与源',        icon: '🎞', desc: 'OBS 场景名与源名，必须与 OBS 中完全一致。' },
-  { id: 'clip',      label: '裁切参数',        icon: '✂️', desc: '回溯量 XX、预设、微调步长与缓冲容量约束。' },
-  { id: 'replay',    label: '回放与时序',      icon: '⏱', desc: '打点补偿、轮询与超时参数。需先开启「功能开关 → 回放功能」。' },
-  { id: 'transitions', label: '转场',          icon: '🔀', desc: 'OBS 转场名称与场景覆盖。stinger 的 Transition Point 无法通过 API 修改，须在 OBS 内手动设置。' },
-  { id: 'cue',       label: '提示',            icon: '💬', desc: '提示优先级、可见数量、声音与回执策略。' },
-  { id: 'cast',      label: '解说页',          icon: '🎙', desc: '解说视角模板：提示预览的位置、尺寸、颜色与显示内容。修改后 /cast 立即生效，无需重开 OBS 源。' },
-  { id: 'countdown', label: '倒计时与编排',    icon: '⏳', desc: '提前量预设、渐进升级梯度、自动执行开关（高危）。' },
-  { id: 'lottery',   label: '抽奖与签到',      icon: '🎁', desc: '现场扫码签到地址、抽奖动画时长，以及可选的第三方中继（在线表单 → 内网抽奖池）。' },
-  { id: 'render',    label: '叠加渲染',        icon: '🖼', desc: 'OBS 浏览器源的分辨率、重连行为与动画默认值。' },
-  { id: 'media',     label: '媒体库',          icon: '🗂', desc: '上传限制、缩略图与多分辨率派生。' },
-  { id: 'data',      label: '数据文件',        icon: '💾', desc: '实体库与模板目录的位置。相对路径以项目根目录为基准。' },
-  { id: 'integration', label: '模块协同',      icon: '🔗', desc: '模块 B 的事件如何自动转成模块 C 的提示，以及 OBS 事件的订阅范围。' },
-  { id: 'logging',   label: '日志',            icon: '📜', desc: '结构化 JSONL 日志的级别与保留期。' },
+  // ── 常用 ──
+  { id: 'features',  label: '功能开关',        icon: '🧰', tier: 'basic', desc: '按需启用。默认全部关闭 —— 关闭时服务端不会连接对应设备，也不会反复报连接失败。勾选后立即生效，无需重启。' },
+  { id: 'theme',     label: '输出配色与风格',  icon: '🎨', tier: 'basic', desc: '所有输出给 OBS 画面的强调色主题（经典金 / 官网青蓝 / X-VERSE-X 洋红）与明亮 / 暗风格。切换后 OBS 源即时生效。' },
+  { id: 'standby',   label: '待机画面',        icon: '📺', tier: 'basic', desc: '开播前的直播待机画面（/render/standby）：赛事名、比赛名称、比赛时间与底部滚动文案。日常用顶栏「画面 → 待机」页改（带预览）；这里保留同一份配置的完整表单。' },
+
+  // ── 设备与连接 ──
+  { id: 'obs',       label: 'OBS 连接',        icon: '🎬', tier: 'device', desc: 'OBS 的 WebSocket 服务（工具 → WebSocket 服务器设置）。双机模式下填 OBS 机 IP。需先开启「功能开关 → OBS 控制」。' },
+  { id: 'vmix',      label: 'vMix 连接',       icon: '⏪', tier: 'device', desc: 'vMix 的 Web API 端口（设置 → Web Controller，默认 8088）。⚠️ vMix API 无鉴权，切勿暴露到公网。需先开启「功能开关 → vMix 控制」。' },
+  { id: 'server',    label: '服务与端口',      icon: '🖧', tier: 'device', desc: '中转服务的监听地址、端口与后台登录密码。单机部署无需修改。' },
+  { id: 'scenes',    label: '场景名与源名',    icon: '🎞', tier: 'device', desc: 'OBS 里的场景名与源名，必须与 OBS 中完全一致。' },
+
+  // ── 直播画面 ──
+  { id: 'render',    label: '叠加渲染',        icon: '🖼', tier: 'live', desc: 'OBS 浏览器源的分辨率、重连行为与动画默认值。' },
+  { id: 'cast',      label: '解说页',          icon: '🎙', tier: 'live', desc: '解说视角模板：提示预览的位置、尺寸、颜色与显示内容。修改后 /cast 立即生效，无需重开 OBS 源。' },
+  { id: 'cue',       label: '提示',            icon: '💬', tier: 'live', desc: '提示优先级、可见数量、声音与回执策略。' },
+
+  // ── 比赛与互动 ──
+  { id: 'competition', label: '比赛模式',      icon: '🏆', tier: 'match', desc: '团队赛 / 单人赛切换。团队赛的叠加会显示「队伍 + 选手名」，单人赛只显示选手名。' },
+  { id: 'match',     label: '比赛计分与选曲',  icon: '🎼', tier: 'match', desc: '扫码选曲的局域网 / 公网地址，以及随机选曲默认使用的难度。' },
+  { id: 'cnMusic',   label: '国服曲库与定数',  icon: '🇨🇳', tier: 'match', desc: '从 LXNS 公共 API 拉取国服曲目列表与定数。可手动或按间隔自动同步；有变化时会在曲库页弹窗等待确认，不会直接改库。' },
+  { id: 'gameAudio', label: '游戏音频预览',    icon: '🔊', tier: 'match', desc: '从本地游戏目录读取曲目预览音频：随机选曲与选手选曲展示会在 OBS 里播放短预览。程序只读游戏目录、不修改游戏文件。' },
+  { id: 'lottery',   label: '抽奖与签到',      icon: '🎁', tier: 'match', desc: '现场扫码签到地址、抽奖动画时长，以及可选的第三方中继（在线表单 → 内网抽奖池）。' },
+
+  // ── 回放与转场 ──
+  { id: 'clip',      label: '回放裁切',        icon: '✂️', tier: 'replay', desc: '回溯量 XX、预设、微调步长与缓冲容量约束。' },
+  { id: 'replay',    label: '回放与时序',      icon: '⏱', tier: 'replay', desc: '打点补偿、轮询与超时参数。需先开启「功能开关 → 回放功能」。' },
+  { id: 'transitions', label: '转场',          icon: '🔀', tier: 'replay', desc: 'OBS 转场名称与场景覆盖。stinger 的 Transition Point 无法通过 API 修改，须在 OBS 内手动设置。' },
+  { id: 'countdown', label: '倒计时与编排',    icon: '⏳', tier: 'replay', desc: '提前量预设、渐进升级梯度、自动执行开关（高危）。' },
+  { id: 'integration', label: '模块联动',      icon: '🔗', tier: 'replay', desc: '回放事件如何自动转成解说提示，以及 OBS 事件的订阅范围。' },
+
+  // ── 数据与日志 ──
+  { id: 'media',     label: '媒体库',          icon: '🗂', tier: 'data', desc: '上传限制、缩略图与多分辨率派生。' },
+  { id: 'data',      label: '数据文件',        icon: '💾', tier: 'data', desc: '实体库与模板目录的位置。相对路径以项目根目录为基准。' },
+  { id: 'logging',   label: '日志',            icon: '📜', tier: 'data', desc: '结构化 JSONL 日志的级别与保留期。' },
 ];
 
 // ─────────────────────────────────────────────────────────────
@@ -404,7 +484,7 @@ export const FIELD_SCHEMA = [
     help: '开启后，随机选曲结果与选手选曲展示可以播放本地游戏里的曲目预览。关闭时不会读取任何游戏文件。' },
   { path: 'gameAudio.gameDir', label: '游戏安装根目录', type: 'string', group: 'gameAudio',
     placeholder: '例如 D:\\CHUNITHM\\bin 或 D:\\chuni',
-    help: '填包含 data 与 option（或 bin/option）的目录。程序按曲目 ID 读取 <根>/data/A000/cueFile/cueFileXXXXXX/ 与 <根>/option/<资源>/cueFile/... 下的 .awb/.acb；只读、不修改游戏文件。保存后点下方「扫描游戏目录」确认能读到曲目。' },
+    help: '填包含 data 与 option（或 bin/option）的目录。程序按曲目 ID 读取 <根>/data/A000/cueFile/cueFileXXXXXX/ 与 <根>/option/<资源>/cueFile/... 下的 .awb/.acb；只读、不修改游戏文件。该目录也用于在 /music 页导入曲目信息、日服定数与曲绘。保存后点下方「扫描游戏目录」确认能读到曲目。' },
   { path: 'gameAudio.previewSeconds', label: '预览时长', type: 'number', group: 'gameAudio', min: 3, max: 120, step: 1, unit: '秒',
     help: '每首曲目最多播放多久。游戏 ACB 里如果记录了官方预览片段，会从该片段开始截取。' },
   { path: 'gameAudio.useGamePreview', label: '使用游戏内预览片段', type: 'boolean', group: 'gameAudio',
@@ -415,6 +495,17 @@ export const FIELD_SCHEMA = [
     help: '浏览器源内的音频音量（仍受 OBS 该源音量控制）。' },
   { path: 'gameAudio.cacheLimitMB', label: '预览缓存上限', type: 'number', group: 'gameAudio', min: 64, max: 8192, step: 64, unit: 'MB', advanced: true,
     help: '解码后的 WAV 缓存在 data/audio-cache，超出上限会删除最旧的缓存。' },
+
+  // ── 国服曲库与定数（LXNS 公共 API）──
+  { path: 'cnMusic.autoSync', label: '自动同步国服数据', type: 'boolean', group: 'cnMusic',
+    help: '开启后按下方间隔向 LXNS 公共 API 拉取国服曲目与定数。有变化时只生成待确认补丁，仍在 /music 页手动确认。' },
+  { path: 'cnMusic.intervalHours', label: '自动同步间隔', type: 'number', group: 'cnMusic', min: 1, max: 168, step: 1, unit: '小时',
+    help: '建议 24 小时或更长，避免频繁请求公共 API。' },
+  { path: 'cnMusic.version', label: 'API 游戏版本', type: 'number', group: 'cnMusic', min: 10000, max: 99999, step: 500,
+    help: 'LXNS 曲目 API 的 version 参数，默认 24000（X-VERSE）。不确定时保持默认。' },
+  { path: 'cnMusic.apiBase', label: 'API 地址', type: 'url', group: 'cnMusic', advanced: true,
+    placeholder: 'https://maimai.lxns.net', help: '默认使用 LXNS 公共 API。仅在需要镜像或自建代理时修改。' },
+  { path: 'cnMusic.timeoutMs', label: 'API 超时', type: 'ms', group: 'cnMusic', min: 3000, max: 120000, step: 1000, advanced: true },
 
   // ── 场景与源 ──
   { path: 'scenes.live',   label: 'LIVE 场景名',   type: 'string', group: 'scenes', help: '直播场景 = CLEAN + 浮窗。' },
@@ -546,6 +637,33 @@ export const FIELD_SCHEMA = [
   { path: 'render.keepLastFrameOnDisconnect', label: '断线保持画面', type: 'boolean', group: 'render', help: '★ 必须开启：WS 断开时清空画面会让观众看到空屏。' },
   { path: 'render.autoReconnectMs',    label: '重连起始间隔', type: 'ms', group: 'render', min: 200, max: 10000, step: 100, advanced: true },
   { path: 'render.autoReconnectMaxMs', label: '重连间隔上限', type: 'ms', group: 'render', min: 1000, max: 60000, step: 500, advanced: true },
+
+  // ── 输出配色 ──
+  { path: 'theme.scheme', label: 'OBS 输出配色主题', type: 'select', group: 'theme',
+    options: ['default', 'official', 'xverse'],
+    help: 'default = 经典金（深灰 + 琥珀金，当前默认）；official = CHUNITHM 官网（青蓝霓虹 + 深海军蓝）；xverse = CHUNITHM X-VERSE-X（洋红 + 青霓虹）。只影响输出给 OBS 的场景，控制台不受影响；切换后刷新 OBS 源（或重连）即可生效。' },
+  { path: 'theme.style', label: '输出风格：明亮 / 暗', type: 'select', group: 'theme',
+    options: ['dark', 'light'],
+    help: 'light = 明亮风格：19 套叠加模板统一换成半透明白面板 + 深色字（强调色、选手色、霓虹描边保留），配套使用浅色动态背景。面板不透明度控制在 84–94%，叠在机台画面上不会过亮。切换后 OBS 源即时重绘，无需重开。' },
+
+  // ── 直播待机画面 ──
+  { path: 'standby.eventName',  label: '赛事名称', type: 'string', group: 'standby',
+    placeholder: '如：苏锡常镇 4TH', help: '显示在顶栏「CHUNITHM /」后面，同时作为右下角的赛事标签。' },
+  { path: 'standby.matchName',  label: '比赛名称', type: 'string', group: 'standby',
+    placeholder: '如：八强赛 A 组 第 1 场', help: '画面中央的大字。留空显示「比赛即将开始」。勾选下面的「跟随比赛计分」时，这里会被当前局名称覆盖。' },
+  { path: 'standby.matchTime',  label: '比赛时间', type: 'string', group: 'standby',
+    placeholder: '如：2026-10-26 19:00', help: '自由文本，按原样显示在「比赛时间 / TIME」下面。留空显示「待定」。' },
+  { path: 'standby.note',       label: '底部滚动文案', type: 'string', group: 'standby',
+    placeholder: '欢迎来到现场 · 比赛即将开始 · 请选手就位',
+    help: '底部横向滚动条的内容，用 · 或 | 分隔会显示成「　·　」。留空则隐藏整条。' },
+  { path: 'standby.statusText', label: '右上角状态字', type: 'string', group: 'standby',
+    placeholder: 'STANDBY', help: '例如 STANDBY / STARTING / 准备中。会同时作为画面里的状态标签。' },
+  { path: 'standby.showClock',  label: '显示实时时钟', type: 'boolean', group: 'standby',
+    help: '右上角显示本机时间（时:分:秒），每秒走动。' },
+  { path: 'standby.showMascot', label: '显示看板娘', type: 'boolean', group: 'standby',
+    help: '关闭后画面只剩文字与动态背景，适合临时顶替或不需要角色的场次。' },
+  { path: 'standby.followMatch', label: '比赛名称跟随比赛计分', type: 'boolean', group: 'standby',
+    help: '开启后，画面中央的名称直接读「比赛计分」当前局的名称，改比赛页就等于改了待机画面。' },
 
   // ── 媒体库 ──
   { path: 'media.maxFileSizeMB',    label: '单文件上限', type: 'number', group: 'media', min: 1, max: 200, step: 1, unit: 'MB' },

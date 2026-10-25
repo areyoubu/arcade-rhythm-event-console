@@ -67,7 +67,7 @@
     padding: 5px 9px; background: rgba(8,9,12,.78); border: 1px solid var(--line, rgba(255,255,255,.14));
     color: var(--ink-dim);
   }
-  .chip.gold { color: var(--accent); border-color: #5a4a22; }
+  .chip.gold { color: var(--accent); border-color: var(--accent-border); }
 
   .match-line {
     flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 3px;
@@ -200,13 +200,13 @@
   }
   .idle-frame::before, .idle-frame::after {
     content: ''; position: absolute; left: 22px; right: 22px; height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(217,164,65,.8), transparent);
+    background: linear-gradient(90deg, transparent, rgba(var(--accent-rgb),.8), transparent);
   }
   .idle-frame::before { top: -1px; }
   .idle-frame::after { bottom: -1px; }
   .idle-dot {
     display: block; width: 8px; height: 8px; margin: 0 auto 18px;
-    background: var(--accent); box-shadow: 0 0 18px rgba(217,164,65,.8);
+    background: var(--accent); box-shadow: 0 0 18px rgba(var(--accent-rgb),.8);
     animation: idle-pulse 2.2s ease-in-out infinite;
   }
   @keyframes idle-pulse {
@@ -285,6 +285,7 @@
 </style>
   <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
   <link rel="stylesheet" href="/shared/font.css">
+  <link rel="stylesheet" href="/shared/scene-light.css?v=20261026">
 </head>
 <body>
 <div id="stage" class="side-both count-2 is-idle">
@@ -328,6 +329,8 @@
   </div>
 </div>
 <script src="/shared/ws.js"></script>
+<script src="/shared/scene-bg.js?v=20261026"></script>
+<script src="/shared/render-theme.js?v=20261026"></script>
 <script src="/shared/audio-preview.js?v=20261025"></script>
 <script src="/render/pickshow.js?v=20261025d"></script>
 </body>

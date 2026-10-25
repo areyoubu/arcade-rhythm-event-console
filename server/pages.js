@@ -30,6 +30,7 @@ export const PAGES = [
   { path: '/match', file: 'match.html' },
   { path: '/random', file: 'random.html' },
   { path: '/pickshow', file: 'pickshow.html' },
+  { path: '/standby', file: 'standby.html' },
   { path: '/music', file: 'music.html' },
   { path: '/outputs', file: 'outputs.html' },
   { path: '/lottery', file: 'lottery.html' },
@@ -48,4 +49,5 @@ export const PAGES = [
   { path: '/render/pickshow', file: 'render/pickshow.html' },
   { path: '/render/lottery', file: 'render/lottery.html' },
   { path: '/render/prize', file: 'render/prize.html' },
+  { path: '/render/standby', file: 'render/standby.html' },
 ];

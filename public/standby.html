@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>直播待机画面 · 街机音游赛事控制软件</title>
+<link rel="stylesheet" href="/shared/style.css">
+<style>
+  .sb-grid { display: grid; grid-template-columns: minmax(0, 520px) minmax(0, 1fr); gap: 12px; }
+  @media (max-width: 1180px) { .sb-grid { grid-template-columns: minmax(0, 1fr); } }
+
+  .sb-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 14px; }
+  .sb-actions .spacer { flex: 1; }
+
+  .sb-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 620px) { .sb-row { grid-template-columns: minmax(0, 1fr); } }
+
+  .sb-hint { font-size: 11.5px; color: var(--text-mute); line-height: 1.6; }
+
+  /* 预览底色跟场景一致，避免看图时误以为输出是黑底 */
+  .preview-frame { background: #f3f9fd; }
+</style>
+  <link rel="preload" href="/fonts/zihui-wenyihei.ttf" as="font" type="font/ttf" crossorigin>
+  <link rel="stylesheet" href="/shared/font.css">
+</head>
+<body>
+<script src="/shared/format.js"></script>
+<script src="/shared/ui.js"></script>
+<script src="/shared/ws.js"></script>
+<script>
+'use strict';
+(function () {
+  const { el, api, ok, warn, err, cmdError, mount, withBusy, confirm } = ui;
+
+  const page = mount({
+    current: '/standby',
+    title: '直播待机画面',
+    subtitle: '开播前挂在 OBS 上的整屏场景 · 动态背景 + 看板娘 · 改完即时生效',
+  });
+
+  const DEFAULTS = {
+    eventName: 'CHUNITHM TOURNAMENT',
+    matchName: '比赛即将开始',
+    matchTime: '',
+    note: '欢迎来到现场 · 比赛即将开始 · 请选手就位',
+    statusText: 'STANDBY',
+    showClock: true,
+    showMascot: true,
+    followMatch: false,
+  };
+
+  const field = (label, input, help) => el('div', { class: 'field' },
+    el('label', { text: label }),
+    input,
+    help ? el('div', { class: 'help', text: help }) : null,
+  );
+
+  // ── 表单 ───────────────────────────────────────────────
+  const inEvent = el('input', { type: 'text', maxLength: 60, placeholder: '如：苏锡常镇 4TH' });
+  const inName = el('input', { type: 'text', maxLength: 60, placeholder: '如：八强赛 A 组 第 1 场' });
+  const inTime = el('input', { type: 'text', maxLength: 40, placeholder: '如：2026-10-26 19:00' });
+  const inNote = el('textarea', { maxLength: 300, rows: 2, placeholder: '欢迎来到现场 · 比赛即将开始 · 请选手就位' });
+  const inStatus = el('input', { type: 'text', maxLength: 20, placeholder: 'STANDBY' });
+  const chkFollow = el('input', { type: 'checkbox' });
+  const chkClock = el('input', { type: 'checkbox' });
+  const chkMascot = el('input', { type: 'checkbox' });
+
+  const saveBtn = el('button', { class: 'btn primary', text: '保存并应用' });
+  const reloadBtn = el('button', { class: 'btn ghost', text: '重新载入' });
+  const resetBtn = el('button', { class: 'btn ghost', text: '恢复默认文字' });
+  const dirtyHint = el('span', { class: 'small muted' });
+
+  const formCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '显示内容' }),
+      el('span', { class: 'spacer' }),
+      el('a', { class: 'btn ghost sm', href: '/render/standby', target: '_blank', text: '打开输出 ↗' }),
+    ),
+    el('div', { class: 'body' },
+      field('赛事名称', inEvent, '顶栏「CHUNITHM /」后面的名字，同时作为画面里的赛事标签。'),
+      field('比赛名称', inName, '画面正中央的大字。太长会自动缩小字号，最多两行。'),
+      el('label', { class: 'check mb12' }, chkFollow,
+        el('span', { class: 'label', text: '跟随比赛计分当前局名称' }),
+        el('span', { class: 'sub', text: '勾选后忽略上面的比赛名称，直接用 /match 当前局的名称。' })),
+      el('div', { class: 'sb-row' },
+        field('比赛时间', inTime, '自由文本，原样显示。留空显示「待定」。'),
+        field('右上角状态字', inStatus, '例如 STANDBY / STARTING / 准备中。'),
+      ),
+      field('底部滚动文案', inNote, '用 · 或 | 分隔会显示成间隔符。留空则隐藏整条滚动带。'),
+      el('div', { class: 'inline mb12' },
+        el('label', { class: 'check' }, chkClock, el('span', { class: 'label', text: '显示实时时钟' })),
+        el('label', { class: 'check' }, chkMascot, el('span', { class: 'label', text: '显示看板娘' })),
+      ),
+      el('div', { class: 'sb-actions' },
+        saveBtn, reloadBtn, resetBtn,
+        el('span', { class: 'spacer' }),
+        dirtyHint,
+      ),
+      el('div', { class: 'note mt12', text: '保存后 OBS 里的浏览器源会自动刷新内容，不需要重开源。文字类设置与「设置 → 待机画面」是同一份配置。' }),
+    ),
+  );
+
+  // ── 预览 / 输出 ────────────────────────────────────────
+  const preview = el('iframe', {
+    class: 'preview-frame', src: '/render/standby?preview=1&fit=1',
+    title: '待机画面预览', loading: 'lazy',
+  });
+  const outputUrl = `${location.origin}/render/standby`;
+
+  async function copyText(text) {
+    try { await navigator.clipboard.writeText(text); ok('已复制到剪贴板'); }
+    catch { warn('非安全上下文，复制失败；请手动选中地址复制'); }
+  }
+
+  const outputCard = el('section', { class: 'card' },
+    el('header', null,
+      el('span', { text: '输出与预览' }),
+      el('span', { class: 'spacer' }),
+      el('button', {
+        class: 'btn ghost sm', text: '静态背景版',
+        title: '不加载 mp4，省 GPU；视频解码异常时也用这个',
+        onclick: () => window.open('/render/standby?static=1&window=1', 'standbyStatic', 'width=1280,height=720'),
+      }),
+      el('button', {
+        class: 'btn ghost sm', text: '打开输出窗口',
+        onclick: () => window.open('/render/standby?window=1', 'standbyOut', 'width=1280,height=720'),
+      }),
+    ),
+    el('div', { class: 'body' },
+      preview,
+      el('div', { class: 'out-row mt12' },
+        el('span', { class: 'small bold nowrap', text: '输出地址' }),
+        el('code', { class: 'out-url', text: outputUrl }),
+        el('button', { class: 'btn sm', text: '复制地址', onclick: () => copyText(outputUrl) }),
+      ),
+      el('div', { class: 'note info mt8', text: 'OBS 里添加「浏览器」源：1920×1080，自定义帧率 60，勾选关闭源时关闭浏览器源 = 否（shutdown=false）、源变为可见时刷新 = 否（restart_when_active=false）。' }),
+      el('div', { class: 'note mt8', text: '地址加 ?static=1 不加载动态背景；?theme=official 可临时预览另一套配色。' }),
+    ),
+  );
+
+  page.append(el('div', { class: 'sb-grid' }, formCard, outputCard));
+
+  // ── 读写配置 ───────────────────────────────────────────
+  let CFG = { ...DEFAULTS };
+  let dirty = false;
+
+  function markDirty() {
+    dirty = true;
+    dirtyHint.textContent = '有未保存的修改';
+    dirtyHint.style.color = 'var(--warn)';
+  }
+  function clearDirty() {
+    dirty = false;
+    dirtyHint.textContent = '';
+  }
+  for (const n of [inEvent, inName, inTime, inNote, inStatus]) n.addEventListener('input', markDirty);
+  for (const c of [chkFollow, chkClock, chkMascot]) c.addEventListener('change', markDirty);
+
+  function fill(cfg) {
+    CFG = { ...DEFAULTS, ...(cfg || {}) };
+    inEvent.value = CFG.eventName ?? '';
+    inName.value = CFG.matchName ?? '';
+    inTime.value = CFG.matchTime ?? '';
+    inNote.value = CFG.note ?? '';
+    inStatus.value = CFG.statusText ?? '';
+    chkFollow.checked = CFG.followMatch === true;
+    chkClock.checked = CFG.showClock !== false;
+    chkMascot.checked = CFG.showMascot !== false;
+    inName.disabled = chkFollow.checked;
+    clearDirty();
+  }
+
+  function collect() {
+    return {
+      eventName: inEvent.value.trim(),
+      matchName: inName.value.trim(),
+      matchTime: inTime.value.trim(),
+      note: inNote.value.trim(),
+      statusText: inStatus.value.trim(),
+      followMatch: chkFollow.checked,
+      showClock: chkClock.checked,
+      showMascot: chkMascot.checked,
+    };
+  }
+
+  async function load(showToast = false) {
+    try {
+      const r = await api('/api/config');
+      fill(r.config?.standby);
+      if (showToast) ok('已重新载入');
+    } catch (e) { cmdError(e, '读取待机配置'); }
+  }
+
+  chkFollow.addEventListener('change', () => { inName.disabled = chkFollow.checked; });
+
+  saveBtn.onclick = () => withBusy(saveBtn, async () => {
+    const next = collect();
+    const patch = {};
+    for (const [k, v] of Object.entries(next)) {
+      if (JSON.stringify(CFG[k]) !== JSON.stringify(v)) patch[`standby.${k}`] = v;
+    }
+    if (!Object.keys(patch).length) { ok('没有需要保存的修改'); clearDirty(); return; }
+    try {
+      const r = await api('/api/config', { method: 'POST', body: { patch } });
+      fill(r.config?.standby);
+      ok('已保存，OBS 源即时生效');
+    } catch (e) { cmdError(e, '保存待机配置'); }
+  });
+
+  reloadBtn.onclick = () => {
+    if (dirty) {
+      confirm({ title: '放弃未保存的修改？', message: '重新载入会用服务端当前配置覆盖你刚才的编辑。', confirmText: '重新载入' })
+        .then((yes) => { if (yes) load(true); });
+      return;
+    }
+    load(true);
+  };
+
+  resetBtn.onclick = async () => {
+    const yes = await confirm({
+      title: '恢复默认文字',
+      message: '把赛事名 / 比赛名称 / 比赛时间 / 滚动文案 / 状态字恢复成出厂默认（不自动保存，确认后请点「保存并应用」）。',
+      confirmText: '恢复默认',
+    });
+    if (!yes) return;
+    inEvent.value = DEFAULTS.eventName;
+    inName.value = DEFAULTS.matchName;
+    inTime.value = DEFAULTS.matchTime;
+    inNote.value = DEFAULTS.note;
+    inStatus.value = DEFAULTS.statusText;
+    markDirty();
+  };
+
+  window.addEventListener('beforeunload', (e) => {
+    if (!dirty) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
+
+  // 别的页面 / 另一端改了配置：同步回表单（没在编辑时）
+  window.arcadeWS?.watch?.('config.standby', (v) => {
+    if (dirty) return;                 // 别把正在编辑的内容冲掉
+    fill(v);
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
