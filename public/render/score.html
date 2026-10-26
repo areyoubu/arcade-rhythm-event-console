@@ -115,15 +115,31 @@
   .logo-fb { width: 8px; height: 8px; background: var(--ink-dim); display: block; }
   .logo img.is-ready + .logo-fb { display: none; }
 
+  /*
+   * 队伍名：短则按边对齐，过长时自动左右滚动（见 score.js 的 setTeamName）。
+   * .team-name 是裁剪容器，.team-name-text 是真正滚动的内容。
+   */
   .team-name {
     flex: 1 1 auto; min-width: 0;
+    overflow: hidden; position: relative;
+  }
+  .team-name-text {
+    display: block;
+    width: max-content; min-width: 100%;
     font-size: 30px; font-weight: 700; color: var(--ink);
     letter-spacing: 1px; white-space: nowrap;
-    overflow: hidden; text-overflow: ellipsis;
+    line-height: 1.2;
   }
-  .team-left .team-name { text-align: right; }
-  .team-right .team-name { text-align: left; }
-  .team-name:empty { display: none; }
+  .team-left .team-name-text { text-align: right; }
+  .team-right .team-name-text { text-align: left; }
+  .team-name-text:empty { display: none; }
+  .team-name.scrolling .team-name-text {
+    animation: team-marquee var(--dur, 8s) ease-in-out infinite alternate;
+  }
+  @keyframes team-marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(var(--shift, 0px)); }
+  }
 
   .score {
     font-family: var(--mono);
@@ -238,7 +254,7 @@
   <div class="bar" id="bar" data-part="bar">
     <div class="team team-left">
       <span class="logo"><img id="leftLogo" alt="" /><span class="logo-fb"></span></span>
-      <span class="team-name" id="leftTeam"></span>
+      <span class="team-name" id="leftTeam"><span class="team-name-text" id="leftTeamText"></span></span>
       <span class="score" id="leftScore">0</span>
     </div>
     <div class="mid">
@@ -248,7 +264,7 @@
     </div>
     <div class="team team-right">
       <span class="score" id="rightScore">0</span>
-      <span class="team-name" id="rightTeam"></span>
+      <span class="team-name" id="rightTeam"><span class="team-name-text" id="rightTeamText"></span></span>
       <span class="logo"><img id="rightLogo" alt="" /><span class="logo-fb"></span></span>
     </div>
   </div>

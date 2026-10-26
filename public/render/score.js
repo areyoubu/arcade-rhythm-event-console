@@ -28,6 +28,7 @@
     rightTeamBox: document.querySelector('.team-right'),
     leftScore: $('leftScore'), rightScore: $('rightScore'),
     leftTeam: $('leftTeam'), rightTeam: $('rightTeam'),
+    leftTeamText: $('leftTeamText'), rightTeamText: $('rightTeamText'),
     leftLogo: $('leftLogo'), rightLogo: $('rightLogo'),
     label: $('label'), meta: $('meta'),
     leftPlayerName: $('leftPlayerName'), rightPlayerName: $('rightPlayerName'),
@@ -97,6 +98,40 @@
     if (node && node.textContent !== s) node.textContent = s;
   }
 
+  /**
+   * 队伍名：放得下就按边对齐，放不下就左右滚动。
+   * 与总比分画面的曲名滚动同一套做法：文本没变不重启动画，量出溢出量后
+   * 用 CSS 变量驱动 translateX 往返，不跑 JS 动画循环。
+   */
+  function setTeamName(wrap, node, value) {
+    if (!wrap || !node) return;
+    const text = value === null || value === undefined ? '' : String(value);
+    if (node.dataset.text !== text) {
+      node.dataset.text = text;
+      node.textContent = text;
+      wrap.classList.remove('scrolling');
+      wrap.style.removeProperty('--shift');
+      wrap.style.removeProperty('--dur');
+    }
+    const measure = () => {
+      if (node.dataset.text !== text) return;
+      const overflow = node.scrollWidth - wrap.clientWidth;
+      if (overflow > 4) {
+        wrap.classList.add('scrolling');
+        wrap.style.setProperty('--shift', `${-overflow}px`);
+        wrap.style.setProperty('--dur', `${Math.max(5, Math.min(16, overflow / 30))}s`);
+      } else {
+        wrap.classList.remove('scrolling');
+        wrap.style.removeProperty('--shift');
+        wrap.style.removeProperty('--dur');
+      }
+    };
+    // 先量一次（读 scrollWidth 会强制同步布局），再下一帧补一次：
+    // 即便页面被 OBS 判定为后台、rAF 被节流，滚动也能正常启用。
+    measure();
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(measure);
+  }
+
   /** 只在 URL 变化时重新赋值，避免反复触发图片解码；加载完成前不显示 */
   function setImage(node, src) {
     if (!node) return;
@@ -121,8 +156,8 @@
     // 总分会到 7 位，按位数缩字号（CSS 里定义 4–8 位）
     const scoreNode = el[`${prefix}Score`];
     if (scoreNode) scoreNode.dataset.digits = String(scoreText.length);
-    // 没选队伍时用 A / B 兜底，比分条不会只剩一个数字
-    setText(el[`${prefix}Team`], side.teamName || side.side || '');
+    // 没选队伍时用 A / B 兜底，比分条不会只剩一个数字；过长时自动滚动
+    setTeamName(el[`${prefix}Team`], el[`${prefix}TeamText`], side.teamName || side.side || '');
     setText(el[`${prefix}TeamName`], side.teamName || '');
     // 选手条常驻：没人时显示「待选」，不要整块消失
     setText(el[`${prefix}PlayerName`], side.playerName || '待选');
